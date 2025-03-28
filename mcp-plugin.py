@@ -228,6 +228,8 @@ import logging
 import queue
 import traceback
 import functools
+import sys
+import io
 
 import ida_hexrays
 import ida_kernwin
@@ -758,6 +760,31 @@ def set_local_variable_type(
     if not ida_hexrays.modify_user_lvars(fn.start_ea, modifier):
         raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(fn.start_ea)
+
+@jsonrpc
+@idawrite
+def repl_idapython(content: Annotated[str, "IDAPython code to run"]) -> str:
+    """Run IDAPython code and return the results with stdout/stderr captured. NOTE: Can be dangerous."""
+
+    stdout_capture, stderr_capture = io.StringIO(), io.StringIO()
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = stdout_capture, stderr_capture
+    try:
+        exec(content, globals())
+        result = "Success"
+    except Exception as e:
+        result = f"Error: {str(e)}\n{traceback.format_exc()}"
+    finally:
+        sys.stdout, sys.stderr = original_stdout, original_stderr
+
+    response = ""
+    if stdout_output := stdout_capture.getvalue():
+        response += f"<stdout>\n{stdout_output}\n</stdout>\n"
+    if stderr_output := stderr_capture.getvalue():
+        response += f"<stderr>\n{stderr_output}\n</stderr>\n"
+    if not stdout_output and not stderr_output:
+        response += f"{result}"
+    return response
 
 class MCP(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
