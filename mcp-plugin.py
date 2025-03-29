@@ -243,6 +243,7 @@ import ida_bytes
 import ida_typeinf
 import ida_xref
 import ida_entry
+import idautils
 
 class IDAError(Exception):
     def __init__(self, message: str):
@@ -352,6 +353,22 @@ def idaread(f):
         return sync_wrapper(ff, idaapi.MFF_READ)
     return wrapper
 
+def is_window_active():
+    """Returns whether IDA is currently active"""
+    try:
+        from PyQt5.QtWidgets import QApplication
+    except ImportError:
+        return False
+
+    app = QApplication.instance()
+    if app is None:
+        return False
+
+    for widget in app.topLevelWidgets():
+        if widget.isActiveWindow():
+            return True
+    return False
+
 class Metadata(TypedDict):
     path: str
     module: str
@@ -395,12 +412,6 @@ def get_metadata() -> Metadata:
         "filesize": hex(ida_nalt.retrieve_input_file_size()),
     }
 
-class Function(TypedDict):
-    start_address: int
-    end_address: int
-    name: str
-    prototype: Optional[str]
-
 def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
     try:
         prototype: ida_typeinf.tinfo_t = fn.get_prototype()
@@ -420,12 +431,25 @@ def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
         print(f"Error getting function prototype: {e}")
         return None
 
+class Function(TypedDict):
+    address: str
+    name: str
+    size: str
+
+def parse_address(address: str) -> int:
+    try:
+        return int(address, 0)
+    except ValueError:
+        for ch in address:
+            if ch not in "0123456789abcdefABCDEF":
+                raise IDAError(f"Failed to parse address: {address}")
+        raise IDAError(f"Failed to parse address (missing 0x prefix): {address}")
 
 def get_function(address: int, *, raise_error=True) -> Optional[Function]:
     fn = idaapi.get_func(address)
     if fn is None:
         if raise_error:
-            raise IDAError(f"No function found at address {address}")
+            raise IDAError(f"No function found at address {hex(address)}")
         return None
 
     try:
@@ -433,11 +457,23 @@ def get_function(address: int, *, raise_error=True) -> Optional[Function]:
     except AttributeError:
         name = ida_funcs.get_func_name(fn.start_ea)
     return {
-        "address": fn.start_ea,
-        "end_address": fn.end_ea,
+        "address": hex(fn.start_ea),
         "name": name,
-        "prototype": get_prototype(fn),
+        "size": hex(fn.end_ea - fn.start_ea),
     }
+
+DEMANGLED_TO_EA = {}
+
+def create_demangled_to_ea_map():
+    for ea in idautils.Functions():
+        # Get the function name and demangle it
+        # MNG_NODEFINIT inhibits everything except the main name
+        # where default demangling adds the function signature
+        # and decorators (if any)
+        demangled = idaapi.demangle_name(
+            idc.get_name(ea, 0), idaapi.MNG_NODEFINIT)
+        if demangled:
+            DEMANGLED_TO_EA[demangled] = ea
 
 @jsonrpc
 @idaread
@@ -447,22 +483,29 @@ def get_function_by_name(
     """Get a function by its name"""
     function_address = idaapi.get_name_ea(idaapi.BADADDR, name)
     if function_address == idaapi.BADADDR:
-        raise IDAError(f"No function found with name {name}")
+        # If map has not been created yet, create it
+        if len(DEMANGLED_TO_EA) == 0:
+            create_demangled_to_ea_map()
+        # Try to find the function in the map, else raise an error
+        if name in DEMANGLED_TO_EA:
+            function_address = DEMANGLED_TO_EA[name]
+        else:
+            raise IDAError(f"No function found with name {name}")
     return get_function(function_address)
 
 @jsonrpc
 @idaread
 def get_function_by_address(
-    address: Annotated[int, "Address of the function to get"]
+    address: Annotated[str, "Address of the function to get"]
 ) -> Function:
     """Get a function by its address"""
-    return get_function(address)
+    return get_function(parse_address(address))
 
 @jsonrpc
 @idaread
-def get_current_address() -> int:
+def get_current_address() -> str:
     """Get the address currently selected by the user"""
-    return idaapi.get_screen_ea()
+    return hex(idaapi.get_screen_ea())
 
 @jsonrpc
 @idaread
@@ -533,21 +576,24 @@ def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
     error = ida_hexrays.hexrays_failure_t()
     cfunc: ida_hexrays.cfunc_t = ida_hexrays.decompile_func(address, error, ida_hexrays.DECOMP_WARNINGS)
     if not cfunc:
-        message = f"Decompilation failed at {address}"
+        message = f"Decompilation failed at {hex(address)}"
         if error.str:
             message += f": {error.str}"
         if error.errea != idaapi.BADADDR:
-            message += f" (address: {error.errea})"
+            message += f" (address: {hex(error.errea)})"
         raise IDAError(message)
     return cfunc
 
 @jsonrpc
 @idaread
 def decompile_function(
-    address: Annotated[int, "Address of the function to decompile"]
+    address: Annotated[str, "Address of the function to decompile"]
 ) -> str:
     """Decompile a function at the given address"""
+    address = parse_address(address)
     cfunc = decompile_checked(address)
+    if is_window_active():
+        ida_hexrays.open_pseudocode(address, ida_hexrays.OPF_REUSE)
     sv = cfunc.get_pseudocode()
     pseudocode = ""
     for i, sl in enumerate(sv):
@@ -564,27 +610,32 @@ def decompile_function(
         line = ida_lines.tag_remove(sl.line)
         if len(pseudocode) > 0:
             pseudocode += "\n"
-        if addr is None:
+        if not addr:
             pseudocode += f"/* line: {i} */ {line}"
         else:
-            pseudocode += f"/* line: {i}, address: {addr} */ {line}"
+            pseudocode += f"/* line: {i}, address: {hex(addr)} */ {line}"
 
     return pseudocode
 
 @jsonrpc
 @idaread
-def disassemble_function(address: Annotated[int, "Address of the function to disassemble"]) -> str:
+def disassemble_function(
+    start_address: Annotated[str, "Address of the function to disassemble"]
+) -> str:
     """Get assembly code (address: instruction; comment) for a function"""
-    func = idaapi.get_func(address)
+    start = parse_address(start_address)
+    func = idaapi.get_func(start)
     if not func:
-        raise IDAError(f"No function found at address {address}")
+        raise IDAError(f"No function found containing address {start_address}")
+    if is_window_active():
+        ida_kernwin.jumpto(start)
 
-    # TODO: add labels
+    # TODO: add labels and limit the maximum number of instructions
     disassembly = ""
     for address in ida_funcs.func_item_iterator_t(func):
         if len(disassembly) > 0:
             disassembly += "\n"
-        disassembly += f"{address}: "
+        disassembly += f"{hex(address)}: "
         disassembly += idaapi.generate_disasm_line(address, idaapi.GENDSM_REMOVE_TAGS)
         comment = idaapi.get_cmt(address, False)
         if not comment:
@@ -594,19 +645,21 @@ def disassemble_function(address: Annotated[int, "Address of the function to dis
     return disassembly
 
 class Xref(TypedDict):
-    address: int
+    address: str
     type: str
     function: Optional[Function]
 
 @jsonrpc
 @idaread
-def get_xrefs_to(address: Annotated[int, "Address to get cross references to"]) -> list[Xref]:
+def get_xrefs_to(
+    address: Annotated[str, "Address to get cross references to"]
+) -> list[Xref]:
     """Get all cross references to the given address"""
     xrefs = []
     xref: ida_xref.xrefblk_t
-    for xref in idautils.XrefsTo(address):
+    for xref in idautils.XrefsTo(parse_address(address)):
         xrefs.append({
-            "address": xref.frm,
+            "address": hex(xref.frm),
             "type": "code" if xref.iscode else "data",
             "function": get_function(xref.frm, raise_error=False),
         })
@@ -627,10 +680,15 @@ def get_entry_points() -> list[Function]:
 
 @jsonrpc
 @idawrite
-def set_decompiler_comment(
-    address: Annotated[int, "Address in the function to set the comment for"],
-    comment: Annotated[str, "Comment text (not shown in the disassembly)"]):
-    """Set a comment for a given address in the function pseudocode"""
+def set_comment(
+    address: Annotated[str, "Address in the function to set the comment for"],
+    comment: Annotated[str, "Comment text"]
+):
+    """Set a comment for a given address in the function disassembly and pseudocode"""
+    address = parse_address(address)
+
+    if not idaapi.set_cmt(address, comment, False):
+        raise IDAError(f"Failed to set disassembly comment at {hex(address)}")
 
     # Reference: https://cyber.wtf/2019/03/22/using-ida-python-to-analyze-trickbot/
     # Check if the address corresponds to a line
@@ -644,7 +702,8 @@ def set_decompiler_comment(
 
     eamap = cfunc.get_eamap()
     if address not in eamap:
-        raise IDAError(f"Failed to set comment at {address}")
+        print(f"Failed to set decompiler comment at {hex(address)}")
+        return
     nearest_ea = eamap[address][0].ea
 
     # Remove existing orphan comments
@@ -684,6 +743,7 @@ def set_disassembly_comment(
     """Set a comment for a given address in the function disassembly"""
     if not idaapi.set_cmt(address, comment, False):
         raise IDAError(f"Failed to set comment at {address}")
+    print(f"Failed to set decompiler comment at {hex(address)}")
 
 def refresh_decompiler_widget():
     widget = ida_kernwin.get_current_widget()
@@ -701,16 +761,16 @@ def refresh_decompiler_ctext(function_address: int):
 @jsonrpc
 @idawrite
 def rename_local_variable(
-    function_address: Annotated[int, "Address of the function containing the variable"],
+    function_address: Annotated[str, "Address of the function containing the variable"],
     old_name: Annotated[str, "Current name of the variable"],
-    new_name: Annotated[str, "New name for the variable"]
+    new_name: Annotated[str, "New name for the variable (empty for a default name)"]
 ):
     """Rename a local variable in a function"""
-    func = idaapi.get_func(function_address)
+    func = idaapi.get_func(parse_address(function_address))
     if not func:
         raise IDAError(f"No function found at address {function_address}")
     if not ida_hexrays.rename_lvar(func.start_ea, old_name, new_name):
-        raise IDAError(f"Failed to rename local variable {old_name} in function {func.start_ea}")
+        raise IDAError(f"Failed to rename local variable {old_name} in function {hex(func.start_ea)}")
     refresh_decompiler_ctext(func.start_ea)
 
 @jsonrpc
@@ -727,34 +787,34 @@ def rename_global_variable(
 @jsonrpc
 @idawrite
 def rename_function(
-    function_address: Annotated[int, "Address of the function to rename"],
-    new_name: Annotated[str, "New name for the function"]
+    function_address: Annotated[str, "Address of the function to rename"],
+    new_name: Annotated[str, "New name for the function (empty for a default name)"]
 ):
     """Rename a function"""
-    fn = idaapi.get_func(function_address)
-    if not fn:
+    func = idaapi.get_func(parse_address(function_address))
+    if not func:
         raise IDAError(f"No function found at address {function_address}")
-    if not idaapi.set_name(fn.start_ea, new_name):
-        raise IDAError(f"Failed to rename function {fn.start_ea} to {new_name}")
-    refresh_decompiler_ctext(fn.start_ea)
+    if not idaapi.set_name(func.start_ea, new_name):
+        raise IDAError(f"Failed to rename function {hex(func.start_ea)} to {new_name}")
+    refresh_decompiler_ctext(func.start_ea)
 
 @jsonrpc
 @idawrite
 def set_function_prototype(
-    function_address: Annotated[int, "Address of the function"],
+    function_address: Annotated[str, "Address of the function"],
     prototype: Annotated[str, "New function prototype"]
 ) -> str:
     """Set a function's prototype"""
-    fn = idaapi.get_func(function_address)
-    if not fn:
+    func = idaapi.get_func(parse_address(function_address))
+    if not func:
         raise IDAError(f"No function found at address {function_address}")
     try:
         tif = ida_typeinf.tinfo_t(prototype, None, ida_typeinf.PT_SIL)
         if not tif.is_func():
             raise IDAError(f"Parsed declaration is not a function type")
-        if not ida_typeinf.apply_tinfo(fn.start_ea, tif, ida_typeinf.PT_SIL):
+        if not ida_typeinf.apply_tinfo(func.start_ea, tif, ida_typeinf.PT_SIL):
             raise IDAError(f"Failed to apply type")
-        refresh_decompiler_ctext(fn.start_ea)
+        refresh_decompiler_ctext(func.start_ea)
     except Exception as e:
         raise IDAError(f"Failed to parse prototype string: {prototype}")
 
@@ -775,7 +835,7 @@ class my_modifier_t(ida_hexrays.user_lvar_modifier_t):
 @jsonrpc
 @idawrite
 def set_local_variable_type(
-    function_address: Annotated[int, "Address of the function containing the variable"],
+    function_address: Annotated[str, "Address of the function containing the variable"],
     variable_name: Annotated[str, "Name of the variable"],
     new_type: Annotated[str, "New type for the variable"]
 ):
@@ -784,15 +844,15 @@ def set_local_variable_type(
         new_tif = ida_typeinf.tinfo_t(new_type, None, ida_typeinf.PT_SIL)
     except Exception:
         raise IDAError(f"Failed to parse type: {new_type}")
-    fn = idaapi.get_func(function_address)
-    if not fn:
+    func = idaapi.get_func(parse_address(function_address))
+    if not func:
         raise IDAError(f"No function found at address {function_address}")
-    if not ida_hexrays.rename_lvar(fn.start_ea, variable_name, variable_name):
+    if not ida_hexrays.rename_lvar(func.start_ea, variable_name, variable_name):
         raise IDAError(f"Failed to find local variable: {variable_name}")
     modifier = my_modifier_t(variable_name, new_tif)
-    if not ida_hexrays.modify_user_lvars(fn.start_ea, modifier):
+    if not ida_hexrays.modify_user_lvars(func.start_ea, modifier):
         raise IDAError(f"Failed to modify local variable: {variable_name}")
-    refresh_decompiler_ctext(fn.start_ea)
+    refresh_decompiler_ctext(func.start_ea)
 
 class MCP(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
