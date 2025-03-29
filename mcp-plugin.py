@@ -668,6 +668,16 @@ def set_decompiler_comment(
 
 @jsonrpc
 @idawrite
+def add_structure(
+    type: Annotated[str, "structure declaration in C syntax. Example: 'struct MyStruct { int x; int y; }'"]
+):
+    ret = idaapi.parse_decls(None, type, None, idaapi.PT_TYP)
+    if ret != 0:
+        raise IDAError(f"Failed to parse structure declaration: {type}")
+    
+
+@jsonrpc
+@idawrite
 def set_disassembly_comment(
     address: Annotated[int, "Address in the function to set the comment for"],
     comment: Annotated[str, "Comment text (not shown in the pseudocode)"]):
@@ -702,6 +712,17 @@ def rename_local_variable(
     if not ida_hexrays.rename_lvar(func.start_ea, old_name, new_name):
         raise IDAError(f"Failed to rename local variable {old_name} in function {func.start_ea}")
     refresh_decompiler_ctext(func.start_ea)
+
+@jsonrpc
+@idawrite
+def rename_global_variable(
+    variable_address: Annotated[int, "Address of the global variable to rename"],
+    new_name: Annotated[str, "New name for the global variable"]
+):
+    """Rename a gloabl variable"""
+    if not idaapi.set_name(variable_address, new_name):
+        raise IDAError(f"Failed to rename variable {variable_address} to {new_name}")
+
 
 @jsonrpc
 @idawrite
