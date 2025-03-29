@@ -9,7 +9,7 @@ import struct
 import threading
 import http.server
 from urllib.parse import urlparse
-from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated
+from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated, TypeVar, Generic
 
 class JSONRPCError(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
@@ -451,7 +451,7 @@ def parse_address(address: str) -> int:
                 raise IDAError(f"Failed to parse address: {address}")
         raise IDAError(f"Failed to parse address (missing 0x prefix): {address}")
 
-def get_function(address: int, *, raise_error=True) -> Optional[Function]:
+def get_function(address: int, *, raise_error=True) -> Function:
     fn = idaapi.get_func(address)
     if fn is None:
         if raise_error:
@@ -570,11 +570,32 @@ def convert_number(
         "binary": bin(value)
     }
 
+T = TypeVar("T")
+
+class Page(TypedDict, Generic[T]):
+    data: list[T]
+    next_offset: Optional[int]
+
+def paginate(data: list[T], offset: int, count: int) -> Page[T]:
+    if count == 0:
+        count = len(data)
+    next_offset = offset + count
+    if next_offset >= len(data):
+        next_offset = None
+    return {
+        "data": data[offset:offset+count],
+        "next_offset": next_offset,
+    }
+
 @jsonrpc
 @idaread
-def list_functions() -> list[Function]:
-    """List all functions in the database"""
-    return [get_function(address) for address in idautils.Functions()]
+def list_functions(
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of functions to list (100 is a good default, 0 means remainder)"],
+) -> Page[Function]:
+    """List all functions in the database (paginated)"""
+    functions = [get_function(address) for address in idautils.Functions()]
+    return paginate(functions, offset, count)
 
 def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
     if not ida_hexrays.init_hexrays_plugin():
