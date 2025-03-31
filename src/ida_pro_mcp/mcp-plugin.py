@@ -834,7 +834,7 @@ def create_new_type(
 ):
     """Create a new local type from a C declaration"""
     result = idaapi.idc_parse_types(c_declaration, 1)  # PT_PAKDEF | PT_SILENT
-    if result is not 0:
+    if result != 0:
         raise IDAError(f"Failed to parse type: {c_declaration}")
 
 @jsonrpc
