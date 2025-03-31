@@ -859,6 +859,38 @@ def set_local_variable_type(
         raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(func.start_ea)
 
+@jsonrpc
+@idaread
+def search_target_string(
+    target_str: Annotated[str, "The target string for the search operation"]
+) -> list[str]:
+    """Exact Search for the string in IDA"""
+    matched_list = []
+    print(f"Finding \"{target_str}\" in IDA...")
+    try:
+        for s in idautils.Strings():
+            if target_str in str(s).lower():
+                matched_list.append(f"type:{s.strtype} address:0x{s.ea:x} string:{str(s)}\n")
+    except Exception as e:
+        raise IDAError(f"Failed to get sting list: {e}")
+    print(f"Finish \"{target_str}\" searching.")
+    return matched_list
+
+
+
+@jsonrpc
+@idaread
+def list_string() -> list[str]:
+    """list all string in IDA"""
+    matched_list = []
+    try:
+        for s in idautils.Strings():
+            matched_list.append(f"type:{s.strtype} address:0x{s.ea:x} string:{str(s)}\n")
+    except Exception as e:
+        raise IDAError(f"Failed to get sting list: {e}")
+    print(f"list all string in ida.")
+    return matched_list
+
 class MCP(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
     comment = "MCP Plugin"
