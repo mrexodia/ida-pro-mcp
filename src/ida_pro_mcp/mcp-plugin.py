@@ -1001,19 +1001,11 @@ def set_local_variable_type(
 def highlight_disassemble(
     start_ea: Annotated[str, "Highlight the disassembly code start address(Start address rather than address range，If "
                              "there are multiple addresses, separate them with ', ')"],
-    highlight_range: Annotated[str, "Highlight range (line/function/segment)"],
     mark_color: Annotated[str, "Set the highlight color (default set 0x00D888),The color order is Blue, Green, Red,"
-                               "If  want to restore the original color, enter None"]
+                               "If  want to Unhighlight, enter None"]
 ):
     """Highlight disassembly lines or functions"""
-    if highlight_range == "line":
-        mode = idc.CIC_ITEM
-    elif highlight_range == "function":
-        mode = idc.CIC_FUNC
-    elif highlight_range == "segment":
-        mode = idc.CIC_SEGM
-    else:
-        raise ValueError("Unexpected values, normally only the 'line','function' and 'segment' options exist")
+    mode = idc.CIC_ITEM
     if mark_color == "None":
         color = idc.DEFCOLOR
     else:
@@ -1024,6 +1016,7 @@ def highlight_disassemble(
             idc.set_color(address, mode, color)
         except Exception as e:
             raise IDAError(f"Set_color error, the reason is {e}")
+
 
 
 class MCP(idaapi.plugin_t):
