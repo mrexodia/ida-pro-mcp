@@ -989,6 +989,37 @@ def set_local_variable_type(
         raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(func.start_ea)
 
+    
+@jsonrpc
+@idawrite
+def highlight_disassemble(
+    start_ea: Annotated[str, "Highlight the disassembly code start address(Start address rather than address range，If "
+                             "there are multiple addresses, separate them with ', ')"],
+    highlight_range: Annotated[str, "Highlight range (line/function/segment)"],
+    mark_color: Annotated[str, "Set the highlight color (default set 0x00D888),The color order is Blue, Green, Red,"
+                               "If  want to restore the original color, enter None"]
+):
+    """Highlight disassembly lines or functions"""
+    if highlight_range == "line":
+        mode = idc.CIC_ITEM
+    elif highlight_range == "function":
+        mode = idc.CIC_FUNC
+    elif highlight_range == "segment":
+        mode = idc.CIC_SEGM
+    else:
+        raise ValueError("Unexpected values, normally only the 'line','function' and 'segment' options exist")
+    if mark_color == "None":
+        color = idc.DEFCOLOR
+    else:
+        color = parse_address(mark_color)  # Parsing indicates that the color string is of type int
+    for item in (x.strip() for x in start_ea.split(',')):
+        address = parse_address(item)
+        try:
+            idc.set_color(address, mode, color)
+        except Exception as e:
+            raise IDAError(f"Set_color error, the reason is {e}")
+
+
 class MCP(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
     comment = "MCP Plugin"

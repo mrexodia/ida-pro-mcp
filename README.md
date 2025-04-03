@@ -30,6 +30,7 @@ Available functionality:
 - `set_function_prototype(function_address, prototype)`: Set a function's prototype.
 - `declare_c_type(c_declaration)`: Create or update a local type from a C declaration.
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type.
+- `highlight_disassemble` : Highlight disassembly lines or functions
 
 ## Prerequisites
 
