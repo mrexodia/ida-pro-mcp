@@ -976,9 +976,15 @@ def set_local_variable_type(
 ):
     """Set a local variable's type"""
     try:
+        # Some versions of IDA don't support this constructor
         new_tif = ida_typeinf.tinfo_t(new_type, None, ida_typeinf.PT_SIL)
     except Exception:
-        raise IDAError(f"Failed to parse type: {new_type}")
+        try:
+            new_tif = ida_typeinf.tinfo_t()
+            # parse_decl requires semicolon for the type
+            ida_typeinf.parse_decl(new_tif, None, new_type+";", ida_typeinf.PT_SIL)
+        except Exception:
+            raise IDAError(f"Failed to parse type: {new_type}")
     func = idaapi.get_func(parse_address(function_address))
     if not func:
         raise IDAError(f"No function found at address {function_address}")
