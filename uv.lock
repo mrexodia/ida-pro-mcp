@@ -124,10 +124,14 @@ version = "1.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "rich" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fastmcp", specifier = ">=0.4.1" }]
+requires-dist = [
+    { name = "fastmcp", specifier = ">=0.4.1" },
+    { name = "rich", specifier = ">=13.9.4" },
+]
 
 [[package]]
 name = "idna"

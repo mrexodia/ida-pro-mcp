@@ -17,6 +17,7 @@ classifiers = [
 ]
 dependencies = [
     "fastmcp>=0.4.1",
+    "rich>=13.9.4",
 ]
 
 [project.urls]
