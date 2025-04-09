@@ -13,6 +13,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
+    "License :: OSI Approved :: MIT License",
 ]
 dependencies = [
     "mcp>=1.6.0",
