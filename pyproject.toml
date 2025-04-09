@@ -16,6 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=1.6.0",
+    "rich>=14.0.0",
 ]
 
 [project.urls]
