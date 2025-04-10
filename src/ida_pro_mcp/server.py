@@ -238,13 +238,35 @@ def get_python_executable():
     return sys.executable
 
 def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
+    configs = {}
+
     if sys.platform == "win32":
-        configs = {
-            "Cline": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
-            "Roo Code": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
-            "Claude": (os.path.join(os.getenv("APPDATA"), "Claude"), "claude_desktop_config.json"),
-            "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
-        }
+        home = os.path.expanduser("~")
+        appdata = os.getenv("APPDATA")
+        vscode_user_dir = None
+
+        possible_vscode_bases = [
+            os.path.join(appdata, "Code"),  # Standard install
+            os.path.join(home, "scoop", "persist", "vscode", "data", "user-data"),  # Scoop install
+        ]
+
+        for base_dir in possible_vscode_bases:
+            user_dir_candidate = os.path.join(base_dir, "User")
+            global_storage_path = os.path.join(user_dir_candidate, "globalStorage")
+            if os.path.isdir(global_storage_path):
+                vscode_user_dir = user_dir_candidate
+                break
+
+        if vscode_user_dir:
+            configs["Cline"] = (os.path.join(vscode_user_dir,"globalStorage","saoudrizwan.claude-dev","settings",),"cline_mcp_settings.json",)
+            configs["Roo Code"] = (os.path.join(vscode_user_dir,"globalStorage","rooveterinaryinc.roo-cline","settings",),"mcp_settings.json",)
+        else:
+            if not quiet:
+                print("Skipping VS Code related configurations - User directory not found in standard or Scoop locations.")
+
+        configs["Claude"] = (os.path.join(appdata, "Claude"),"claude_desktop_config.json",)
+        configs["Cursor"] = (os.path.join(home, ".cursor"), "mcp.json")
+
     elif sys.platform == "darwin":
         configs = {
             "Cline": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
