@@ -1002,6 +1002,36 @@ def set_local_variable_type(
         raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(func.start_ea)
 
+@jsonrpc
+@idawrite
+def execute_python_script(
+    script_content: Annotated[str, "Python script content to execute in IDA Pro environment"]
+) -> dict:
+    """Execute an IDAPython script and return the execution results"""
+    try:
+        # Create a local namespace to store script execution variables
+        local_vars = {}
+        # Execute the script and capture output
+        exec(script_content, globals(), local_vars)
+        
+        # Filter out internal variables (starting with underscore)
+        result_vars = {k: str(v) for k, v in local_vars.items() 
+                      if not k.startswith('_') and k != 'script_content'}
+        
+        return {
+            "status": "success",
+            "message": "Script executed successfully",
+            "variables": result_vars
+        }
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        return {
+            "status": "error",
+            "message": f"Script execution failed: {str(e)}",
+            "error_trace": error_trace
+        }
+
 class MCP(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
     comment = "MCP Plugin"
