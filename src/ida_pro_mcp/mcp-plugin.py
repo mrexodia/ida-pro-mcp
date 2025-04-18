@@ -1007,7 +1007,7 @@ def set_local_variable_type(
 def execute_python_script(
     script_content: Annotated[str, "Python script content to execute in IDA Pro environment"]
 ) -> dict:
-    """Execute an IDAPython script and return the execution results"""
+    """When other functions do not work, execute an IDAPython script and return the execution results"""
     try:
         # Create a local namespace to store script execution variables
         local_vars = {}
