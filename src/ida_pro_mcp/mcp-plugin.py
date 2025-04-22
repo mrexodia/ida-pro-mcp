@@ -885,14 +885,15 @@ def set_global_variable_type(
 
 @jsonrpc
 @idawrite
-def patch_address_bytecode(
-    address: Annotated[str, "Address of the instruction to patch"],
-    bytecode: Annotated[str, "Array of bytecode to patch the instruction with"],
+def patch_address_assemble(
+    address: Annotated[str, "Address to apply patch"],
+    assemble: Annotated[str, "Assembly instruction to patch"],
 ) -> str:
     """Patch Address Assemble"""
-    ea = int(address, 16)
-    byte_list = bytecode.strip().split()
-    bytes_to_patch = bytes(int(b, 16) for b in byte_list)
+    ea = parse_address(address)
+    (check_assemble, bytes_to_patch) = idautils.Assemble(ea, assemble)
+    if check_assemble == False:
+        raise IDAError(f"Failed to assemble instruction: {assemble}")
     try:
         ida_bytes.patch_bytes(ea, bytes_to_patch)
     except:
@@ -932,7 +933,7 @@ def set_function_prototype(
             raise IDAError(f"Failed to apply type")
         refresh_decompiler_ctext(func.start_ea)
     except Exception as e:
-        raise IDAError(f"Failed to parse prototype string: {prototype}")  
+        raise IDAError(f"Failed to parse prototype string: {prototype}")
 
 class my_modifier_t(ida_hexrays.user_lvar_modifier_t):
     def __init__(self, var_name: str, new_type: ida_typeinf.tinfo_t):
