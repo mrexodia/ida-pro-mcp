@@ -164,7 +164,7 @@ visitor.visit(module)
 with open(GENERATED_PY, "w") as f:
     code = """# NOTE: This file has been automatically generated, do not modify!
 # Architecture based on https://github.com/mrexodia/ida-pro-mcp (MIT License)
-from typing import Optional, TypedDict, Generic, TypeVar
+from typing import Optional, TypedDict, Generic, TypeVar, List, Dict, Any
 from pydantic import Field
 
 # In Python 3.8, Annotated is not in typing but in typing_extensions
@@ -175,10 +175,17 @@ except ImportError:
 
 T = TypeVar("T")
 
+# In Python 3.10, TypedDict cannot be used with Generic directly
+class PageDict(TypedDict):
+    data: List[Any]
+    next_offset: Optional[int]
+
 """
     for type in visitor.types.values():
-        code += ast.unparse(type)
-        code += "\n\n"
+        # Skip Page class since we've redefined it
+        if type.name != "Page":
+            code += ast.unparse(type)
+            code += "\n\n"
     for function in visitor.functions.values():
         code += ast.unparse(function)
         code += "\n\n"

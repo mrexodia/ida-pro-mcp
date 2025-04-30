@@ -599,11 +599,25 @@ def convert_number(
 
 T = TypeVar("T")
 
-class Page(TypedDict, Generic[T]):
-    data: list[T]
+# In Python 3.10, TypedDict cannot be used with Generic directly
+# Using a different approach for compatibility
+class PageDict(TypedDict):
+    data: list
     next_offset: Optional[int]
 
-def paginate(data: list[T], offset: int, count: int) -> Page[T]:
+# Generic wrapper around PageDict for type checking
+class Page(Generic[T]):
+    data: list[T]
+    next_offset: Optional[int]
+    
+    def __init__(self, data: list[T], next_offset: Optional[int] = None):
+        self.data = data
+        self.next_offset = next_offset
+    
+    def to_dict(self) -> PageDict:
+        return {"data": self.data, "next_offset": self.next_offset}
+
+def paginate(data: list[T], offset: int, count: int) -> PageDict:
     if count == 0:
         count = len(data)
     next_offset = offset + count
@@ -625,7 +639,7 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
 def list_functions(
     offset: Annotated[int, "Offset to start listing from (start at 0)"],
     count: Annotated[int, "Number of functions to list (100 is a good default, 0 means remainder)"],
-) -> Page[Function]:
+) -> PageDict:
     """List all functions in the database (paginated)"""
     functions = [get_function(address) for address in idautils.Functions()]
     return paginate(functions, offset, count)
@@ -640,7 +654,7 @@ def list_globals(
     filter: Annotated[str, "Filter to apply to the list. Case-insensitive contains or /regex/ syntax"],
     offset: Annotated[int, "Offset to start listing from (start at 0)"],
     count: Annotated[int, "Number of globals to list (100 is a good default, 0 means remainder)"],
-) -> Page[Global]:
+) -> PageDict:
     """List all globals in the database (paginated)"""
     globals = []
     for addr, name in idautils.Names():
@@ -664,7 +678,7 @@ def list_strings(
     filter: Annotated[str, "Filter to apply to the list. Case-insensitive contains or /regex/ syntax"],
     offset: Annotated[int, "Offset to start listing from (start at 0)"],
     count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
-) -> Page[String]:
+) -> PageDict:
     """List all strings in the database (paginated)"""
     strings = []
     for item in idautils.Strings():
