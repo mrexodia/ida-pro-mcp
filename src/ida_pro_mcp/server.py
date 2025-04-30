@@ -161,21 +161,27 @@ with open(IDA_PLUGIN_PY, "r") as f:
 module = ast.parse(code, IDA_PLUGIN_PY)
 visitor = MCPVisitor()
 visitor.visit(module)
-code = """# NOTE: This file has been automatically generated, do not modify!
+with open(GENERATED_PY, "w") as f:
+    code = """# NOTE: This file has been automatically generated, do not modify!
 # Architecture based on https://github.com/mrexodia/ida-pro-mcp (MIT License)
-from typing import Annotated, Optional, TypedDict, Generic, TypeVar
+from typing import Optional, TypedDict, Generic, TypeVar
 from pydantic import Field
+
+# In Python 3.8, Annotated is not in typing but in typing_extensions
+try:
+    from typing import Annotated
+except ImportError:
+    from typing_extensions import Annotated
 
 T = TypeVar("T")
 
 """
-for type in visitor.types.values():
-    code += ast.unparse(type)
-    code += "\n\n"
-for function in visitor.functions.values():
-    code += ast.unparse(function)
-    code += "\n\n"
-with open(GENERATED_PY, "w") as f:
+    for type in visitor.types.values():
+        code += ast.unparse(type)
+        code += "\n\n"
+    for function in visitor.functions.values():
+        code += ast.unparse(function)
+        code += "\n\n"
     f.write(code)
 exec(compile(code, GENERATED_PY, "exec"))
 

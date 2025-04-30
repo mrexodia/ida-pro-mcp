@@ -3,19 +3,24 @@ name = "ida-pro-mcp"
 version = "1.3.0"
 description = "Vibe reversing with IDA Pro"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.8"
 authors = [{ name = "mrexodia" }]
 keywords = ["ida", "mcp", "llm", "plugin"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
     "mcp>=1.6.0",
+    "typing_extensions>=4.0.0",
 ]
 
 [project.urls]

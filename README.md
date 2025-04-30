@@ -33,8 +33,8 @@ Available functionality:
 
 ## Prerequisites
 
-- [Python](https://www.python.org/downloads/) (**3.11 or higher**) 
-  - Use `idapyswitch` to switch to the newest Python version
+- [Python](https://www.python.org/downloads/) (**3.8 or higher**) 
+  - Use `idapyswitch` to switch to a compatible Python version
 - [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended)
 - Supported MCP Client (pick one you like)
   - [Cline](https://cline.bot)

@@ -1,15 +1,22 @@
 import os
 import sys
 
-if sys.version_info < (3, 11):
-    raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
+if sys.version_info < (3, 8):
+    raise RuntimeError("Python 3.8 or higher is required for the MCP plugin")
 import re
 import json
 import struct
 import threading
 import http.server
 from urllib.parse import urlparse
-from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated, TypeVar, Generic
+import typing
+from typing import Any, Callable, get_type_hints, TypedDict, Optional, TypeVar, Generic
+
+# In Python 3.8, Annotated is not in typing but in typing_extensions
+try:
+    from typing import Annotated
+except ImportError:
+    from typing_extensions import Annotated
 
 class JSONRPCError(Exception):
     def __init__(self, code: int, message: str, data: Any = None):

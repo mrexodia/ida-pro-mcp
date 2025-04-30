@@ -6,6 +6,12 @@ import importlib
 from pathlib import Path
 import typing_inspection.introspection as intro
 
+# Ensure compatibility with Python 3.8+
+try:
+    from typing import Annotated
+except ImportError:
+    from typing_extensions import Annotated
+
 from mcp.server.fastmcp import FastMCP
 
 # idapro must go first to initialize idalib
