@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/mrexodia-ida-pro-mcp-badge.png)](https://mseep.ai/app/mrexodia-ida-pro-mcp)
+
 # IDA Pro MCP
 
 Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
