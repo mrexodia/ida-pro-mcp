@@ -674,6 +674,42 @@ def list_strings(
     strings = pattern_filter(strings, filter, "string")
     return paginate(strings, offset, count)
 
+@jsonrpc
+@idaread
+def list_local_types():
+    """List all Local types in the database"""
+    error = ida_hexrays.hexrays_failure_t()
+    locals = []
+    idati = ida_typeinf.get_idati()
+    type_count = ida_typeinf.get_ordinal_limit(idati)
+    for ordinal in range(1, type_count):
+        try:
+            tif = ida_typeinf.tinfo_t()
+            if tif.get_numbered_type(idati, ordinal):
+                type_name = tif.get_type_name()
+                if not type_name:
+                    type_name = f"<Anonymous Type #{ordinal}>"
+                locals.append(f"\nType #{ordinal}: {type_name}")
+                if tif.is_udt():
+                    c_decl_flags = (ida_typeinf.PRTYPE_MULTI | ida_typeinf.PRTYPE_TYPE | ida_typeinf.PRTYPE_SEMI | ida_typeinf.PRTYPE_DEF | ida_typeinf.PRTYPE_METHODS | ida_typeinf.PRTYPE_OFFSETS)
+                    c_decl_output = tif._print(None, c_decl_flags)
+                    if c_decl_output:
+                        locals.append(f"  C declaration:\n{c_decl_output}")
+                else:
+                    simple_decl = tif._print(None, ida_typeinf.PRTYPE_1LINE | ida_typeinf.PRTYPE_TYPE | ida_typeinf.PRTYPE_SEMI)
+                    if simple_decl:
+                        locals.append(f"  Simple declaration:\n{simple_decl}")  
+            else:
+                message = f"\nType #{ordinal}: Failed to retrieve information."
+                if error.str:
+                    message += f": {error.str}"
+                if error.errea != idaapi.BADADDR:
+                    message += f"from (address: {hex(error.errea)})"
+                raise IDAError(message)
+        except:
+            continue
+    return locals
+
 def decompile_checked(address: int) -> ida_hexrays.cfunc_t:
     if not ida_hexrays.init_hexrays_plugin():
         raise IDAError("Hex-Rays decompiler is not available")
