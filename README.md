@@ -1,4 +1,6 @@
 # IDA Pro MCP
+[![smithery badge](https://smithery.ai/badge/@mrexodia/ida-pro-mcp)](https://smithery.ai/server/@mrexodia/ida-pro-mcp)
+
 
 Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
 
@@ -63,6 +65,16 @@ Unsafe functions (`--unsafe` flag required):
   - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `ida-pro-mcp --config` to get the JSON config for your client.
 
 ## Installation
+
+### Installing via Smithery
+
+To install IDA Pro MCP for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@mrexodia/ida-pro-mcp):
+
+```bash
+npx -y @smithery/cli install @mrexodia/ida-pro-mcp --client claude
+```
+
+### Manual Installation
 
 Install the latest version of the IDA Pro MCP package:
 
