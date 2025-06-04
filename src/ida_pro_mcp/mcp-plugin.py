@@ -1378,7 +1378,7 @@ class MCP(idaapi.plugin_t):
         if self.dock is not None:
             return
         try:
-            from .server.gui_dock import MCPDock
+            from ida_pro_mcp.server.gui_dock import MCPDock
             self.dock = MCPDock(self)
             if hasattr(ida_kernwin, "add_dock_widget"):
                 ida_kernwin.add_dock_widget(int(self.dock.winId()), self.dock, 0)

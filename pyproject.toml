@@ -36,4 +36,3 @@ test = [
 
 [project.scripts]
 ida-pro-mcp = "ida_pro_mcp.server.core:main"
-idalib-mcp = "ida_pro_mcp.idalib_server:main"
