@@ -12,7 +12,6 @@ sys.path.insert(0, str(ROOT))
 
 from ida_pro_mcp.server import core
 
-
 class StubLLM:
     def __init__(self, *a, **k):
         pass

@@ -5,26 +5,24 @@ This guide shows how to get the IDA Pro MCP server running quickly.
 
 == Installation
 
-Install the package directly from GitHub:
+Clone the repository and run the bootstrap script.  Pass the path to your local
+model as the first argument:
 
 [source,shell]
 ----
-pip uninstall ida-pro-mcp
-pip install git+https://github.com/mrexodia/ida-pro-mcp
+git clone https://github.com/mrexodia/ida-pro-mcp
+cd ida-pro-mcp
+scripts/bootstrap.sh /path/to/model.gguf
 ----
 
-Then install the IDA plugin and configure the local server:
+The script installs all requirements and stores the model path in
+`~/Library/Application Support/ida-offline-mcp/settings.json`.
 
-[source,shell]
-----
-ida-pro-mcp --install
-----
-
-Restart IDA Pro and your MCP client to load the plugin.
+Copy `src/ida_pro_mcp/mcp-plugin.py` to the IDA plugins directory and restart
+IDA to load the plugin.
 
 == Basic usage
 
-Once installed, open a database in IDA and start the server through
-`Edit -> Plugins -> MCP` or by pressing the keyboard shortcut shown by the
-plugin.  Use your favourite MCP client to call the provided tools such as
-`check_connection` or `decompile_function`.
+Once installed, open a database in IDA and launch the MCP plugin through
+`Edit -> Plugins -> MCP`.  A chat dock appears allowing you to interact with the
+MCP tools such as `check_connection` or `decompile_function`.
