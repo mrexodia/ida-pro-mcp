@@ -13,6 +13,3 @@ New tools can be added simply by decorating a function in `mcp-plugin.py` with
 ----
 uv run mcp dev src/ida_pro_mcp/server.py
 ----
-
-A small web interface opens on http://localhost:5173 allowing you to try out the
-available methods.

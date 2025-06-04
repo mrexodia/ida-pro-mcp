@@ -146,8 +146,6 @@ To test the MCP server itself:
 uv run mcp dev src/ida_pro_mcp/server.py
 ```
 
-This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.
-
 For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC request directly to `http://localhost:13337/mcp`.
 
 Generate the changelog of direct commits to `main`:
