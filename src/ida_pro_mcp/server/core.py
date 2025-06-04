@@ -4,4 +4,5 @@ from offline_llm.backend import LocalLLM
 def main(argv: list[str] | None = None) -> None:
     _main(argv, llm_class=LocalLLM)
 
+
 __all__ = ["JSONRPCServer", "LocalLLM", "main"]
