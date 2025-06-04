@@ -1,5 +1,6 @@
 import os
 import sys
+import stat
 import ast
 import json
 import shutil
@@ -15,6 +16,16 @@ mcp = FastMCP("github.com/mrexodia/ida-pro-mcp", log_level="ERROR")
 jsonrpc_request_id = 1
 ida_host = "127.0.0.1"
 ida_port = 13337
+
+
+def check_model_file(path: str) -> None:
+    """Refuse to load world-writable model files."""
+    if not path or not os.path.exists(path):
+        return
+    mode = os.stat(path).st_mode
+    if mode & stat.S_IWOTH:
+        print(f"Refusing to use world-writable model file: {path}", file=sys.stderr)
+        sys.exit(1)
 
 def make_jsonrpc_request(method: str, *params):
     """Make a JSON-RPC request to the IDA plugin"""
@@ -250,21 +261,18 @@ def get_python_executable():
                 return python_executable
     return sys.executable
 
-def print_mcp_config():
+def print_mcp_config(enable_unsafe: bool = False):
     print(json.dumps({
             "mcpServers": {
                 mcp.name: {
                     "command": get_python_executable(),
-                    "args": [
-                        __file__,
-                    ],
+                    "args": [__file__] + (["--unsafe"] if enable_unsafe else []),
                     "timeout": 1800,
                     "disabled": False,
                 }
             }
         }, indent=2)
     )
-
 
 def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
     if sys.platform == "win32":
@@ -308,12 +316,12 @@ def main():
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
     parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--enable-unsafe-tools", action="store_true", help="Install server with unsafe tools enabled")
     parser.add_argument("--transport", type=str, default="stdio", help="MCP transport protocol to use (stdio or http://127.0.0.1:8744)")
     parser.add_argument("--ida-rpc", type=str, default=f"http://{ida_host}:{ida_port}", help=f"IDA RPC server to use (default: http://{ida_host}:{ida_port})")
     parser.add_argument("--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)")
     parser.add_argument("--config", action="store_true", help="Generate MCP config JSON")
     args = parser.parse_args()
-
 
     # NOTE: Developers can use this to generate the README
     if args.generate_docs:
@@ -325,7 +333,7 @@ def main():
         install_ida_plugin(quiet=True)
 
     if args.config:
-        print_mcp_config()
+        print_mcp_config(enable_unsafe=args.enable_unsafe_tools)
         return
 
     # Parse IDA RPC server argument

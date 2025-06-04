@@ -1,0 +1,30 @@
+= Quickstart
+:toc:
+
+This guide shows how to get the IDA Pro MCP server running quickly.
+
+== Installation
+
+Install the package directly from GitHub:
+
+[source,shell]
+----
+pip uninstall ida-pro-mcp
+pip install git+https://github.com/mrexodia/ida-pro-mcp
+----
+
+Then install the IDA plugin and configure the local server:
+
+[source,shell]
+----
+ida-pro-mcp --install
+----
+
+Restart IDA Pro and your MCP client to load the plugin.
+
+== Basic usage
+
+Once installed, open a database in IDA and start the server through
+`Edit -> Plugins -> MCP` or by pressing the keyboard shortcut shown by the
+plugin.  Use your favourite MCP client to call the provided tools such as
+`check_connection` or `decompile_function`.

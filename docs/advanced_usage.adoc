@@ -1,0 +1,29 @@
+= Advanced Usage
+:toc:
+
+These notes cover more advanced scenarios when working with the MCP server.
+
+== Headless operation
+
+If you have `idalib` installed you can run the server on an IDB in headless
+mode:
+
+[source,shell]
+----
+uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
+----
+
+This provides the same JSON‑RPC tools without launching the full IDA GUI.
+
+== Development workflow
+
+New tools can be added simply by decorating a function in `mcp-plugin.py` with
+`@jsonrpc`.  Start the development server to experiment with the API:
+
+[source,shell]
+----
+uv run mcp dev src/ida_pro_mcp/server.py
+----
+
+A small web interface opens on http://localhost:5173 allowing you to try out the
+available methods.

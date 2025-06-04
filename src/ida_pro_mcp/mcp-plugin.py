@@ -1,8 +1,32 @@
 import os
 import sys
+import socket
+import ipaddress
 
 if sys.version_info < (3, 11):
     raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
+
+# Block outbound network access by default
+_orig_connect = socket.socket.connect
+
+def _patched_connect(self, address):
+    allow_net = os.environ.get("ALLOW_NET") == "1"
+    host = address[0] if isinstance(address, tuple) else address
+    if not allow_net:
+        try:
+            ip = ipaddress.ip_address(host)
+            if not ip.is_loopback:
+                raise RuntimeError(
+                    f"Blocked network connection to {host}. Set ALLOW_NET=1 to allow."
+                )
+        except ValueError:
+            if host not in {"localhost", "127.0.0.1", "::1"}:
+                raise RuntimeError(
+                    f"Blocked network connection to {host}. Set ALLOW_NET=1 to allow."
+                )
+    return _orig_connect(self, address)
+
+socket.socket.connect = _patched_connect
 import re
 import json
 import struct
