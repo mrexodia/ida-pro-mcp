@@ -114,14 +114,14 @@ You should also use a tool like Lumina or FLIRT to try and resolve all the open 
 _Note_: This section is for LLMs and power users who need detailed installation instructions.
 
 ### Manual plugin installation
-1. Copy or symlink `src/ida_pro_mcp/mcp-plugin.py` to `~/.idapro/plugins/mcp-plugin.py`.
+1. Copy or symlink `src/ida_pro_mcp/plugin/__init__.py` to `~/.idapro/plugins/mcp-plugin.py`.
 2. Open an IDB and click **Edit -> Plugins -> MCP** to start the server.
 
 
 
 ## Development
 
-Adding new features is a super easy and streamlined process. All you have to do is add a new `@jsonrpc` function to [`mcp-plugin.py`](https://github.com/mrexodia/ida-pro-mcp/blob/164df8cf4ae251cc9cc0f464591fa6df8e0d9df4/src/ida_pro_mcp/mcp-plugin.py#L406-L419) and your function will be available in the MCP server without any additional boilerplate! Below is a video where I add the `get_metadata` function in less than 2 minutes (including testing):
+Adding new features is a super easy and streamlined process. All you have to do is add a new `@jsonrpc` function to [`plugin/__init__.py`](https://github.com/mrexodia/ida-pro-mcp/blob/164df8cf4ae251cc9cc0f464591fa6df8e0d9df4/src/ida_pro_mcp/plugin/__init__.py#L406-L419) and your function will be available in the MCP server without any additional boilerplate! Below is a video where I add the `get_metadata` function in less than 2 minutes (including testing):
 
 https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
 

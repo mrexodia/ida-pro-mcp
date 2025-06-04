@@ -70,7 +70,7 @@ idaapi.plugin_t = type("plugin_t", (), {})
 idaapi.PLUGIN_KEEP = 0
 idaapi.enable_bpt = lambda *a, **k: True
 
-PLUGIN_PATH = Path(__file__).resolve().parents[1] / "src" / "ida_pro_mcp" / "mcp-plugin.py"
+PLUGIN_PATH = Path(__file__).resolve().parents[1] / "src" / "ida_pro_mcp" / "plugin/__init__.py"
 
 spec = importlib.util.spec_from_file_location("mcp_plugin", PLUGIN_PATH)
 plugin = importlib.util.module_from_spec(spec)
