@@ -1,0 +1,4 @@
+# Example configuration for LocalLLM
+model = "mistral"
+api_base = "http://localhost:11434"
+prompt_file = "offline_llm/default_prompt.txt"
