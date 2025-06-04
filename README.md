@@ -56,7 +56,8 @@ Unsafe functions (`--unsafe` flag required):
 ## Installation
 
 Clone this repository and run the bootstrap script with the path to your
-downloaded model:
+downloaded model. The script compiles ``llama-cpp-python`` with Metal support
+and writes the chosen model path to ``~/Library/Application Support/ida-offline-mcp/settings.json``:
 
 ```sh
 git clone https://github.com/mrexodia/ida-pro-mcp
@@ -65,8 +66,7 @@ scripts/bootstrap.sh /path/to/model.gguf
 scripts/install_ida_plugin.sh
 ```
 
-The script creates a virtual environment and writes the model location to
-`~/Library/Application Support/ida-offline-mcp/settings.json`.
+Edit ``settings.json`` later if you want to switch models.
 
 Run `scripts/install_ida_plugin.sh` to place the plugin in
 `~/.idapro/plugins/`.  Start IDA and choose `Edit -> Plugins -> MCP` to launch
@@ -76,6 +76,19 @@ the chat dock.  Make sure an IDB is loaded or the menu entry will not appear.
 
 Outbound network access from IDAPython is blocked by default.  Set `ALLOW_NET=1`
 before starting IDA if you want to enable connections to external services.
+
+### Basic usage
+
+Open a database in IDA and choose `Edit -> Plugins -> MCP` to display the chat
+dock.  You can try commands like `decompile_function` to verify that the server
+responds correctly.
+
+### Local LLM server
+
+`offline_llm` uses an OpenAI-compatible API. If no config file is supplied, it
+defaults to `http://localhost:11434` with the model name `mistral` as shown in
+`offline_llm/config.example.toml`.  You can run your own server with a command
+like `ollama serve` or `python -m llama_cpp.server`.
 
 ## Prompt Engineering
 
@@ -127,6 +140,12 @@ https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
 
 Run the plugin inside IDA Pro and it will automatically launch the offline core.
 You can then access your new JSON-RPC methods directly from the chat dock.
+Start a development server with:
+
+```sh
+uv run mcp dev src/ida_pro_mcp/server.py
+```
+to experiment with the API during development.
 
 Generate the changelog of direct commits to `main`:
 
