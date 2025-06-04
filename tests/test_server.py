@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import threading
 from pathlib import Path
 import sys
@@ -24,32 +25,17 @@ class StubLLM:
         return "pong"
 
 
-class _IO:
-    def __init__(self, buffer):
-        self.buffer = buffer
-
-
-def start_core(r_in: int, w_out: int):
-    in_file = os.fdopen(r_in, "rb", buffering=0)
-    out_file = os.fdopen(w_out, "wb", buffering=0)
-    old_in, old_out = sys.stdin, sys.stdout
-    sys.stdin = _IO(in_file)
-    sys.stdout = _IO(out_file)
-    try:
-        core.main([])
-    finally:
-        sys.stdin = old_in
-        sys.stdout = old_out
+def start_core(fd: int):
+    core.main(["--socket-fd", str(fd)])
 
 
 def test_chat_pipe():
-    r_in, w_in = os.pipe()
-    r_out, w_out = os.pipe()
+    s1, s2 = socket.socketpair()
 
-    thread = threading.Thread(target=start_core, args=(r_in, w_out), daemon=True)
+    thread = threading.Thread(target=start_core, args=(s1.fileno(),), daemon=True)
     with mock.patch("ida_pro_mcp.server.core.LocalLLM", StubLLM):
         thread.start()
-        with os.fdopen(w_in, "wb", buffering=0) as writer, os.fdopen(r_out, "rb", buffering=0) as reader:
+        with s2.makefile("wb", buffering=0) as writer, s2.makefile("rb", buffering=0) as reader:
             request = {
                 "jsonrpc": "2.0",
                 "id": 1,
