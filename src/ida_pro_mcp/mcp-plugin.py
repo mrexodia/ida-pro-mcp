@@ -2,6 +2,7 @@ import os
 import sys
 import socket
 import ipaddress
+import subprocess
 
 if sys.version_info < (3, 11):
     raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
@@ -34,6 +35,11 @@ import threading
 import http.server
 from urllib.parse import urlparse
 from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated, TypeVar, Generic
+
+# Core process state
+_core_proc: subprocess.Popen | None = None
+_core_socket: socket.socket | None = None
+_core_id = 0
 
 class JSONRPCError(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
@@ -1323,6 +1329,8 @@ class MCP(idaapi.plugin_t):
 
     def init(self):
         self.server = Server()
+        self.dock = None
+        self.core_socket = None
         hotkey = MCP.wanted_hotkey.replace("-", "+")
         if sys.platform == "darwin":
             hotkey = hotkey.replace("Alt", "Option")
@@ -1331,9 +1339,83 @@ class MCP(idaapi.plugin_t):
 
     def run(self, args):
         self.server.start()
+        self._ensure_core()
+        self._show_dock()
 
     def term(self):
         self.server.stop()
+
+    def _ensure_core(self):
+        """Ensure the offline LLM core is running and connected."""
+        global _core_proc, _core_socket
+        if _core_proc is not None and _core_proc.poll() is None:
+            self.core_socket = _core_socket
+            return
+
+        parent, child = socket.socketpair()
+        fd = child.fileno()
+        try:
+            _core_proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "ida_pro_mcp.server.core",
+                    "--socket-fd",
+                    str(fd),
+                ],
+                pass_fds=(fd,),
+            )
+        except Exception as e:
+            print(f"[MCP] Failed to start core: {e}")
+            parent.close()
+            child.close()
+            return
+        child.close()
+        _core_socket = parent
+        self.core_socket = parent
+
+    def _show_dock(self):
+        if self.dock is not None:
+            return
+        try:
+            from .server.gui_dock import MCPDock
+            self.dock = MCPDock(self)
+            if hasattr(ida_kernwin, "add_dock_widget"):
+                ida_kernwin.add_dock_widget(int(self.dock.winId()), self.dock, 0)
+            elif hasattr(ida_kernwin, "create_dockable_window"):
+                ida_kernwin.create_dockable_window("MCP", self.dock)
+        except Exception as e:
+            print(f"[MCP] Failed to create dock: {e}")
+
+    def send_prompt(self, text: str) -> str:
+        global _core_id
+        if not self.core_socket:
+            return ""
+        req = {
+            "jsonrpc": "2.0",
+            "id": _core_id,
+            "method": "chat",
+            "params": {"messages": [{"role": "user", "content": text}]},
+        }
+        _core_id += 1
+        try:
+            self.core_socket.sendall(json.dumps(req).encode() + b"\n")
+            buf = b""
+            while True:
+                chunk = self.core_socket.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                if b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    resp = json.loads(line.decode())
+                    if "result" in resp:
+                        return resp["result"]
+                    if resp.get("done"):
+                        break
+        except Exception as e:
+            print(f"[MCP] Communication error: {e}")
+        return ""
 
 def PLUGIN_ENTRY():
     return MCP()
