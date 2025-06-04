@@ -1348,9 +1348,17 @@ class MCP(idaapi.plugin_t):
     def _ensure_core(self):
         """Ensure the offline LLM core is running and connected."""
         global _core_proc, _core_socket
-        if _core_proc is not None and _core_proc.poll() is None:
+
+        if _core_proc is not None and _core_proc.poll() is None and _core_socket:
             self.core_socket = _core_socket
             return
+
+        if _core_socket:
+            try:
+                _core_socket.close()
+            except Exception:
+                pass
+            _core_socket = None
 
         parent, child = socket.socketpair()
         fd = child.fileno()
@@ -1365,14 +1373,16 @@ class MCP(idaapi.plugin_t):
                 ],
                 pass_fds=(fd,),
             )
+            child.close()
+            _core_socket = parent
+            self.core_socket = parent
         except Exception as e:
             print(f"[MCP] Failed to start core: {e}")
             parent.close()
             child.close()
-            return
-        child.close()
-        _core_socket = parent
-        self.core_socket = parent
+            _core_proc = None
+            _core_socket = None
+            self.core_socket = None
 
     def _show_dock(self):
         if self.dock is not None:
@@ -1388,16 +1398,22 @@ class MCP(idaapi.plugin_t):
             print(f"[MCP] Failed to create dock: {e}")
 
     def send_prompt(self, text: str) -> str:
-        global _core_id
+        global _core_id, _core_socket
+
         if not self.core_socket:
-            return ""
+            self._ensure_core()
+            if not self.core_socket:
+                return ""
+
         req = {
             "jsonrpc": "2.0",
             "id": _core_id,
             "method": "chat",
-            "params": {"messages": [{"role": "user", "content": text}]},
+            "params": {"messages": [{"role": "user", "content": text}], "stream": True},
         }
         _core_id += 1
+
+        result = ""
         try:
             self.core_socket.sendall(json.dumps(req).encode() + b"\n")
             buf = b""
@@ -1406,16 +1422,27 @@ class MCP(idaapi.plugin_t):
                 if not chunk:
                     break
                 buf += chunk
-                if b"\n" in buf:
+                while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
+                    if not line:
+                        continue
                     resp = json.loads(line.decode())
-                    if "result" in resp:
-                        return resp["result"]
-                    if resp.get("done"):
-                        break
+                    if "token" in resp:
+                        result += resp["token"]
+                    elif "result" in resp:
+                        result += resp["result"]
+                        return result
+                    elif resp.get("done"):
+                        return result
         except Exception as e:
             print(f"[MCP] Communication error: {e}")
-        return ""
+            try:
+                self.core_socket.close()
+            except Exception:
+                pass
+            self.core_socket = None
+            _core_socket = None
+        return result
 
 def PLUGIN_ENTRY():
     return MCP()
