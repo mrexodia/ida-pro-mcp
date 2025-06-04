@@ -1,0 +1,33 @@
+= Configuration
+:toc:
+
+This document covers how to configure different clients and install the plugin
+manually.
+
+== Automatic configuration
+
+Running `ida-pro-mcp --config` prints a JSON snippet that can be pasted into
+supported clients such as Cline, Roo Code or Cursor.  It points the client to
+the local MCP server started with the `--install` command.
+
+== Manual installation
+
+The plugin can also be set up manually.  Clone this repository and configure
+your client with a command similar to:
+
+[source,json]
+----
+{
+  "mcpServers": {
+    "github.com/mrexodia/ida-pro-mcp": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/ida-pro-mcp", "run", "server.py", "--install-plugin"],
+      "timeout": 1800,
+      "disabled": false
+    }
+  }
+}
+----
+
+After the server starts the plugin is copied to the IDA plugins directory and
+can be launched from the *Edit → Plugins* menu.

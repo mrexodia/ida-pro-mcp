@@ -30,6 +30,9 @@ build-backend = "setuptools.build_meta"
 dev = [
     "mcp[cli]>=1.6.0",
 ]
+test = [
+    "pytest",
+]
 
 [project.scripts]
 ida-pro-mcp = "ida_pro_mcp.server:main"
