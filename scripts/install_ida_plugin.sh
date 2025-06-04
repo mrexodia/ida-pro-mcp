@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-PLUGIN_SRC="$(dirname "$0")/../src/ida_pro_mcp/mcp-plugin.py"
+PLUGIN_SRC="$(dirname "$0")/../src/ida_pro_mcp/plugin/__init__.py"
 PLUGIN_DIR="$HOME/.idapro/plugins"
 
 mkdir -p "$PLUGIN_DIR"

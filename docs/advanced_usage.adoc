@@ -6,7 +6,7 @@ These notes cover more advanced scenarios when working with the MCP server.
 
 == Development workflow
 
-New tools can be added simply by decorating a function in `mcp-plugin.py` with
+New tools can be added simply by decorating a function in `plugin/__init__.py` with
 `@jsonrpc`.  Start the development server to experiment with the API:
 
 [source,shell]

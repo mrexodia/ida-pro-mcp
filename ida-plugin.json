@@ -2,6 +2,6 @@
   "IDAMetadataDescriptorVersion": 1,
   "plugin": {
     "name": "IDA Pro MCP",
-    "entryPoint": "src/ida_pro_mcp/mcp-plugin.py"
+    "entryPoint": "src/ida_pro_mcp/plugin/__init__.py"
   }
 }
