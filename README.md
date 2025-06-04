@@ -50,17 +50,9 @@ Unsafe functions (`--unsafe` flag required):
 
 ## Prerequisites
 
-- [Python](https://www.python.org/downloads/) (**3.11 or higher**) 
+- [Python](https://www.python.org/downloads/) (**3.11 or higher**)
   - Use `idapyswitch` to switch to the newest Python version
 - [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
-- Supported MCP Client (pick one you like)
-  - [Cline](https://cline.bot)
-  - [Roo Code](https://roocode.com)
-  - [Claude](https://claude.ai/download)
-  - [Cursor](https://cursor.com)
-  - [VSCode Agent Mode](https://github.blog/news-insights/product-news/github-copilot-agent-mode-activated/)
-  - [Windsurf](https://windsurf.com)
-  - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `ida-pro-mcp --config` to get the JSON config for your client.
 
 ## Installation
 
@@ -71,15 +63,8 @@ pip uninstall ida-pro-mcp
 pip install git+https://github.com/mrexodia/ida-pro-mcp
 ```
 
-Configure the MCP servers and install the IDA Plugin:
-
-```
-ida-pro-mcp --install
-```
-
-**Important**: Make sure you completely restart IDA/Visual Studio Code/Claude for the installation to take effect. Claude runs in the background and you need to quit it from the tray icon.
-
-https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
+Copy `src/ida_pro_mcp/mcp-plugin.py` to your IDA plugins directory (e.g. `%APPDATA%\Hex-Rays\IDA Pro\plugins` on Windows).
+Launch IDA Pro and choose `Edit -> Plugins -> MCP` to start the server.
 
 _Note_: You need to load a binary in IDA before the plugin menu will show up.
 
@@ -134,58 +119,10 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 
 _Note_: This section is for LLMs and power users who need detailed installation instructions.
 
-<details>
+### Manual plugin installation
+1. Copy `src/ida_pro_mcp/mcp-plugin.py` to your IDA plugins folder (`%APPDATA%\Hex-Rays\IDA Pro\plugins` on Windows).
+2. Open an IDB and click **Edit -> Plugins -> MCP** to start the server.
 
-## Manual MCP Server Installation (Cline/Roo Code)
-
-To install the MCP server yourself, follow these steps:
-
-1. Install [uv](https://github.com/astral-sh/uv) globally:
-   - Windows: `pip install uv`
-   - Linux/Mac: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-2. Clone this repository, for this example `C:\MCP\ida-pro-mcp`.
-3. Navigate to the Cline/Roo Code _MCP Servers_ configuration (see screenshot).
-4. Click on the _Installed_ tab.
-5. Click on _Configure MCP Servers_, which will open `cline_mcp_settings.json`.
-6. Add the `ida-pro-mcp` server:
-
-```json
-{
-  "mcpServers": {
-    "github.com/mrexodia/ida-pro-mcp": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "c:\\MCP\\ida-pro-mcp",
-        "run",
-        "server.py",
-        "--install-plugin"
-      ],
-      "timeout": 1800,
-      "disabled": false
-    }
-  }
-}
-```
-
-To check if the connection works you can perform the following tool call:
-
-```
-<use_mcp_tool>
-<server_name>github.com/mrexodia/ida-pro-mcp</server_name>
-<tool_name>check_connection</tool_name>
-<arguments></arguments>
-</use_mcp_tool>
-```
-
-## IDA Plugin installation
-
-The IDA Pro plugin will be installed automatically when the MCP server starts. If you disabled the `--install-plugin` option, use the following steps:
-
-1. Copy (**not move**) `src/ida_pro_mcp/mcp-plugin.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows).
-2. Open an IDB and click `Edit -> Plugins -> MCP` to start the server.
-
-</details>
 
 ## Comparison with other MCP servers
 
@@ -217,11 +154,7 @@ uv run mcp dev src/ida_pro_mcp/server.py
 
 This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.
 
-For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC request directly to `http://localhost:13337/mcp`. After [enabling symbolic links](https://learn.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development) you can run the following command:
-
-```sh
-uv run ida-pro-mcp --install
-```
+For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC request directly to `http://localhost:13337/mcp`.
 
 Generate the changelog of direct commits to `main`:
 

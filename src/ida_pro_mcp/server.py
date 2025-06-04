@@ -265,91 +265,6 @@ def print_mcp_config():
         }, indent=2)
     )
 
-def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
-    if sys.platform == "win32":
-        configs = {
-            "Cline": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
-            "Roo Code": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
-            "Claude": (os.path.join(os.getenv("APPDATA"), "Claude"), "claude_desktop_config.json"),
-            "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
-            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
-        }
-    elif sys.platform == "darwin":
-        configs = {
-            "Cline": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
-            "Roo Code": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
-            "Claude": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Claude"), "claude_desktop_config.json"),
-            "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
-            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
-        }
-    elif sys.platform == "linux":
-        configs = {
-            "Cline": (os.path.join(os.path.expanduser("~"), ".config", "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
-            "Roo Code": (os.path.join(os.path.expanduser("~"), ".config", "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
-            # Claude not supported on Linux
-            "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
-            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
-        }
-    else:
-        print(f"Unsupported platform: {sys.platform}")
-        return
-
-    installed = 0
-    for name, (config_dir, config_file) in configs.items():
-        config_path = os.path.join(config_dir, config_file)
-        if not os.path.exists(config_dir):
-            action = "uninstall" if uninstall else "installation"
-            if not quiet:
-                print(f"Skipping {name} {action}\n  Config: {config_path} (not found)")
-            continue
-        if not os.path.exists(config_path):
-            config = {}
-        else:
-            with open(config_path, "r") as f:
-                data = f.read().strip()
-                if len(data) == 0:
-                    config = {}
-                else:
-                    try:
-                        config = json.load(f)
-                    except json.decoder.JSONDecodeError:
-                        if not quiet:
-                            print(f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)")
-                        continue
-        if "mcpServers" not in config:
-            config["mcpServers"] = {}
-        mcp_servers = config["mcpServers"]
-        if uninstall:
-            if mcp.name not in mcp_servers:
-                if not quiet:
-                    print(f"Skipping {name} uninstall\n  Config: {config_path} (not installed)")
-                continue
-            del mcp_servers[mcp.name]
-        else:
-            if mcp.name in mcp_servers:
-                for key, value in mcp_servers[mcp.name].get("env", {}):
-                    env[key] = value
-            mcp_servers[mcp.name] = {
-                "command": get_python_executable(),
-                "args": [
-                    __file__,
-                ],
-                "timeout": 1800,
-                "disabled": False,
-                "autoApprove": SAFE_FUNCTIONS,
-                "alwaysAllow": SAFE_FUNCTIONS,
-            }
-            if env:
-                mcp_servers[mcp.name]["env"] = env
-        with open(config_path, "w") as f:
-            json.dump(config, f, indent=2)
-        if not quiet:
-            action = "Uninstalled" if uninstall else "Installed"
-            print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}")
-        installed += 1
-    if not uninstall and installed == 0:
-        print("No MCP servers installed. For unsupported MCP clients, use the following config:\n")
-        print_mcp_config()
 
 def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
     if sys.platform == "win32":
@@ -391,8 +306,6 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
 def main():
     global ida_host, ida_port
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
-    parser.add_argument("--install", action="store_true", help="Install the MCP Server and IDA plugin")
-    parser.add_argument("--uninstall", action="store_true", help="Uninstall the MCP Server and IDA plugin")
     parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--transport", type=str, default="stdio", help="MCP transport protocol to use (stdio or http://127.0.0.1:8744)")
@@ -401,19 +314,6 @@ def main():
     parser.add_argument("--config", action="store_true", help="Generate MCP config JSON")
     args = parser.parse_args()
 
-    if args.install and args.uninstall:
-        print("Cannot install and uninstall at the same time")
-        return
-
-    if args.install:
-        install_mcp_servers()
-        install_ida_plugin()
-        return
-
-    if args.uninstall:
-        install_mcp_servers(uninstall=True)
-        install_ida_plugin(uninstall=True)
-        return
 
     # NOTE: Developers can use this to generate the README
     if args.generate_docs:
