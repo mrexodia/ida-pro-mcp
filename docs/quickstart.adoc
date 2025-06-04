@@ -24,6 +24,6 @@ Run `scripts/install_ida_plugin.sh` to place the plugin under
 == Basic usage
 
 Once installed, open a database in IDA and launch the MCP plugin through
-`Edit -> Plugins -> MCP`.  A chat dock appears allowing you to interact with the
-MCP tools.  Run `check_connection()` in the dock to verify the connection before
-using other tools like `decompile_function`.
+`Edit -> Plugins -> MCP`. A chat dock appears allowing you to interact with the
+MCP tools. Try using `decompile_function` or other commands to verify the
+connection works correctly.
