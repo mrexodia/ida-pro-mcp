@@ -56,17 +56,27 @@ Unsafe functions (`--unsafe` flag required):
 
 ## Installation
 
-Install the latest version of the IDA Pro MCP package:
+Clone this repository and run the bootstrap script with the path to your
+downloaded model:
 
 ```sh
-pip uninstall ida-pro-mcp
-pip install git+https://github.com/mrexodia/ida-pro-mcp
+git clone https://github.com/mrexodia/ida-pro-mcp
+cd ida-pro-mcp
+scripts/bootstrap.sh /path/to/model.gguf
 ```
 
-Copy `src/ida_pro_mcp/mcp-plugin.py` to your IDA plugins directory (e.g. `%APPDATA%\Hex-Rays\IDA Pro\plugins` on Windows).
-Launch IDA Pro and choose `Edit -> Plugins -> MCP` to start the server.
+The script creates a virtual environment and writes the model location to
+`~/Library/Application Support/ida-offline-mcp/settings.json`.
 
-_Note_: You need to load a binary in IDA before the plugin menu will show up.
+Copy `src/ida_pro_mcp/mcp-plugin.py` to the IDA plugins directory (e.g.
+`%APPDATA%\Hex-Rays\IDA Pro\plugins` on Windows).  Start IDA and choose
+`Edit -> Plugins -> MCP` to launch the chat dock.  Make sure an IDB is loaded
+or the menu entry will not appear.
+
+### Environment variables
+
+Outbound network access from IDAPython is blocked by default.  Set `ALLOW_NET=1`
+before starting IDA if you want to enable connections to external services.
 
 ## Prompt Engineering
 
@@ -99,21 +109,6 @@ Another thing to keep in mind is that LLMs will not perform well on obfuscated c
 
 You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
 
-## SSE Transport & Headless MCP
-
-You can run an SSE server to connect to the user interface like this:
-
-```sh
-uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
-```
-
-After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can also run a headless SSE server:
-
-```sh
-uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
-```
-
-_Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
 ## Manual Installation
 
@@ -134,7 +129,6 @@ There are a few IDA Pro MCP servers floating around, but I created my own for a 
 
 If you want to check them out, here is a list (in the order I discovered them):
 
-- https://github.com/taida957789/ida-mcp-server-plugin (SSE protocol only, requires installing dependencies in IDAPython).
 - https://github.com/fdrechsler/mcp-server-idapro (MCP Server in TypeScript, excessive boilerplate required to add new functionality).
 - https://github.com/MxIris-Reverse-Engineering/ida-mcp-server (custom socket protocol, boilerplate).
 
