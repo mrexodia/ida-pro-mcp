@@ -8,7 +8,6 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 
 Available functionality:
 
-- `check_connection()`: Check if the IDA plugin is running.
 - `get_metadata()`: Get metadata about the current IDB.
 - `get_function_by_name(name)`: Get a function by its name.
 - `get_function_by_address(address)`: Get a function by its address.
