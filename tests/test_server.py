@@ -1,50 +1,64 @@
 import json
+import os
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import sys
-
-import pytest
+from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "src"
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(ROOT))
 
-from ida_pro_mcp import server
+from ida_pro_mcp.server import core
 
 
-class StubHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length))
-        resp = {"jsonrpc": "2.0", "id": body.get("id")}
-        if body["method"] == "get_metadata":
-            resp["result"] = {"module": "test.exe"}
-        else:
-            resp["result"] = "ok"
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps(resp).encode())
-
-    def log_message(self, *args):
+class StubLLM:
+    def __init__(self, *a, **k):
         pass
 
+    def chat(self, messages, stream=False):
+        if stream:
+            def gen():
+                yield "pong"
+            return gen()
+        return "pong"
 
-def run_server(server):
-    with server:
-        server.serve_forever()
+
+class _IO:
+    def __init__(self, buffer):
+        self.buffer = buffer
 
 
-def test_check_connection(tmp_path):
-    httpd = HTTPServer(("127.0.0.1", 0), StubHandler)
-    thread = threading.Thread(target=run_server, args=(httpd,), daemon=True)
-    thread.start()
-    server.ida_host = "127.0.0.1"
-    server.ida_port = httpd.server_port
+def start_core(r_in: int, w_out: int):
+    in_file = os.fdopen(r_in, "rb", buffering=0)
+    out_file = os.fdopen(w_out, "wb", buffering=0)
+    old_in, old_out = sys.stdin, sys.stdout
+    sys.stdin = _IO(in_file)
+    sys.stdout = _IO(out_file)
     try:
-        result = server.check_connection()
-        assert "Successfully connected" in result
-        assert "test.exe" in result
+        core.main([])
     finally:
-        httpd.shutdown()
-        thread.join()
+        sys.stdin = old_in
+        sys.stdout = old_out
+
+
+def test_chat_pipe():
+    r_in, w_in = os.pipe()
+    r_out, w_out = os.pipe()
+
+    thread = threading.Thread(target=start_core, args=(r_in, w_out), daemon=True)
+    with mock.patch("ida_pro_mcp.server.core.LocalLLM", StubLLM):
+        thread.start()
+        with os.fdopen(w_in, "wb", buffering=0) as writer, os.fdopen(r_out, "rb", buffering=0) as reader:
+            request = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "chat",
+                "params": {"messages": [{"role": "user", "content": "ping"}]},
+            }
+            writer.write(json.dumps(request).encode() + b"\n")
+            writer.flush()
+            response = json.loads(reader.readline())
+            assert response["result"] == "pong"
+    thread.join(timeout=1)
