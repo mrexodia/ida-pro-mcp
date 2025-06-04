@@ -87,3 +87,12 @@ def test_get_metadata():
 
     assert result["module"] == "a.exe"
     assert result["size"] == hex(0x2000)
+
+
+def test_plugin_run_spawns_core():
+    with mock.patch.object(plugin, "Server") as Server:
+        instance = Server.return_value
+        p = plugin.MCP()
+        p.init()
+        p.run(None)
+        instance.start.assert_called_once()
