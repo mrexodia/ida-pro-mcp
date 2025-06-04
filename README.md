@@ -119,20 +119,6 @@ _Note_: This section is for LLMs and power users who need detailed installation 
 2. Open an IDB and click **Edit -> Plugins -> MCP** to start the server.
 
 
-## Comparison with other MCP servers
-
-There are a few IDA Pro MCP servers floating around, but I created my own for a few reasons:
-
-1. Installation should be fully automated.
-2. The architecture of other plugins make it difficult to add new functionality quickly (too much boilerplate of unnecessary dependencies).
-3. Learning new technologies is fun!
-
-If you want to check them out, here is a list (in the order I discovered them):
-
-- https://github.com/fdrechsler/mcp-server-idapro (MCP Server in TypeScript, excessive boilerplate required to add new functionality).
-- https://github.com/MxIris-Reverse-Engineering/ida-mcp-server (custom socket protocol, boilerplate).
-
-Feel free to open a PR to add your IDA Pro MCP server here.
 
 ## Development
 
@@ -140,13 +126,8 @@ Adding new features is a super easy and streamlined process. All you have to do 
 
 https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
 
-To test the MCP server itself:
-
-```sh
-uv run mcp dev src/ida_pro_mcp/server.py
-```
-
-For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC request directly to `http://localhost:13337/mcp`.
+Run the plugin inside IDA Pro and it will automatically launch the offline core.
+You can then access your new JSON-RPC methods directly from the chat dock.
 
 Generate the changelog of direct commits to `main`:
 

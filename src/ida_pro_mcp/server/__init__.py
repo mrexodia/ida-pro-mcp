@@ -1,1 +1,3 @@
-"""Offline MCP server components."""
+from . import core
+
+__all__ = ["core"]
