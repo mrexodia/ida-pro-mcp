@@ -63,15 +63,15 @@ downloaded model:
 git clone https://github.com/mrexodia/ida-pro-mcp
 cd ida-pro-mcp
 scripts/bootstrap.sh /path/to/model.gguf
+scripts/install_ida_plugin.sh
 ```
 
 The script creates a virtual environment and writes the model location to
 `~/Library/Application Support/ida-offline-mcp/settings.json`.
 
-Copy `src/ida_pro_mcp/mcp-plugin.py` to the IDA plugins directory (e.g.
-`%APPDATA%\Hex-Rays\IDA Pro\plugins` on Windows).  Start IDA and choose
-`Edit -> Plugins -> MCP` to launch the chat dock.  Make sure an IDB is loaded
-or the menu entry will not appear.
+Run `scripts/install_ida_plugin.sh` to place the plugin in
+`~/.idapro/plugins/`.  Start IDA and choose `Edit -> Plugins -> MCP` to launch
+the chat dock.  Make sure an IDB is loaded or the menu entry will not appear.
 
 ### Environment variables
 
@@ -115,7 +115,7 @@ You should also use a tool like Lumina or FLIRT to try and resolve all the open 
 _Note_: This section is for LLMs and power users who need detailed installation instructions.
 
 ### Manual plugin installation
-1. Copy `src/ida_pro_mcp/mcp-plugin.py` to your IDA plugins folder (`%APPDATA%\Hex-Rays\IDA Pro\plugins` on Windows).
+1. Copy or symlink `src/ida_pro_mcp/mcp-plugin.py` to `~/.idapro/plugins/mcp-plugin.py`.
 2. Open an IDB and click **Edit -> Plugins -> MCP** to start the server.
 
 

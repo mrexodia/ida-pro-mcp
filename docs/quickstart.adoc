@@ -18,11 +18,12 @@ scripts/bootstrap.sh /path/to/model.gguf
 The script installs all requirements and stores the model path in
 `~/Library/Application Support/ida-offline-mcp/settings.json`.
 
-Copy `src/ida_pro_mcp/mcp-plugin.py` to the IDA plugins directory and restart
-IDA to load the plugin.
+Run `scripts/install_ida_plugin.sh` to place the plugin under
+`~/.idapro/plugins/` and restart IDA to load it.
 
 == Basic usage
 
 Once installed, open a database in IDA and launch the MCP plugin through
 `Edit -> Plugins -> MCP`.  A chat dock appears allowing you to interact with the
-MCP tools such as `check_connection` or `decompile_function`.
+MCP tools.  Run `check_connection()` in the dock to verify the connection before
+using other tools like `decompile_function`.
