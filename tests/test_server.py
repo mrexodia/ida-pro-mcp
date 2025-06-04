@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SRC))
 sys.path.insert(0, str(ROOT))
 
-from ida_pro_mcp.server import core
+import ida_pro_mcp.server.core as core
 
 class StubLLM:
     def __init__(self, *a, **k):
