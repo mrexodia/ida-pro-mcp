@@ -3,11 +3,15 @@ from pathlib import Path
 from unittest import mock
 import types
 import sys
+import os
+import threading
 
 import pytest
 
-SRC = Path(__file__).resolve().parents[1] / "src"
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(ROOT))
 
 for name in [
     "ida_hexrays",
@@ -35,6 +39,8 @@ ida_kernwin = sys.modules["ida_kernwin"]
 ida_kernwin.MFF_READ = 0
 ida_kernwin.MFF_WRITE = 1
 ida_kernwin.MFF_FAST = 2
+ida_kernwin.add_dock_widget = lambda *a, **k: None
+ida_kernwin.create_dockable_window = lambda *a, **k: None
 
 ida_funcs = sys.modules["ida_funcs"]
 class func_t: ...
@@ -90,9 +96,93 @@ def test_get_metadata():
 
 
 def test_plugin_run_spawns_core():
-    with mock.patch.object(plugin, "Server") as Server:
+    with mock.patch.object(plugin, "Server") as Server, \
+         mock.patch.object(plugin.subprocess, "Popen") as Popen:
+        Popen.return_value.poll.return_value = None
         instance = Server.return_value
         p = plugin.MCP()
         p.init()
         p.run(None)
         instance.start.assert_called_once()
+        Popen.assert_called_once()
+        args = Popen.call_args[0][0]
+        assert args[1:4] == ["-m", "ida_pro_mcp.server.core", "--socket-fd"]
+
+
+def reset_core_state():
+    plugin._core_proc = None
+    plugin._core_socket = None
+
+
+class StubLLM:
+    def __init__(self, *a, **k):
+        pass
+
+    def chat(self, messages, stream=False):
+        if stream:
+            def gen():
+                yield "pong"
+            return gen()
+        return "pong"
+
+
+class StubPrompt:
+    def __init__(self):
+        self._text = ""
+
+    def text(self):
+        return self._text
+
+    def clear(self):
+        self._text = ""
+
+
+class StubDock:
+    def __init__(self, plugin):
+        self.plugin = plugin
+        self.history = []
+        self.prompt = StubPrompt()
+
+    def winId(self):
+        return 0
+
+    def on_send(self):
+        text = self.prompt.text().strip()
+        if not text:
+            return
+        self.history.append(f"> {text}")
+        self.prompt.clear()
+        reply = self.plugin.send_prompt(text)
+        if reply:
+            self.history.append(reply)
+
+
+class DummyPopen:
+    def __init__(self, args, pass_fds=(), **kwargs):
+        fd = int(args[args.index("--socket-fd") + 1])
+        self.fd = os.dup(fd)
+        self.thread = threading.Thread(target=self._run, args=(self.fd,), daemon=True)
+        self.thread.start()
+
+    def _run(self, fd):
+        import ida_pro_mcp.server.core as core
+        with mock.patch.object(core, "LocalLLM", StubLLM):
+            core.main(["--socket-fd", str(fd)])
+        print("core exited")
+
+    def poll(self):
+        return None if self.thread.is_alive() else 0
+
+
+def test_prompt_through_dock():
+    reset_core_state()
+    with mock.patch.object(plugin, "Server"), \
+         mock.patch.object(plugin.subprocess, "Popen", DummyPopen), \
+         mock.patch.object(plugin.MCP, "_show_dock", lambda self: setattr(self, "dock", StubDock(self))):
+        p = plugin.MCP()
+        p.init()
+        p.run(None)
+        import time; time.sleep(0.05)
+        p.dock.prompt._text = "ping"
+        p.dock.on_send()
+        assert p.dock.history[-1] == "pong"
