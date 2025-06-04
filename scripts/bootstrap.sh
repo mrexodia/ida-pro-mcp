@@ -26,6 +26,14 @@ mkdir -p "$SETTINGS_DIR"
 SETTINGS_FILE="$SETTINGS_DIR/settings.json"
 
 if [ -n "$MODEL_PATH" ]; then
+  python3 - <<'EOF' "$MODEL_PATH"
+import os, stat, sys
+path = sys.argv[1]
+st = os.stat(path)
+if st.st_mode & stat.S_IWOTH:
+    sys.stderr.write(f"Error: model path '{path}' is world-writable\n")
+    sys.exit(1)
+EOF
   echo "{\"model_path\": \"$MODEL_PATH\"}" > "$SETTINGS_FILE"
 else
   echo "{}" > "$SETTINGS_FILE"
