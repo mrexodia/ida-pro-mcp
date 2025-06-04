@@ -53,7 +53,7 @@ Unsafe functions (`--unsafe` flag required):
   - Use `idapyswitch` to switch to the newest Python version
 - [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
 
-## Installation
+## Quickstart
 
 Clone this repository and run the bootstrap script with the path to your
 downloaded model. The script compiles ``llama-cpp-python`` with Metal support
@@ -63,14 +63,20 @@ and writes the chosen model path to ``~/Library/Application Support/ida-offline-
 git clone https://github.com/mrexodia/ida-pro-mcp
 cd ida-pro-mcp
 scripts/bootstrap.sh /path/to/model.gguf
+ollama serve && ollama pull mistral
 scripts/install_ida_plugin.sh
 ```
 
 Edit ``settings.json`` later if you want to switch models.
 
+Start the local LLM server after running `bootstrap.sh` and before launching MCP.
+The model name must match ``offline_llm/config.example.toml``.
+
 Run `scripts/install_ida_plugin.sh` to place the plugin in
 `~/.idapro/plugins/`.  Start IDA and choose `Edit -> Plugins -> MCP` to launch
 the chat dock.  Make sure an IDB is loaded or the menu entry will not appear.
+
+See [docs/quickstart.adoc](docs/quickstart.adoc) for more details.
 
 ### Environment variables
 
@@ -87,8 +93,13 @@ responds correctly.
 
 `offline_llm` uses an OpenAI-compatible API. If no config file is supplied, it
 defaults to `http://localhost:11434` with the model name `mistral` as shown in
-`offline_llm/config.example.toml`.  You can run your own server with a command
-like `ollama serve` or `python -m llama_cpp.server`.
+`offline_llm/config.example.toml`.  Start your own server with a command like:
+
+```sh
+ollama serve && ollama pull mistral
+```
+
+Alternatively you can run `python -m llama_cpp.server`.
 
 ## Prompt Engineering
 
