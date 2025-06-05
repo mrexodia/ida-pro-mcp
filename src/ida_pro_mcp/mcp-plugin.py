@@ -658,6 +658,44 @@ def list_globals(
     """List all globals in the database (paginated)"""
     return list_globals_filter(offset, count, "")
 
+class Import(TypedDict):
+    address: str
+    name: str
+    library: str
+
+@jsonrpc
+@idaread
+def list_imports(
+        offset: Annotated[int, "Offset to start listing from (start at 0)"],
+        count: Annotated[int, "Number of imports to list (100 is a good default, 0 means remainder)"],
+) -> Page[Import]:
+    """ List all imported symbols with their name and module (paginated) """
+    nimps = ida_nalt.get_import_module_qty()
+
+    rv = []
+    for i in range(nimps):
+        module_name = ida_nalt.get_import_module_name(i)
+        if not module_name:
+            module_name = "<unnamed>"
+
+        def imp_cb(ea, symbol_name, ordinal, acc):
+            if not symbol_name:
+                symbol_name = "<unnamed>"
+
+            acc += [{
+                "module": module_name,
+                "import": symbol_name,
+                "address": f"{ea:#x}",
+                "ordinal": f"#{ordinal}"
+            }]
+
+            return True
+
+        imp_cb_w_context = lambda ea, symbol_name, ordinal: imp_cb(ea, symbol_name, ordinal, rv)
+        ida_nalt.enum_import_names(i, imp_cb_w_context)
+
+    return paginate(rv, offset, count)
+
 class String(TypedDict):
     address: str
     length: int
