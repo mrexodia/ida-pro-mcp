@@ -981,6 +981,36 @@ def set_global_variable_type(
         raise IDAError(f"Failed to apply type")
 
 @jsonrpc
+@idaread
+def get_global_variable_value(variable_name: Annotated[str, "Name of the global variable"]) -> str:
+    """ Get a global variable's value (if known at compile-time) """
+    ea = idaapi.get_name_ea(idaapi.BADADDR, variable_name)
+    if ea == idaapi.BADADDR:
+        raise IDAError(f"Global variable {variable_name} not found")
+
+    # Get the type information for the variable
+    tif = ida_typeinf.tinfo_t()
+    if not ida_nalt.get_tinfo(tif, ea):
+        raise IDAError(f"Failed to get type information for {variable_name}")
+
+    # Determine the size of the variable
+    size = tif.get_size()
+
+    # Read the value based on the size
+    if size == 1:
+        return hex(ida_bytes.get_byte(ea))
+    elif size == 2:
+        return hex(ida_bytes.get_word(ea))
+    elif size == 4:
+        return hex(ida_bytes.get_dword(ea))
+    elif size == 8:
+        return hex(ida_bytes.get_qword(ea))
+    else:
+        # For other sizes, return the raw bytes
+        return ' '.join(f'{x:#02x}' for x in ida_bytes.get_bytes(ea, size))
+
+
+@jsonrpc
 @idawrite
 def rename_function(
     function_address: Annotated[str, "Address of the function to rename"],
@@ -1110,6 +1140,15 @@ def set_local_variable_type(
     if not ida_hexrays.modify_user_lvars(func.start_ea, modifier):
         raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(func.start_ea)
+
+@jsonrpc
+@idaread
+def read_memory_bytes(
+        memory_address: Annotated[str, "Address of the memory value to be read"],
+        size: Annotated[int, "size of memory to read"]
+) -> str:
+    """ Read bytes at a given address """
+    return ' '.join(f'{x:#02x}' for x in ida_bytes.get_bytes(parse_address(memory_address), size))
 
 @jsonrpc
 @idaread
