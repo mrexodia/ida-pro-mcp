@@ -263,6 +263,7 @@ import ida_idd
 import ida_dbg
 import ida_name
 import ida_ida
+import ida_frame
 
 class IDAError(Exception):
     def __init__(self, message: str):
@@ -500,6 +501,73 @@ def create_demangled_to_ea_map():
             idc.get_name(ea, 0), idaapi.MNG_NODEFINIT)
         if demangled:
             DEMANGLED_TO_EA[demangled] = ea
+
+
+def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
+    # 8-bit integers
+    if type_name in ('int8', '__int8', 'int8_t', 'char', 'signed char'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT8)
+    elif type_name in ('uint8', '__uint8', 'uint8_t', 'unsigned char', 'byte', 'BYTE'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT8)
+
+    # 16-bit integers
+    elif type_name in ('int16', '__int16', 'int16_t', 'short', 'short int', 'signed short', 'signed short int'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT16)
+    elif type_name in ('uint16', '__uint16', 'uint16_t', 'unsigned short', 'unsigned short int', 'word', 'WORD'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT16)
+
+    # 32-bit integers
+    elif type_name in ('int32', '__int32', 'int32_t', 'int', 'signed int', 'long', 'long int', 'signed long', 'signed long int'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT32)
+    elif type_name in ('uint32', '__uint32', 'uint32_t', 'unsigned int', 'unsigned long', 'unsigned long int', 'dword', 'DWORD'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT32)
+
+    # 64-bit integers
+    elif type_name in ('int64', '__int64', 'int64_t', 'long long', 'long long int', 'signed long long', 'signed long long int'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT64)
+    elif type_name in ('uint64', '__uint64', 'uint64_t', 'unsigned int64', 'unsigned long long', 'unsigned long long int', 'qword', 'QWORD'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT64)
+
+    # 128-bit integers
+    elif type_name in ('int128', '__int128', 'int128_t', '__int128_t'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT128)
+    elif type_name in ('uint128', '__uint128', 'uint128_t', '__uint128_t', 'unsigned int128'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT128)
+
+    # Floating point types
+    elif type_name in ('float', ):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_FLOAT)
+    elif type_name in ('double', ):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_DOUBLE)
+    elif type_name in ('long double', 'ldouble'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_LDOUBLE)
+
+    # Boolean type
+    elif type_name in ('bool', '_Bool', 'boolean'):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_BOOL)
+
+    # Void type
+    elif type_name in ('void', ):
+        return ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
+
+    # If not a standard type, try to get a named type
+    tif = ida_typeinf.tinfo_t()
+    if tif.get_named_type(None, type_name, ida_typeinf.BTF_STRUCT):
+        return tif
+
+    if tif.get_named_type(None, type_name, ida_typeinf.BTF_TYPEDEF):
+        return tif
+
+    if tif.get_named_type(None, type_name, ida_typeinf.BTF_ENUM):
+        return tif
+
+    if tif.get_named_type(None, type_name, ida_typeinf.BTF_UNION):
+        return tif
+
+    if tif := ida_typeinf.tinfo_t(type_name):
+        return tif
+
+    raise IDAError(f"Unable to retrieve {type_name} type info object")
 
 @jsonrpc
 @idaread
@@ -974,7 +1042,7 @@ def set_global_variable_type(
 ):
     """Set a global variable's type"""
     ea = idaapi.get_name_ea(idaapi.BADADDR, variable_name)
-    tif = ida_typeinf.tinfo_t(new_type, None, ida_typeinf.PT_SIL)
+    tif = get_type_by_name(new_type)
     if not tif:
         raise IDAError(f"Parsed declaration is not a variable type")
     if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL):
@@ -1086,7 +1154,7 @@ def declare_c_type(
 @jsonrpc
 @idawrite
 def set_local_variable_type(
-    function_address: Annotated[str, "Address of the function containing the variable"],
+    function_address: Annotated[str, "Address of the decompiled function containing the variable"],
     variable_name: Annotated[str, "Name of the variable"],
     new_type: Annotated[str, "New type for the variable"],
 ):
@@ -1110,6 +1178,181 @@ def set_local_variable_type(
     if not ida_hexrays.modify_user_lvars(func.start_ea, modifier):
         raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(func.start_ea)
+
+
+@jsonrpc
+@idaread
+def get_stack_frame_variables(
+        function_address: Annotated[str, "Address of the disassembled function to retrieve the stack frame variables"]
+) -> list[dict]:
+    """ Retrieve the stack frame variables for a given function """
+
+    func = idaapi.get_func(parse_address(function_address))
+    if not func:
+        raise IDAError(f"No function found at address {function_address}")
+
+    members = []
+    tif = ida_typeinf.tinfo_t()
+    if not tif.get_type_by_tid(func.frame) or not tif.is_udt():
+        return []
+
+    udt = ida_typeinf.udt_type_data_t()
+    tif.get_udt_details(udt)
+    for udm in udt:
+        if not udm.is_gap():
+            name = udm.name
+            offset = udm.offset // 8
+            size = udm.size // 8
+            type = str(udm.type)
+
+            members += [{'name': name, 'offset': hex(offset), 'size': hex(size), 'type': type}]
+
+    return members
+
+@jsonrpc
+@idaread
+def get_defined_structures() -> list[dict]:
+    """ Returns a list of all defined structures """
+
+    rv = []
+    limit = ida_typeinf.get_ordinal_limit()
+    for ordinal in range(1, limit):
+        tif = ida_typeinf.tinfo_t()
+        tif.get_numbered_type(None, ordinal)
+        if tif.is_udt():
+            udt = ida_typeinf.udt_type_data_t()
+            members = []
+            if tif.get_udt_details(udt):
+                members = [
+                    {'name': x.name, 'offset': x.offset // 8, 'size': x.size // 8, 'type': str(x.type)} for _, x in enumerate(udt)
+                ]
+
+            rv += [
+                {'name': tif.get_type_name(),
+                 'size': tif.get_size(),
+                 'members': members,
+                 }
+            ]
+
+    return rv
+
+@jsonrpc
+@idawrite
+def rename_stack_frame_variable(
+        function_address: Annotated[str, "Address of the disassembled function to set the stack frame variables"],
+        old_name: Annotated[str, "Current name of the variable"],
+        new_name: Annotated[str, "New name for the variable (empty for a default name)"]
+) -> bool:
+    """ Change the name of a stack variable for an IDA function """
+    func = idaapi.get_func(parse_address(function_address))
+    if not func:
+        raise IDAError(f"No function found at address {function_address}")
+
+    frame_tif = ida_typeinf.tinfo_t()
+    if not ida_frame.get_func_frame(frame_tif, func):
+        raise IDAError("No frame returned.")
+
+    idx, udm = frame_tif.get_udm(old_name)
+    if not udm:
+        raise IDAError(f"{old_name} not found.")
+
+    tid = frame_tif.get_udm_tid(idx)
+    if ida_frame.is_special_frame_member(tid):
+        raise IDAError(f"{old_name} is a special frame member. Will not change the name.")
+
+    udm = ida_typeinf.udm_t()
+    frame_tif.get_udm_by_tid(udm, tid)
+    offset = udm.offset // 8
+    if ida_frame.is_funcarg_off(func, offset):
+        raise IDAError(f"{old_name} is an argument member. Will not change the name.")
+
+    sval = ida_frame.soff_to_fpoff(func, offset)
+    return ida_frame.define_stkvar(func, new_name, sval, udm.type)
+
+@jsonrpc
+@idawrite
+def create_stack_frame_variable(
+        function_address: Annotated[str, "Address of the disassembled function to set the stack frame variables"],
+        offset: Annotated[str, "Offset of the stack frame variable"],
+        variable_name: Annotated[str, "Name of the stack variable"],
+        type_name: Annotated[str, "Type of the stack variable"]
+) -> bool:
+    """ For a given function, create a stack variable at an offset and with a specific type """
+
+    func = idaapi.get_func(parse_address(function_address))
+    if not func:
+        raise IDAError(f"No function found at address {function_address}")
+
+    offset = parse_address(offset)
+
+    frame_tif = ida_typeinf.tinfo_t()
+    if not ida_frame.get_func_frame(frame_tif, func):
+        raise IDAError("No frame returned.")
+
+    tif = get_type_by_name(type_name)
+    return ida_frame.define_stkvar(func, variable_name, offset, tif)
+
+@jsonrpc
+@idawrite
+def set_stack_frame_variable_type(
+        function_address: Annotated[str, "Address of the disassembled function to set the stack frame variables"],
+        variable_name: Annotated[str, "Name of the stack variable"],
+        type_name: Annotated[str, "Type of the stack variable"]
+) -> bool:
+    """ For a given disassembled function, set the type of a stack variable """
+
+    func = idaapi.get_func(parse_address(function_address))
+    if not func:
+        raise IDAError(f"No function found at address {function_address}")
+
+    frame_tif = ida_typeinf.tinfo_t()
+    if not ida_frame.get_func_frame(frame_tif, func):
+        raise IDAError("No frame returned.")
+
+    idx, udm = frame_tif.get_udm(variable_name)
+    if not udm:
+        raise IDAError(f"{variable_name} not found.")
+
+    tid = frame_tif.get_udm_tid(idx)
+    udm = ida_typeinf.udm_t()
+    frame_tif.get_udm_by_tid(udm, tid)
+    offset = udm.offset // 8
+
+    tif = get_type_by_name(type_name)
+    return ida_frame.set_frame_member_type(func, offset, tif)
+
+@jsonrpc
+@idawrite
+def delete_stack_frame_variable(
+        function_address: Annotated[str, "Address of the function to set the stack frame variables"],
+        variable_name: Annotated[str, "Name of the stack variable"]
+) -> bool:
+    """ Delete the named stack variable for a given function """
+
+    func = idaapi.get_func(parse_address(function_address))
+    if not func:
+        raise IDAError(f"No function found at address {function_address}")
+
+    frame_tif = ida_typeinf.tinfo_t()
+    if not ida_frame.get_func_frame(frame_tif, func):
+        raise IDAError("No frame returned.")
+
+    idx, udm = frame_tif.get_udm(variable_name)
+    if not udm:
+        raise IDAError(f"{variable_name} not found.")
+
+    tid = frame_tif.get_udm_tid(idx)
+    if ida_frame.is_special_frame_member(tid):
+        raise IDAError(f"{variable_name} is a special frame member. Will not delete.")
+
+    udm = ida_typeinf.udm_t()
+    frame_tif.get_udm_by_tid(udm, tid)
+    offset = udm.offset // 8
+    size = udm.size // 8
+    if ida_frame.is_funcarg_off(func, offset):
+        raise IDAError(f"{variable_name} is an argument member. Will not delete.")
+
+    return ida_frame.delete_frame_members(func, offset, offset+size)
 
 @jsonrpc
 @idaread
