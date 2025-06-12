@@ -73,7 +73,7 @@ class MCPVisitor(ast.NodeVisitor):
         self.types: dict[str, ast.ClassDef] = {}
         self.functions: dict[str, ast.FunctionDef] = {}
         self.descriptions: dict[str, str] = {}
-        self.unsafe: set[str] = set()
+        self.unsafe: list[str] = []
 
     def visit_FunctionDef(self, node):
         for decorator in node.decorator_list:
@@ -140,7 +140,7 @@ class MCPVisitor(ast.NodeVisitor):
                     assert node.name not in self.functions, f"Duplicate function: {node.name}"
                     self.functions[node.name] = node_nobody
                 elif decorator.id == "unsafe":
-                    self.unsafe.add(node.name)
+                    self.unsafe.append(node.name)
 
     def visit_ClassDef(self, node):
         for base in node.bases:
@@ -181,21 +181,28 @@ exec(compile(code, GENERATED_PY, "exec"))
 
 MCP_FUNCTIONS = ["check_connection"] + list(visitor.functions.keys())
 UNSAFE_FUNCTIONS = visitor.unsafe
+SAFE_FUNCTIONS = [f for f in visitor.functions.keys() if f not in UNSAFE_FUNCTIONS]
 
 def generate_readme():
     print("README:")
-    print(f"- `check_connection`: Check if the IDA plugin is running.")
-    for function in visitor.functions.values():
+    print(f"- `check_connection()`: Check if the IDA plugin is running.")
+    def get_description(name: str):
+        function = visitor.functions[name]
         signature = function.name + "("
         for i, arg in enumerate(function.args.args):
             if i > 0:
                 signature += ", "
             signature += arg.arg
         signature += ")"
-        description = visitor.descriptions.get(function.name, "<no description>")
+        description = visitor.descriptions.get(function.name, "<no description>").strip()
         if description[-1] != ".":
             description += "."
-        print(f"- `{signature}`: {description}")
+        return f"- `{signature}`: {description}"
+    for safe_function in SAFE_FUNCTIONS:
+        print(get_description(safe_function))
+    print("\nUnsafe functions (`--unsafe` flag required):\n")
+    for unsafe_function in UNSAFE_FUNCTIONS:
+        print(get_description(unsafe_function))
     print("\nMCP Config:")
     mcp_config = {
         "mcpServers": {
@@ -210,8 +217,6 @@ def generate_readme():
             ],
             "timeout": 1800,
             "disabled": False,
-            "autoApprove": MCP_FUNCTIONS,
-            "alwaysAllow": MCP_FUNCTIONS,
             }
         }
     }
@@ -245,6 +250,21 @@ def get_python_executable():
                 return python_executable
     return sys.executable
 
+def print_mcp_config():
+    print(json.dumps({
+            "mcpServers": {
+                mcp.name: {
+                    "command": get_python_executable(),
+                    "args": [
+                        __file__,
+                    ],
+                    "timeout": 1800,
+                    "disabled": False,
+                }
+            }
+        }, indent=2)
+    )
+
 def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
     if sys.platform == "win32":
         configs = {
@@ -252,6 +272,8 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Roo Code": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
             "Claude": (os.path.join(os.getenv("APPDATA"), "Claude"), "claude_desktop_config.json"),
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
+            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
+            # Windows does not support Claude Code, yet.
         }
     elif sys.platform == "darwin":
         configs = {
@@ -259,6 +281,8 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Roo Code": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
             "Claude": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Claude"), "claude_desktop_config.json"),
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
+            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
+            "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
         }
     elif sys.platform == "linux":
         configs = {
@@ -266,6 +290,8 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Roo Code": (os.path.join(os.path.expanduser("~"), ".config", "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
             # Claude not supported on Linux
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
+            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
+            "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
         }
     else:
         print(f"Unsupported platform: {sys.platform}")
@@ -283,7 +309,16 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             config = {}
         else:
             with open(config_path, "r") as f:
-                config = json.load(f)
+                data = f.read().strip()
+                if len(data) == 0:
+                    config = {}
+                else:
+                    try:
+                        config = json.loads(data)
+                    except json.decoder.JSONDecodeError:
+                        if not quiet:
+                            print(f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)")
+                        continue
         if "mcpServers" not in config:
             config["mcpServers"] = {}
         mcp_servers = config["mcpServers"]
@@ -304,8 +339,8 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                 ],
                 "timeout": 1800,
                 "disabled": False,
-                "autoApprove": MCP_FUNCTIONS,
-                "alwaysAllow": MCP_FUNCTIONS,
+                "autoApprove": SAFE_FUNCTIONS,
+                "alwaysAllow": SAFE_FUNCTIONS,
             }
             if env:
                 mcp_servers[mcp.name]["env"] = env
@@ -316,7 +351,8 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}")
         installed += 1
     if not uninstall and installed == 0:
-        print("No MCP servers installed")
+        print("No MCP servers installed. For unsupported MCP clients, use the following config:\n")
+        print_mcp_config()
 
 def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
     if sys.platform == "win32":
@@ -365,6 +401,7 @@ def main():
     parser.add_argument("--transport", type=str, default="stdio", help="MCP transport protocol to use (stdio or http://127.0.0.1:8744)")
     parser.add_argument("--ida-rpc", type=str, default=f"http://{ida_host}:{ida_port}", help=f"IDA RPC server to use (default: http://{ida_host}:{ida_port})")
     parser.add_argument("--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)")
+    parser.add_argument("--config", action="store_true", help="Generate MCP config JSON")
     args = parser.parse_args()
 
     if args.install and args.uninstall:
@@ -389,6 +426,10 @@ def main():
     # NOTE: This is silent for automated Cline installations
     if args.install_plugin:
         install_ida_plugin(quiet=True)
+
+    if args.config:
+        print_mcp_config()
+        return
 
     # Parse IDA RPC server argument
     ida_rpc = urlparse(args.ida_rpc)

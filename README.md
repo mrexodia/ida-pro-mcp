@@ -8,7 +8,7 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 
 Available functionality:
 
-- `check_connection`: Check if the IDA plugin is running.
+- `check_connection()`: Check if the IDA plugin is running.
 - `get_metadata()`: Get metadata about the current IDB.
 - `get_function_by_name(name)`: Get a function by its name.
 - `get_function_by_address(address)`: Get a function by its address.
@@ -16,11 +16,15 @@ Available functionality:
 - `get_current_function()`: Get the function currently selected by the user.
 - `convert_number(text, size)`: Convert a number (decimal, hexadecimal) to different representations.
 - `list_functions(offset, count)`: List all functions in the database (paginated).
+- `list_globals_filter(offset, count, filter)`: List matching globals in the database (paginated, filtered).
+- `list_globals(offset, count)`: List all globals in the database (paginated).
+- `list_strings_filter(offset, count, filter)`: List matching strings in the database (paginated, filtered).
 - `list_strings(offset, count)`: List all strings in the database (paginated).
-- `search_strings(pattern, offset, count)`: Search for strings containing the given pattern (case-insensitive).
+- `list_local_types()`: List all Local types in the database.
 - `decompile_function(address)`: Decompile a function at the given address.
 - `disassemble_function(start_address)`: Get assembly code (address: instruction; comment) for a function.
 - `get_xrefs_to(address)`: Get all cross references to the given address.
+- `get_xrefs_to_field(struct_name, field_name)`: Get all cross references to a named struct field (member).
 - `get_entry_points()`: Get all entry points in the database.
 - `set_comment(address, comment)`: Set a comment for a given address in the function disassembly and pseudocode.
 - `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function.
@@ -31,25 +35,40 @@ Available functionality:
 - `declare_c_type(c_declaration)`: Create or update a local type from a C declaration.
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type.
 
+Unsafe functions (`--unsafe` flag required):
+
+- `dbg_get_registers()`: Get all registers and their values. This function is only available when debugging.
+- `dbg_get_call_stack()`: Get the current call stack.
+- `dbg_list_breakpoints()`: List all breakpoints in the program.
+- `dbg_start_process()`: Start the debugger.
+- `dbg_exit_process()`: Exit the debugger.
+- `dbg_continue_process()`: Continue the debugger.
+- `dbg_run_to(address)`: Run the debugger to the specified address.
+- `dbg_set_breakpoint(address)`: Set a breakpoint at the specified address.
+- `dbg_delete_breakpoint(address)`: del a breakpoint at the specified address.
+- `dbg_enable_breakpoint(address, enable)`: Enable or disable a breakpoint at the specified address.
+
 ## Prerequisites
 
 - [Python](https://www.python.org/downloads/) (**3.11 or higher**) 
   - Use `idapyswitch` to switch to the newest Python version
-- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended)
+- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
 - Supported MCP Client (pick one you like)
   - [Cline](https://cline.bot)
   - [Roo Code](https://roocode.com)
   - [Claude](https://claude.ai/download)
   - [Cursor](https://cursor.com)
   - [VSCode Agent Mode](https://github.blog/news-insights/product-news/github-copilot-agent-mode-activated/)
-  - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients)
+  - [Windsurf](https://windsurf.com)
+  - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `ida-pro-mcp --config` to get the JSON config for your client.
 
 ## Installation
 
-Install (or upgrade) the IDA Pro MCP package:
+Install the latest version of the IDA Pro MCP package:
 
 ```sh
-pip install --upgrade git+https://github.com/mrexodia/ida-pro-mcp
+pip uninstall ida-pro-mcp
+pip install git+https://github.com/mrexodia/ida-pro-mcp
 ```
 
 Configure the MCP servers and install the IDA Plugin:
@@ -61,6 +80,8 @@ ida-pro-mcp --install
 **Important**: Make sure you completely restart IDA/Visual Studio Code/Claude for the installation to take effect. Claude runs in the background and you need to quit it from the tray icon.
 
 https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
+
+_Note_: You need to load a binary in IDA before the plugin menu will show up.
 
 ## Prompt Engineering
 
@@ -141,55 +162,7 @@ To install the MCP server yourself, follow these steps:
         "--install-plugin"
       ],
       "timeout": 1800,
-      "disabled": false,
-      "autoApprove": [
-        "check_connection",
-        "get_metadata",
-        "get_function_by_name",
-        "get_function_by_address",
-        "get_current_address",
-        "get_current_function",
-        "convert_number",
-        "list_functions",
-        "list_strings",
-        "search_strings",
-        "decompile_function",
-        "disassemble_function",
-        "get_xrefs_to",
-        "get_entry_points",
-        "set_comment",
-        "rename_local_variable",
-        "rename_global_variable",
-        "set_global_variable_type",
-        "rename_function",
-        "set_function_prototype",
-        "declare_c_type",
-        "set_local_variable_type"
-      ],
-      "alwaysAllow": [
-        "check_connection",
-        "get_metadata",
-        "get_function_by_name",
-        "get_function_by_address",
-        "get_current_address",
-        "get_current_function",
-        "convert_number",
-        "list_functions",
-        "list_strings",
-        "search_strings",
-        "decompile_function",
-        "disassemble_function",
-        "get_xrefs_to",
-        "get_entry_points",
-        "set_comment",
-        "rename_local_variable",
-        "rename_global_variable",
-        "set_global_variable_type",
-        "rename_function",
-        "set_function_prototype",
-        "declare_c_type",
-        "set_local_variable_type"
-      ]
+      "disabled": false
     }
   }
 }
