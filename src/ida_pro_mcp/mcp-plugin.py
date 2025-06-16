@@ -880,6 +880,51 @@ def get_entry_points() -> list[Function]:
     return result
 
 @jsonrpc
+@idaread
+def get_variable(
+    var_name: Annotated[Optional[str], "Name of the variable containing the field(optional)"],
+    var_address: Annotated[Optional[int], "Explicit address of the variable (optional)"],
+    size: Annotated[Optional[int], "Maximum number of bytes to read (optional)"],
+) -> list[str]:
+    """
+    read a global variable by its name or address and return as a list of bytes in hex format.
+    If max_size is specified, only that many bytes will be read.
+    """
+    if var_address is None:
+        if var_name is None:
+            return None
+        var_address = idc.get_name_ea_simple(var_name)
+        if var_address == idc.BADADDR:
+            return None
+    else:
+        if var_address == idc.BADADDR:
+            return None
+
+    end_ea = ida_bytes.get_item_end(var_address)
+    if end_ea == idc.BADADDR or end_ea <= var_address:
+        return None
+
+    total_size = end_ea - var_address
+    if size is not None:
+        read_size = max(size, total_size)
+    else:
+        read_size = total_size
+
+    if var_name:
+        label = var_name
+    else:
+        label = f"@{hex(var_address)}"
+
+    hex_list = []
+    for i in range(read_size):
+        offset = var_address + i
+        byte_value = ida_bytes.get_byte(offset)
+        hex_str = f"0x{byte_value:02X}"
+        hex_list.append(hex_str)
+
+    return hex_list
+
+@jsonrpc
 @idawrite
 def set_comment(
     address: Annotated[str, "Address in the function to set the comment for"],
