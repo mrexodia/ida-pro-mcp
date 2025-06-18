@@ -868,6 +868,41 @@ def get_xrefs_to_field(
 
 @jsonrpc
 @idaread
+def get_callee(
+    function_address: Annotated[str, "Address of the function to get callee functions"],
+) -> list[dict[str, str]]:
+    """Get all callee functions of the given address"""
+    func_start = parse_address(function_address)
+    func = idaapi.get_func(func_start)
+    if not func:
+        raise IDAError(f"No function found containing address {function_address}")
+    func_end = idc.find_func_end(func_start)
+    callees: list[dict[str, str]] = []
+    current_ea = func_start
+    while current_ea < func_end:
+        insn = idaapi.insn_t()
+        idaapi.decode_insn(insn, current_ea)
+        if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+            target = idc.get_operand_value(current_ea, 0)
+            # in here, we do not use get_function because the target can be external function.
+            # but, we should mark the target as internal/external function.
+            func_type = (
+                "internal" if idaapi.get_func(target) is not None else "external"
+            )
+            func_name = idc.get_name(target)
+            if func_name is not None:
+                callees.append(
+                    {"address": hex(target), "name": func_name, "type": func_type}
+                )
+        current_ea = idc.next_head(current_ea, func_end)
+
+    # deduplicate callees
+    unique_callee_tuples = {tuple(callee.items()) for callee in callees}
+    unique_callees = [dict(callee) for callee in unique_callee_tuples]
+    return unique_callees  # type: ignore
+
+@jsonrpc
+@idaread
 def get_entry_points() -> list[Function]:
     """Get all entry points in the database"""
     result = []
