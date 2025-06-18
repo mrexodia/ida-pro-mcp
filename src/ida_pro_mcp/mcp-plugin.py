@@ -884,16 +884,19 @@ def get_callees(
         idaapi.decode_insn(insn, current_ea)
         if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
             target = idc.get_operand_value(current_ea, 0)
-            # in here, we do not use get_function because the target can be external function.
-            # but, we should mark the target as internal/external function.
-            func_type = (
-                "internal" if idaapi.get_func(target) is not None else "external"
-            )
-            func_name = idc.get_name(target)
-            if func_name is not None:
-                callees.append(
-                    {"address": hex(target), "name": func_name, "type": func_type}
+            target_type = idc.get_operand_type(current_ea, 0)
+            # check if it's a direct call - avoid getting the indirect call offset
+            if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
+                # in here, we do not use get_function because the target can be external function.
+                # but, we should mark the target as internal/external function.
+                func_type = (
+                    "internal" if idaapi.get_func(target) is not None else "external"
                 )
+                func_name = idc.get_name(target)
+                if func_name is not None:
+                    callees.append(
+                        {"address": hex(target), "name": func_name, "type": func_type}
+                    )
         current_ea = idc.next_head(current_ea, func_end)
 
     # deduplicate callees
