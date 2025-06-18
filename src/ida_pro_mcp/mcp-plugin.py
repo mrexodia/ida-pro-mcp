@@ -868,7 +868,7 @@ def get_xrefs_to_field(
 
 @jsonrpc
 @idaread
-def get_callee(
+def get_callees(
     function_address: Annotated[str, "Address of the function to get callee functions"],
 ) -> list[dict[str, str]]:
     """Get all callee functions of the given address"""
