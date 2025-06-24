@@ -906,6 +906,29 @@ def get_callees(
 
 @jsonrpc
 @idaread
+def get_callers(
+    function_address: Annotated[str, "Address of the function to get callers"],
+) -> list[Function]:
+    """Get all callers of the given address"""
+    callers = {}
+    for caller_address in idautils.CodeRefsTo(parse_address(function_address), 0):
+        # validate the xref address is a function
+        func = get_function(caller_address, raise_error=False)
+        if not func:
+            continue
+        # load the instruction at the xref address
+        insn = idaapi.insn_t()
+        idaapi.decode_insn(insn, caller_address)
+        # check the instruction is a call
+        if insn.itype not in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+            continue
+        # deduplicate callers by address
+        callers[func["address"]] = func
+
+    return list(callers.values())
+
+@jsonrpc
+@idaread
 def get_entry_points() -> list[Function]:
     """Get all entry points in the database"""
     result = []
