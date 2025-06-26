@@ -3,13 +3,14 @@ import sys
 
 if sys.version_info < (3, 11):
     raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
-import re
+
 import json
 import struct
 import threading
 import http.server
 from urllib.parse import urlparse
-from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated, TypeVar, Generic
+from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated, TypeVar, Generic, NotRequired
+
 
 class JSONRPCError(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
@@ -888,32 +889,139 @@ def decompile_function(
 
     return pseudocode
 
+class DisassemblyLine(TypedDict):
+    segment: NotRequired[str]
+    address: str
+    label: NotRequired[str]
+    instruction: str
+    comments: NotRequired[list[str]]
+
+class Argument(TypedDict):
+    name: str
+    type: str
+
+class DisassemblyFunction(TypedDict):
+    name: str
+    start_ea: str
+    return_type: NotRequired[str]
+    arguments: NotRequired[list[Argument]]
+    stack_frame: list[dict]
+    lines: list[DisassemblyLine]
+
 @jsonrpc
 @idaread
 def disassemble_function(
     start_address: Annotated[str, "Address of the function to disassemble"],
-) -> str:
-    """Get assembly code (address: instruction; comment) for a function"""
+) -> DisassemblyFunction:
+    """Get assembly code for a function"""
     start = parse_address(start_address)
-    func = idaapi.get_func(start)
+    func: ida_funcs.func_t = idaapi.get_func(start)
     if not func:
         raise IDAError(f"No function found containing address {start_address}")
     if is_window_active():
         ida_kernwin.jumpto(start)
 
-    # TODO: add labels and limit the maximum number of instructions
-    disassembly = ""
+    lines = []
     for address in ida_funcs.func_item_iterator_t(func):
-        if len(disassembly) > 0:
-            disassembly += "\n"
-        disassembly += f"{hex(address)}: "
-        disassembly += idaapi.generate_disasm_line(address, idaapi.GENDSM_REMOVE_TAGS)
-        comment = idaapi.get_cmt(address, False)
-        if not comment:
-            comment = idaapi.get_cmt(address, True)
-        if comment:
-            disassembly += f"; {comment}"
-    return disassembly
+        seg = idaapi.getseg(address)
+        segment = idaapi.get_segm_name(seg) if seg else None
+
+        label = idc.get_name(address, 0)
+        if label and label == func.name and address == func.start_ea:
+            label = None
+        if label == "":
+            label = None
+
+        comments = []
+        if comment := idaapi.get_cmt(address, False):
+            comments += [comment]
+        if comment := idaapi.get_cmt(address, True):
+            comments += [comment]
+
+        raw_instruction = idaapi.generate_disasm_line(address, 0)
+        tls = ida_kernwin.tagged_line_sections_t()
+        ida_kernwin.parse_tagged_line_sections(tls, raw_instruction)
+        insn_section = tls.first(ida_lines.COLOR_INSN)
+
+        operands = []
+        for op_tag in range(ida_lines.COLOR_OPND1, ida_lines.COLOR_OPND8 + 1):
+            op_n = tls.first(op_tag)
+            if not op_n:
+                break
+
+            op: str = op_n.substr(raw_instruction)
+            op_str = ida_lines.tag_remove(op)
+
+            # Do a lot of work to add address comments for symbols
+            for idx in range(len(op) - 2):
+                if op[idx] != idaapi.COLOR_ON:
+                    continue
+
+                idx += 1
+                if ord(op[idx]) != idaapi.COLOR_ADDR:
+                    continue
+
+                idx += 1
+                addr_string = op[idx:idx + idaapi.COLOR_ADDR_SIZE]
+                idx += idaapi.COLOR_ADDR_SIZE
+
+                addr = int(addr_string, 16)
+
+                # Find the next color and slice until there
+                symbol = op[idx:op.find(idaapi.COLOR_OFF, idx)]
+
+                if symbol == '':
+                    # We couldn't figure out the symbol, so use the whole op_str
+                    symbol = op_str
+
+                comments += [f"{symbol}={addr:#x}"]
+
+                # print its value if its type is available
+                try:
+                    value = get_global_variable_value_internal(addr)
+                except:
+                    continue
+
+                comments += [f"*{symbol}={value}"]
+
+            operands += [op_str]
+
+        mnem = ida_lines.tag_remove(insn_section.substr(raw_instruction))
+        instruction = f"{mnem} {', '.join(operands)}"
+
+        line = DisassemblyLine(
+            address=f"{address:#x}",
+            instruction=instruction,
+        )
+
+        if len(comments) > 0:
+            line.update(comments=comments)
+
+        if segment:
+            line.update(segment=segment)
+
+        if label:
+            line.update(label=label)
+
+        lines += [line]
+
+    prototype = func.get_prototype()
+    arguments: list[Argument] = [Argument(name=arg.name, type=f"{arg.type}") for arg in prototype.iter_func()] if prototype else None
+
+    disassembly_function = DisassemblyFunction(
+        name=func.name,
+        start_ea=f"{func.start_ea:#x}",
+        stack_frame=get_stack_frame_variables_internal(func.start_ea),
+        lines=lines
+    )
+
+    if prototype:
+        disassembly_function.update(return_type=f"{prototype.get_rettype()}")
+
+    if arguments:
+        disassembly_function.update(arguments=arguments)
+
+    return disassembly_function
 
 class Xref(TypedDict):
     address: str
@@ -1298,8 +1406,10 @@ def get_stack_frame_variables(
         function_address: Annotated[str, "Address of the disassembled function to retrieve the stack frame variables"]
 ) -> list[StackFrameVariable]:
     """ Retrieve the stack frame variables for a given function """
+    return get_stack_frame_variables_internal(parse_address(function_address))
 
-    func = idaapi.get_func(parse_address(function_address))
+def get_stack_frame_variables_internal(function_address: int) -> list[dict]:
+    func = idaapi.get_func(function_address)
     if not func:
         raise IDAError(f"No function found at address {function_address}")
 
