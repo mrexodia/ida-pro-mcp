@@ -871,7 +871,7 @@ def get_xrefs_to_field(
 def get_callees(
     function_address: Annotated[str, "Address of the function to get callee functions"],
 ) -> list[dict[str, str]]:
-    """Get all callee functions of the given address"""
+    """Get all the functions called (callees) by the function at function_address"""
     func_start = parse_address(function_address)
     func = idaapi.get_func(func_start)
     if not func:
