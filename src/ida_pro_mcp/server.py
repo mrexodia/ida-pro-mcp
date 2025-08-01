@@ -179,8 +179,20 @@ for type in visitor.types.values():
 for function in visitor.functions.values():
     code += ast.unparse(function)
     code += "\n\n"
-with open(GENERATED_PY, "w") as f:
-    f.write(code)
+
+try:
+    if os.path.exists(GENERATED_PY):
+        with open(GENERATED_PY, "rb") as f:
+            existing_code_bytes = f.read()
+    else:
+        existing_code_bytes = b""
+    code_bytes = code.encode("utf-8").replace(b"\r", b"")
+    if code_bytes != existing_code_bytes:
+        with open(GENERATED_PY, "wb") as f:
+            f.write(code_bytes)
+except:
+    print(f"Failed to generate code: {GENERATED_PY}", file=sys.stderr, flush=True)
+
 exec(compile(code, GENERATED_PY, "exec"))
 
 MCP_FUNCTIONS = ["check_connection"] + list(visitor.functions.keys())
