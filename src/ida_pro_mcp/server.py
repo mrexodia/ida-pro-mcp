@@ -266,17 +266,44 @@ def get_python_executable():
                 return python_executable
     return sys.executable
 
+def copy_python_env(env: dict[str, str]):
+    # Reference: https://docs.python.org/3/using/cmdline.html#environment-variables
+    python_vars = [
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PYTHONSAFEPATH",
+        "PYTHONPLATLIBDIR",
+        "PYTHONPYCACHEPREFIX",
+        "PYTHONNOUSERSITE",
+        "PYTHONUSERBASE",
+    ]
+    # MCP servers are run without inheriting the environment, so we need to forward
+    # the environment variables that affect Python's dependency resolution by hand.
+    # Issue: https://github.com/mrexodia/ida-pro-mcp/issues/111
+    result = False
+    for var in python_vars:
+        value = os.environ.get(var)
+        if value:
+            result = True
+            env[var] = value
+    return result
+
 def print_mcp_config():
+    mcp_config = {
+        "command": get_python_executable(),
+        "args": [
+            __file__,
+        ],
+        "timeout": 1800,
+        "disabled": False,
+    }
+    env = {}
+    if copy_python_env(env):
+        print(f"[WARNING] Custom Python environment variables detected")
+        mcp_config["env"] = env
     print(json.dumps({
             "mcpServers": {
-                mcp.name: {
-                    "command": get_python_executable(),
-                    "args": [
-                        __file__,
-                    ],
-                    "timeout": 1800,
-                    "disabled": False,
-                }
+                mcp.name: mcp_config
             }
         }, indent=2)
     )
@@ -348,9 +375,12 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                 continue
             del mcp_servers[mcp.name]
         else:
+            # Copy environment variables from the existing server if present
             if mcp.name in mcp_servers:
                 for key, value in mcp_servers[mcp.name].get("env", {}):
                     env[key] = value
+            if copy_python_env(env):
+                print(f"[WARNING] Custom Python environment variables detected")
             mcp_servers[mcp.name] = {
                 "command": get_python_executable(),
                 "args": [
