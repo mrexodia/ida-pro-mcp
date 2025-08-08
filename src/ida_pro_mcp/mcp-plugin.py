@@ -927,55 +927,85 @@ def disassemble_function(
             comments += [comment]
 
         raw_instruction = idaapi.generate_disasm_line(address, 0)
-        tls = ida_kernwin.tagged_line_sections_t()
-        ida_kernwin.parse_tagged_line_sections(tls, raw_instruction)
-        insn_section = tls.first(ida_lines.COLOR_INSN)
 
-        operands = []
-        for op_tag in range(ida_lines.COLOR_OPND1, ida_lines.COLOR_OPND8 + 1):
-            op_n = tls.first(op_tag)
-            if not op_n:
-                break
+        # Defaults
+        mnem = None
+        operands: list[str] = []
 
-            op: str = op_n.substr(raw_instruction)
-            op_str = ida_lines.tag_remove(op)
+        used_tag_parser = False
+        if raw_instruction:
+            try:
+                # Prefer rich parsing when available (IDA 8.4+)
+                if hasattr(ida_kernwin, "tagged_line_sections_t") and hasattr(ida_kernwin, "parse_tagged_line_sections"):
+                    tls = ida_kernwin.tagged_line_sections_t()
+                    ida_kernwin.parse_tagged_line_sections(tls, raw_instruction)
+                    insn_section = tls.first(ida_lines.COLOR_INSN)
+                    if insn_section:
+                        mnem = ida_lines.tag_remove(insn_section.substr(raw_instruction))
+                    # Collect operands with rich tags
+                    for op_tag in range(ida_lines.COLOR_OPND1, ida_lines.COLOR_OPND8 + 1):
+                        op_n = tls.first(op_tag)
+                        if not op_n:
+                            break
+                        op: str = op_n.substr(raw_instruction)
+                        op_str = ida_lines.tag_remove(op)
 
-            # Do a lot of work to add address comments for symbols
-            for idx in range(len(op) - 2):
-                if op[idx] != idaapi.COLOR_ON:
-                    continue
+                        # Add address/value comments using COLOR_ADDR tags when present
+                        for idx in range(len(op) - 2):
+                            if op[idx] != idaapi.COLOR_ON:
+                                continue
+                            idx += 1
+                            if ord(op[idx]) != idaapi.COLOR_ADDR:
+                                continue
+                            idx += 1
+                            addr_string = op[idx:idx + idaapi.COLOR_ADDR_SIZE]
+                            idx += idaapi.COLOR_ADDR_SIZE
+                            try:
+                                addr_val = int(addr_string, 16)
+                            except Exception:
+                                continue
+                            # Find the next color and slice until there
+                            symbol = op[idx:op.find(idaapi.COLOR_OFF, idx)]
+                            if symbol == '':
+                                symbol = op_str
+                            comments += [f"{symbol}={addr_val:#x}"]
+                            try:
+                                value = get_global_variable_value_internal(addr_val)
+                            except Exception:
+                                value = None
+                            if value is not None:
+                                comments += [f"*{symbol}={value}"]
 
-                idx += 1
-                if ord(op[idx]) != idaapi.COLOR_ADDR:
-                    continue
+                        operands.append(op_str)
+                    used_tag_parser = True
+            except Exception:
+                # Fall back below
+                used_tag_parser = False
 
-                idx += 1
-                addr_string = op[idx:idx + idaapi.COLOR_ADDR_SIZE]
-                idx += idaapi.COLOR_ADDR_SIZE
-
-                addr = int(addr_string, 16)
-
-                # Find the next color and slice until there
-                symbol = op[idx:op.find(idaapi.COLOR_OFF, idx)]
-
-                if symbol == '':
-                    # We couldn't figure out the symbol, so use the whole op_str
-                    symbol = op_str
-
-                comments += [f"{symbol}={addr:#x}"]
-
-                # print its value if its type is available
+        if not used_tag_parser:
+            # Compatibility path for older IDA versions without parse_tagged_line_sections
+            try:
+                mnem = idc.print_insn_mnem(address)
+            except Exception:
+                mnem = None
+            # Collect up to 8 operands
+            for i in range(8):
                 try:
-                    value = get_global_variable_value_internal(addr)
-                except:
-                    continue
+                    op_str = idc.print_operand(address, i)
+                except Exception:
+                    op_str = None
+                if not op_str:
+                    break
+                operands.append(op_str)
 
-                comments += [f"*{symbol}={value}"]
+        if not mnem:
+            # As a last resort, strip tags from the raw line
+            mnem = ida_lines.tag_remove(raw_instruction) if raw_instruction else ""
+            # Heuristic: take the first token as mnemonic
+            if mnem:
+                mnem = mnem.split()[0]
 
-            operands += [op_str]
-
-        mnem = ida_lines.tag_remove(insn_section.substr(raw_instruction))
-        instruction = f"{mnem} {', '.join(operands)}"
+        instruction = f"{mnem} {', '.join(operands)}".rstrip()
 
         line = DisassemblyLine(
             address=f"{address:#x}",
@@ -993,8 +1023,27 @@ def disassemble_function(
 
         lines += [line]
 
-    prototype = func.get_prototype()
-    arguments: list[Argument] = [Argument(name=arg.name, type=f"{arg.type}") for arg in prototype.iter_func()] if prototype else None
+    # Retrieve prototype information in a version-compatible way
+    arguments: Optional[list[Argument]] = None
+    return_type: Optional[str] = None
+    try:
+        prototype = func.get_prototype()
+        if prototype:
+            try:
+                return_type = f"{prototype.get_rettype()}"
+            except Exception:
+                return_type = None
+            try:
+                arguments = [Argument(name=arg.name, type=f"{arg.type}") for arg in prototype.iter_func()]
+            except Exception:
+                arguments = None
+    except AttributeError:
+        # Older IDA: fall back to a best-effort string prototype, but don't attempt to parse
+        try:
+            proto_str = get_prototype(func)
+            # We intentionally do not set return_type from proto_str, as format may vary by IDA version
+        except Exception:
+            pass
 
     disassembly_function = DisassemblyFunction(
         name=func.name,
@@ -1003,8 +1052,8 @@ def disassemble_function(
         lines=lines
     )
 
-    if prototype:
-        disassembly_function.update(return_type=f"{prototype.get_rettype()}")
+    if return_type:
+        disassembly_function.update(return_type=return_type)
 
     if arguments:
         disassembly_function.update(arguments=arguments)
