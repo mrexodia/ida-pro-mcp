@@ -3,8 +3,9 @@ import inspect
 import logging
 import argparse
 import importlib
+import importlib.util
 from pathlib import Path
-import typing_inspection.introspection as intro
+from typing import get_origin, get_args, Annotated
 
 from mcp.server.fastmcp import FastMCP
 
@@ -70,37 +71,31 @@ def fixup_tool_argument_descriptions(mcp: FastMCP):
     for tool in mcp._tool_manager.list_tools():
         sig = inspect.signature(tool.fn)
         for name, parameter in sig.parameters.items():
-            # this instance is a raw `typing._AnnotatedAlias` that we can't do anything with directly.
-            # it renders like:
-            #
-            #      typing.Annotated[str, 'Name of the function to get']
-            if not parameter.annotation:
+            annotation = parameter.annotation
+            if not annotation:
                 continue
 
-            # this instance will look something like:
-            #
-            #     InspectedAnnotation(type=<class 'str'>, qualifiers=set(), metadata=['Name of the function to get'])
-            #
-            annotation = intro.inspect_annotation(
-                                                  parameter.annotation,
-                                                  annotation_source=intro.AnnotationSource.ANY
-                                              )
-
-            # for our use case, where we attach a single string annotation that is meant as documentation,
-            # we extract that string and assign it to "description" in the tool metadata.
-
-            if annotation.type is not str:
+            origin = get_origin(annotation)
+            if origin is not Annotated:
                 continue
 
-            if len(annotation.metadata) != 1:
+            args = get_args(annotation)
+            if len(args) < 2:
                 continue
 
-            description = annotation.metadata[0]
-            if not isinstance(description, str):
+            base_type = args[0]
+            metadata = args[1]
+            if base_type is not str:
+                continue
+
+            # metadata may be a string, or a pydantic Field(description='...')
+            description = metadata if isinstance(metadata, str) else getattr(metadata, "description", None)
+            if not isinstance(description, str) or description == "":
                 continue
 
             logger.debug("adding parameter documentation %s(%s='%s')", tool.name, name, description)
-            tool.parameters["properties"][name]["description"] = description
+            if "properties" in tool.parameters and name in tool.parameters["properties"]:
+                tool.parameters["properties"][name]["description"] = description
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for IDA Pro via idalib")
@@ -132,8 +127,8 @@ def main():
 
     # TODO: add a tool for specifying the idb/input file (sandboxed)
     logger.info("opening database: %s", args.input_path)
-    if idapro.open_database(str(args.input_path), run_auto_analysis=True):
-        raise RuntimeError("failed to analyze input file")
+    if not idapro.open_database(str(args.input_path), run_auto_analysis=True):
+        raise RuntimeError("failed to open or analyze input file")
 
     logger.debug("idalib: waiting for analysis...")
     ida_auto.auto_wait()
@@ -141,7 +136,13 @@ def main():
     if not ida_hexrays.init_hexrays_plugin():
         raise RuntimeError("failed to initialize Hex-Rays decompiler")
 
-    plugin = importlib.import_module("ida_pro_mcp.mcp-plugin")
+    # Import IDA plugin module with hyphen in filename via file path
+    plugin_path = Path(__file__).with_name("mcp-plugin.py")
+    spec = importlib.util.spec_from_file_location("ida_pro_mcp.mcp_plugin", plugin_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"failed to load plugin from {plugin_path}")
+    plugin = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plugin)
     logger.debug("adding tools...")
     for name, callable in plugin.rpc_registry.methods.items():
         if args.unsafe or name not in plugin.rpc_registry.unsafe:
@@ -152,7 +153,7 @@ def main():
     fixup_tool_argument_descriptions(mcp)
 
     # NOTE: npx @modelcontextprotocol/inspector for debugging
-    logger.info("MCP Server availabile at: http://%s:%d/sse", mcp.settings.host, mcp.settings.port)
+    logger.info("MCP Server available at: http://%s:%d/sse", mcp.settings.host, mcp.settings.port)
     try:
         mcp.run(transport="sse")
     except KeyboardInterrupt:
