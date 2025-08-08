@@ -19,7 +19,8 @@ ida_port = 13337
 def make_jsonrpc_request(method: str, *params):
     """Make a JSON-RPC request to the IDA plugin"""
     global jsonrpc_request_id, ida_host, ida_port
-    conn = http.client.HTTPConnection(ida_host, ida_port)
+    # Add a short timeout so clients don't hang indefinitely if IDA isn't responding
+    conn = http.client.HTTPConnection(ida_host, ida_port, timeout=5.0)
     request = {
         "jsonrpc": "2.0",
         "method": method,
@@ -164,7 +165,7 @@ visitor.visit(module)
 code = """# NOTE: This file has been automatically generated, do not modify!
 # Architecture based on https://github.com/mrexodia/ida-pro-mcp (MIT License)
 import sys
-if sys.version_info >= (3, 12):
+if sys.version_info >= (3, 11):
     from typing import Annotated, Optional, TypedDict, Generic, TypeVar, NotRequired
 else:
     from typing_extensions import Annotated, Optional, TypedDict, Generic, TypeVar, NotRequired
@@ -308,7 +309,9 @@ def print_mcp_config():
         }, indent=2)
     )
 
-def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
+def install_mcp_servers(*, uninstall=False, quiet=False, env=None):
+    if env is None:
+        env = {}
     if sys.platform == "win32":
         configs = {
             "Cline": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
@@ -377,7 +380,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
         else:
             # Copy environment variables from the existing server if present
             if mcp.name in mcp_servers:
-                for key, value in mcp_servers[mcp.name].get("env", {}):
+                for key, value in mcp_servers[mcp.name].get("env", {}).items():
                     env[key] = value
             if copy_python_env(env):
                 print(f"[WARNING] Custom Python environment variables detected")
@@ -504,7 +507,7 @@ def main():
             mcp.settings.host = url.hostname
             mcp.settings.port = url.port
             # NOTE: npx @modelcontextprotocol/inspector for debugging
-            print(f"MCP Server availabile at http://{mcp.settings.host}:{mcp.settings.port}/sse")
+            print(f"MCP Server available at http://{mcp.settings.host}:{mcp.settings.port}/sse")
             mcp.settings.log_level = "INFO"
             mcp.run(transport="sse")
     except KeyboardInterrupt:

@@ -5,11 +5,13 @@ if sys.version_info < (3, 11):
     raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
 
 import json
+import inspect
 import struct
 import threading
 import http.server
 from urllib.parse import urlparse
-from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated, TypeVar, Generic, NotRequired
+from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated, TypeVar, Generic, NotRequired, get_origin, get_args, Union
+from types import UnionType as _PyUnionType
 
 
 class JSONRPCError(Exception):
@@ -37,40 +39,116 @@ class RPCRegistry:
 
         func = self.methods[method]
         hints = get_type_hints(func)
+        sig = inspect.signature(func)
 
         # Remove return annotation if present
         hints.pop("return", None)
 
+        def _unwrap_annotated(t):
+            origin = get_origin(t)
+            if origin is Annotated:
+                args = get_args(t)
+                if len(args) >= 1:
+                    return args[0]
+            return t
+
+        def _is_union(t) -> bool:
+            t = _unwrap_annotated(t)
+            origin = get_origin(t)
+            return origin is Union or origin is _PyUnionType
+
+        def _is_optional(t) -> bool:
+            t = _unwrap_annotated(t)
+            if _is_union(t):
+                return type(None) in get_args(t)
+            return False
+
+        def _convert(value, expected_type):
+            t = _unwrap_annotated(expected_type)
+            # Handle Optional/Union by trying each arm
+            if _is_union(t):
+                args = get_args(t)
+                if value is None and type(None) in args:
+                    return None
+                last_exc = None
+                for arm in args:
+                    if arm is type(None):
+                        continue
+                    try:
+                        return _convert(value, arm)
+                    except Exception as e:
+                        last_exc = e
+                        continue
+                if last_exc is not None:
+                    raise last_exc
+                return value
+
+            # Primitive coercions
+            if t in (str, int, float, bool):
+                if t is bool and isinstance(value, str):
+                    v = value.strip().lower()
+                    if v in ("true", "1", "yes", "on"):
+                        return True
+                    if v in ("false", "0", "no", "off"):
+                        return False
+                return t(value)
+
+            # Pass-through for other/complex types
+            return value
+
+        def _type_name(t) -> str:
+            try:
+                return t.__name__  # type: ignore[attr-defined]
+            except Exception:
+                return str(t)
+
         if isinstance(params, list):
-            if len(params) != len(hints):
-                raise JSONRPCError(-32602, f"Invalid params: expected {len(hints)} arguments, got {len(params)}")
+            # Preserve parameter order and only consider positional parameters
+            param_names = [
+                name for name, p in sig.parameters.items()
+                if p.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                )
+            ]
+            if len(params) > len(param_names):
+                raise JSONRPCError(-32602, f"Invalid params: expected at most {len(param_names)} arguments, got {len(params)}")
 
-            # Validate and convert parameters
             converted_params = []
-            for value, (param_name, expected_type) in zip(params, hints.items()):
+            for index, name in enumerate(param_names):
+                expected_type = hints.get(name, Any)
+                if index < len(params):
+                    raw_value = params[index]
+                else:
+                    if _is_optional(expected_type):
+                        raw_value = None
+                    else:
+                        raise JSONRPCError(-32602, f"Invalid params: missing required parameter '{name}' of type {_type_name(expected_type)}")
                 try:
-                    if not isinstance(value, expected_type):
-                        value = expected_type(value)
-                    converted_params.append(value)
-                except (ValueError, TypeError):
-                    raise JSONRPCError(-32602, f"Invalid type for parameter '{param_name}': expected {expected_type.__name__}")
-
+                    converted_params.append(_convert(raw_value, expected_type))
+                except (ValueError, TypeError) as e:
+                    raise JSONRPCError(-32602, f"Invalid type for parameter '{name}': expected {_type_name(expected_type)}", str(e))
             return func(*converted_params)
+
         elif isinstance(params, dict):
-            if set(params.keys()) != set(hints.keys()):
-                raise JSONRPCError(-32602, f"Invalid params: expected {list(hints.keys())}")
+            unexpected = set(params.keys()) - set(sig.parameters.keys())
+            if unexpected:
+                raise JSONRPCError(-32602, f"Invalid params: unexpected keys {sorted(list(unexpected))}")
 
-            # Validate and convert parameters
             converted_params = {}
-            for param_name, expected_type in hints.items():
-                value = params.get(param_name)
+            for name in sig.parameters.keys():
+                expected_type = hints.get(name, Any)
+                if name in params:
+                    raw_value = params[name]
+                else:
+                    if _is_optional(expected_type):
+                        raw_value = None
+                    else:
+                        raise JSONRPCError(-32602, f"Invalid params: missing required parameter '{name}' of type {_type_name(expected_type)}")
                 try:
-                    if not isinstance(value, expected_type):
-                        value = expected_type(value)
-                    converted_params[param_name] = value
-                except (ValueError, TypeError):
-                    raise JSONRPCError(-32602, f"Invalid type for parameter '{param_name}': expected {expected_type.__name__}")
-
+                    converted_params[name] = _convert(raw_value, expected_type)
+                except (ValueError, TypeError) as e:
+                    raise JSONRPCError(-32602, f"Invalid type for parameter '{name}': expected {_type_name(expected_type)}", str(e))
             return func(**converted_params)
         else:
             raise JSONRPCError(-32600, "Invalid Request: params must be array or object")
@@ -187,7 +265,7 @@ class JSONRPCRequestHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 class MCPHTTPServer(http.server.HTTPServer):
-    allow_reuse_address = False
+    allow_reuse_address = True
 
 class Server:
     HOST = "localhost"
@@ -259,7 +337,7 @@ import ida_bytes
 import ida_typeinf
 import ida_xref
 import ida_entry
-import idautils
+# (duplicate import removed)
 import ida_idd
 import ida_dbg
 import ida_name
@@ -303,7 +381,7 @@ logger = logging.getLogger(__name__)
 
 # Enum for safety modes. Higher means safer:
 class IDASafety:
-    ida_kernwin.MFF_READ
+    # unused bare reference removed
     SAFE_NONE = ida_kernwin.MFF_FAST
     SAFE_READ = ida_kernwin.MFF_READ
     SAFE_WRITE = ida_kernwin.MFF_WRITE
@@ -360,7 +438,7 @@ def idawrite(f):
     def wrapper(*args, **kwargs):
         ff = functools.partial(f, *args, **kwargs)
         ff.__name__ = f.__name__
-        return sync_wrapper(ff, idaapi.MFF_WRITE)
+        return sync_wrapper(ff, IDASafety.SAFE_WRITE)
     return wrapper
 
 def idaread(f):
@@ -374,7 +452,7 @@ def idaread(f):
     def wrapper(*args, **kwargs):
         ff = functools.partial(f, *args, **kwargs)
         ff.__name__ = f.__name__
-        return sync_wrapper(ff, idaapi.MFF_READ)
+        return sync_wrapper(ff, IDASafety.SAFE_READ)
     return wrapper
 
 def is_window_active():
@@ -475,7 +553,7 @@ def parse_address(address: str) -> int:
                 raise IDAError(f"Failed to parse address: {address}")
         raise IDAError(f"Failed to parse address (missing 0x prefix): {address}")
 
-def get_function(address: int, *, raise_error=True) -> Function:
+def get_function(address: int, *, raise_error=True) -> Optional[Function]:
     fn = idaapi.get_func(address)
     if fn is None:
         if raise_error:
@@ -504,68 +582,56 @@ def create_demangled_to_ea_map():
 
 
 def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
-    # 8-bit integers
-    if type_name in ('int8', '__int8', 'int8_t', 'char', 'signed char'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT8)
-    elif type_name in ('uint8', '__uint8', 'uint8_t', 'unsigned char', 'byte', 'BYTE'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT8)
+    """Resolve a C type name into an IDA tinfo_t.
 
-    # 16-bit integers
-    elif type_name in ('int16', '__int16', 'int16_t', 'short', 'short int', 'signed short', 'signed short int'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT16)
-    elif type_name in ('uint16', '__uint16', 'uint16_t', 'unsigned short', 'unsigned short int', 'word', 'WORD'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT16)
+    Prefer parsing a declaration; fall back to named types. Supports common synonyms.
+    """
+    synonyms = {
+        # 8-bit
+        'int8': 'signed char', '__int8': 'signed char', 'int8_t': 'signed char',
+        'uint8': 'unsigned char', '__uint8': 'unsigned char', 'uint8_t': 'unsigned char',
+        'byte': 'unsigned char', 'BYTE': 'unsigned char',
+        # 16-bit
+        'int16': 'short', '__int16': 'short', 'int16_t': 'short', 'short int': 'short', 'signed short': 'short', 'signed short int': 'short',
+        'uint16': 'unsigned short', '__uint16': 'unsigned short', 'uint16_t': 'unsigned short', 'unsigned short int': 'unsigned short', 'word': 'unsigned short', 'WORD': 'unsigned short',
+        # 32-bit
+        'int32': 'int', '__int32': 'int', 'int32_t': 'int', 'long int': 'long', 'signed long': 'long', 'signed long int': 'long',
+        'uint32': 'unsigned int', '__uint32': 'unsigned int', 'uint32_t': 'unsigned int', 'unsigned long int': 'unsigned long', 'dword': 'unsigned int', 'DWORD': 'unsigned int',
+        # 64-bit
+        'int64': 'long long', '__int64': 'long long', 'int64_t': 'long long', 'long long int': 'long long', 'signed long long': 'long long', 'signed long long int': 'long long',
+        'uint64': 'unsigned long long', '__uint64': 'unsigned long long', 'uint64_t': 'unsigned long long', 'unsigned int64': 'unsigned long long', 'qword': 'unsigned long long', 'QWORD': 'unsigned long long',
+        # 128-bit (may not be available on all archs)
+        'int128': '__int128', '__int128': '__int128', 'int128_t': '__int128', '__int128_t': '__int128',
+        'uint128': 'unsigned __int128', '__uint128': 'unsigned __int128', 'uint128_t': 'unsigned __int128', '__uint128_t': 'unsigned __int128', 'unsigned int128': 'unsigned __int128',
+        # floats
+        'ldouble': 'long double',
+        # bool aliases
+        'boolean': 'bool', '_Bool': 'bool',
+    }
 
-    # 32-bit integers
-    elif type_name in ('int32', '__int32', 'int32_t', 'int', 'signed int', 'long', 'long int', 'signed long', 'signed long int'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT32)
-    elif type_name in ('uint32', '__uint32', 'uint32_t', 'unsigned int', 'unsigned long', 'unsigned long int', 'dword', 'DWORD'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT32)
+    canonical = synonyms.get(type_name, type_name)
 
-    # 64-bit integers
-    elif type_name in ('int64', '__int64', 'int64_t', 'long long', 'long long int', 'signed long long', 'signed long long int'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT64)
-    elif type_name in ('uint64', '__uint64', 'uint64_t', 'unsigned int64', 'unsigned long long', 'unsigned long long int', 'qword', 'QWORD'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT64)
-
-    # 128-bit integers
-    elif type_name in ('int128', '__int128', 'int128_t', '__int128_t'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT128)
-    elif type_name in ('uint128', '__uint128', 'uint128_t', '__uint128_t', 'unsigned int128'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT128)
-
-    # Floating point types
-    elif type_name in ('float', ):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_FLOAT)
-    elif type_name in ('double', ):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_DOUBLE)
-    elif type_name in ('long double', 'ldouble'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_LDOUBLE)
-
-    # Boolean type
-    elif type_name in ('bool', '_Bool', 'boolean'):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_BOOL)
-
-    # Void type
-    elif type_name in ('void', ):
-        return ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
-
-    # If not a standard type, try to get a named type
+    # Try to parse a declaration first
     tif = ida_typeinf.tinfo_t()
-    if tif.get_named_type(None, type_name, ida_typeinf.BTF_STRUCT):
-        return tif
+    try:
+        ida_typeinf.parse_decl(tif, None, canonical + ";", ida_typeinf.PT_SIL)
+        if tif:
+            return tif
+    except Exception:
+        pass
 
-    if tif.get_named_type(None, type_name, ida_typeinf.BTF_TYPEDEF):
-        return tif
-
-    if tif.get_named_type(None, type_name, ida_typeinf.BTF_ENUM):
-        return tif
-
-    if tif.get_named_type(None, type_name, ida_typeinf.BTF_UNION):
-        return tif
-
-    if tif := ida_typeinf.tinfo_t(type_name):
-        return tif
+    # Try named types (struct/typedef/enum/union)
+    try:
+        if tif.get_named_type(None, canonical, ida_typeinf.BTF_STRUCT):
+            return tif
+        if tif.get_named_type(None, canonical, ida_typeinf.BTF_TYPEDEF):
+            return tif
+        if tif.get_named_type(None, canonical, ida_typeinf.BTF_ENUM):
+            return tif
+        if tif.get_named_type(None, canonical, ida_typeinf.BTF_UNION):
+            return tif
+    except Exception:
+        pass
 
     raise IDAError(f"Unable to retrieve {type_name} type info object")
 
@@ -605,7 +671,7 @@ def get_current_address() -> str:
 @idaread
 def get_current_function() -> Optional[Function]:
     """Get the function currently selected by the user"""
-    return get_function(idaapi.get_screen_ea())
+    return get_function(idaapi.get_screen_ea(), raise_error=False)
 
 class ConvertedNumber(TypedDict):
     decimal: str
@@ -634,27 +700,29 @@ def convert_number(
             n >>= 1
         size += 7
         size //= 8
+        if size == 0:
+            size = 1
 
     # Convert the number to bytes
     try:
-        bytes = value.to_bytes(size, "little", signed=True)
+        raw_bytes = value.to_bytes(size, "little", signed=True)
     except OverflowError:
         raise IDAError(f"Number {text} is too big for {size} bytes")
 
     # Convert the bytes to ASCII
-    ascii = ""
-    for byte in bytes.rstrip(b"\x00"):
+    ascii_repr = ""
+    for byte in raw_bytes.rstrip(b"\x00"):
         if byte >= 32 and byte <= 126:
-            ascii += chr(byte)
+            ascii_repr += chr(byte)
         else:
-            ascii = None
+            ascii_repr = None
             break
 
     return ConvertedNumber(
         decimal=str(value),
         hexadecimal=hex(value),
-        bytes=bytes.hex(" "),
-        ascii=ascii,
+        bytes=raw_bytes.hex(" "),
+        ascii=ascii_repr,
         binary=bin(value),
     )
 
@@ -717,6 +785,7 @@ def list_globals_filter(
     return paginate(globals, offset, count)
 
 @jsonrpc
+@idaread
 def list_globals(
     offset: Annotated[int, "Offset to start listing from (start at 0)"],
     count: Annotated[int, "Number of globals to list (100 is a good default, 0 means remainder)"],
@@ -784,6 +853,7 @@ def list_strings_filter(
     return paginate(strings, offset, count)
 
 @jsonrpc
+@idaread
 def list_strings(
     offset: Annotated[int, "Offset to start listing from (start at 0)"],
     count: Annotated[int, "Number of strings to list (100 is a good default, 0 means remainder)"],
@@ -910,7 +980,22 @@ def disassemble_function(
         ida_kernwin.jumpto(start)
 
     lines = []
-    for address in ida_funcs.func_item_iterator_t(func):
+    # Build list of instruction addresses across IDA versions
+    try:
+        addresses = list(idautils.FuncItems(func.start_ea))
+    except Exception:
+        addresses = []
+        fii = ida_funcs.func_item_iterator_t()
+        if fii.set(func) and fii.first():
+            while True:
+                try:
+                    addresses.append(fii.current())
+                except Exception:
+                    break
+                if not fii.next():
+                    break
+
+    for address in addresses:
         seg = idaapi.getseg(address)
         segment = idaapi.get_segm_name(seg) if seg else None
 
@@ -927,55 +1012,85 @@ def disassemble_function(
             comments += [comment]
 
         raw_instruction = idaapi.generate_disasm_line(address, 0)
-        tls = ida_kernwin.tagged_line_sections_t()
-        ida_kernwin.parse_tagged_line_sections(tls, raw_instruction)
-        insn_section = tls.first(ida_lines.COLOR_INSN)
 
-        operands = []
-        for op_tag in range(ida_lines.COLOR_OPND1, ida_lines.COLOR_OPND8 + 1):
-            op_n = tls.first(op_tag)
-            if not op_n:
-                break
+        # Defaults
+        mnem = None
+        operands: list[str] = []
 
-            op: str = op_n.substr(raw_instruction)
-            op_str = ida_lines.tag_remove(op)
+        used_tag_parser = False
+        if raw_instruction:
+            try:
+                # Prefer rich parsing when available (IDA 8.4+)
+                if hasattr(ida_kernwin, "tagged_line_sections_t") and hasattr(ida_kernwin, "parse_tagged_line_sections"):
+                    tls = ida_kernwin.tagged_line_sections_t()
+                    ida_kernwin.parse_tagged_line_sections(tls, raw_instruction)
+                    insn_section = tls.first(ida_lines.COLOR_INSN)
+                    if insn_section:
+                        mnem = ida_lines.tag_remove(insn_section.substr(raw_instruction))
+                    # Collect operands with rich tags
+                    for op_tag in range(ida_lines.COLOR_OPND1, ida_lines.COLOR_OPND8 + 1):
+                        op_n = tls.first(op_tag)
+                        if not op_n:
+                            break
+                        op: str = op_n.substr(raw_instruction)
+                        op_str = ida_lines.tag_remove(op)
 
-            # Do a lot of work to add address comments for symbols
-            for idx in range(len(op) - 2):
-                if op[idx] != idaapi.COLOR_ON:
-                    continue
+                        # Add address/value comments using COLOR_ADDR tags when present
+                        for idx in range(len(op) - 2):
+                            if op[idx] != idaapi.COLOR_ON:
+                                continue
+                            idx += 1
+                            if ord(op[idx]) != idaapi.COLOR_ADDR:
+                                continue
+                            idx += 1
+                            addr_string = op[idx:idx + idaapi.COLOR_ADDR_SIZE]
+                            idx += idaapi.COLOR_ADDR_SIZE
+                            try:
+                                addr_val = int(addr_string, 16)
+                            except Exception:
+                                continue
+                            # Find the next color and slice until there
+                            symbol = op[idx:op.find(idaapi.COLOR_OFF, idx)]
+                            if symbol == '':
+                                symbol = op_str
+                            comments += [f"{symbol}={addr_val:#x}"]
+                            try:
+                                value = get_global_variable_value_internal(addr_val)
+                            except Exception:
+                                value = None
+                            if value is not None:
+                                comments += [f"*{symbol}={value}"]
 
-                idx += 1
-                if ord(op[idx]) != idaapi.COLOR_ADDR:
-                    continue
+                        operands.append(op_str)
+                    used_tag_parser = True
+            except Exception:
+                # Fall back below
+                used_tag_parser = False
 
-                idx += 1
-                addr_string = op[idx:idx + idaapi.COLOR_ADDR_SIZE]
-                idx += idaapi.COLOR_ADDR_SIZE
-
-                addr = int(addr_string, 16)
-
-                # Find the next color and slice until there
-                symbol = op[idx:op.find(idaapi.COLOR_OFF, idx)]
-
-                if symbol == '':
-                    # We couldn't figure out the symbol, so use the whole op_str
-                    symbol = op_str
-
-                comments += [f"{symbol}={addr:#x}"]
-
-                # print its value if its type is available
+        if not used_tag_parser:
+            # Compatibility path for older IDA versions without parse_tagged_line_sections
+            try:
+                mnem = idc.print_insn_mnem(address)
+            except Exception:
+                mnem = None
+            # Collect up to 8 operands
+            for i in range(8):
                 try:
-                    value = get_global_variable_value_internal(addr)
-                except:
-                    continue
+                    op_str = idc.print_operand(address, i)
+                except Exception:
+                    op_str = None
+                if not op_str:
+                    break
+                operands.append(op_str)
 
-                comments += [f"*{symbol}={value}"]
+        if not mnem:
+            # As a last resort, strip tags from the raw line
+            mnem = ida_lines.tag_remove(raw_instruction) if raw_instruction else ""
+            # Heuristic: take the first token as mnemonic
+            if mnem:
+                mnem = mnem.split()[0]
 
-            operands += [op_str]
-
-        mnem = ida_lines.tag_remove(insn_section.substr(raw_instruction))
-        instruction = f"{mnem} {', '.join(operands)}"
+        instruction = f"{mnem} {', '.join(operands)}".rstrip()
 
         line = DisassemblyLine(
             address=f"{address:#x}",
@@ -993,8 +1108,27 @@ def disassemble_function(
 
         lines += [line]
 
-    prototype = func.get_prototype()
-    arguments: list[Argument] = [Argument(name=arg.name, type=f"{arg.type}") for arg in prototype.iter_func()] if prototype else None
+    # Retrieve prototype information in a version-compatible way
+    arguments: Optional[list[Argument]] = None
+    return_type: Optional[str] = None
+    try:
+        prototype = func.get_prototype()
+        if prototype:
+            try:
+                return_type = f"{prototype.get_rettype()}"
+            except Exception:
+                return_type = None
+            try:
+                arguments = [Argument(name=arg.name, type=f"{arg.type}") for arg in prototype.iter_func()]
+            except Exception:
+                arguments = None
+    except AttributeError:
+        # Older IDA: fall back to a best-effort string prototype, but don't attempt to parse
+        try:
+            proto_str = get_prototype(func)
+            # We intentionally do not set return_type from proto_str, as format may vary by IDA version
+        except Exception:
+            pass
 
     disassembly_function = DisassemblyFunction(
         name=func.name,
@@ -1003,8 +1137,8 @@ def disassemble_function(
         lines=lines
     )
 
-    if prototype:
-        disassembly_function.update(return_type=f"{prototype.get_rettype()}")
+    if return_type:
+        disassembly_function.update(return_type=return_type)
 
     if arguments:
         disassembly_function.update(arguments=arguments)
@@ -1177,6 +1311,8 @@ def rename_global_variable(
 ):
     """Rename a global variable"""
     ea = idaapi.get_name_ea(idaapi.BADADDR, old_name)
+    if ea == idaapi.BADADDR:
+        raise IDAError(f"Global variable {old_name} not found")
     if not idaapi.set_name(ea, new_name):
         raise IDAError(f"Failed to rename global variable {old_name} to {new_name}")
     refresh_decompiler_ctext(ea)
@@ -1237,7 +1373,13 @@ def get_global_variable_value_internal(ea: int) -> str:
 
      # Read the value based on the size
      if size == 0 and tif.is_array() and tif.get_array_element().is_decl_char():
-         return_string = idaapi.get_strlit_contents(ea, -1, 0).decode("utf-8").strip()
+         raw = idaapi.get_strlit_contents(ea, -1, 0)
+         if raw is None:
+             raise IDAError(f"Failed to read string literal at {ea:#x}")
+         try:
+             return_string = raw.decode("utf-8", errors="strict").strip()
+         except UnicodeDecodeError:
+             return_string = raw.decode("utf-8", errors="replace").strip()
          return f"\"{return_string}\""
      elif size == 1:
          return hex(ida_bytes.get_byte(ea))
@@ -1309,7 +1451,14 @@ def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, str]:
         assert isinstance(hti_flags, int), "hti_flags must be an int"
         c_decls = decls.encode("utf-8")
         c_til = None
-        ida_dll = ctypes.CDLL("ida")
+        # Try common IDA DLL names for robustness
+        try:
+            ida_dll = ctypes.CDLL("ida")
+        except OSError:
+            try:
+                ida_dll = ctypes.CDLL("ida64")
+            except OSError as e:
+                raise IDAError(f"Unable to load IDA core DLL: {e}")
         ida_dll.parse_decls.argtypes = [
             ctypes.c_void_p,
             ctypes.c_char_p,
@@ -1442,10 +1591,12 @@ def get_defined_structures() -> list[StructureDefinition]:
     """ Returns a list of all defined structures """
 
     rv = []
-    limit = ida_typeinf.get_ordinal_limit()
+    # Use the current type library handle for compatibility across IDA versions
+    idati = ida_typeinf.get_idati()
+    limit = ida_typeinf.get_ordinal_limit(idati)
     for ordinal in range(1, limit):
         tif = ida_typeinf.tinfo_t()
-        tif.get_numbered_type(None, ordinal)
+        tif.get_numbered_type(idati, ordinal)
         if tif.is_udt():
             udt = ida_typeinf.udt_type_data_t()
             members = []
@@ -1844,7 +1995,8 @@ def dbg_enable_breakpoint(
     ea = parse_address(address)
     if idaapi.enable_bpt(ea, enable):
         return f"Breakpoint {'enabled' if enable else 'disabled'} at {hex(ea)}"
-    return f"Failed to {'' if enable else 'disable '}breakpoint at address {hex(ea)}"
+    action = 'enable' if enable else 'disable'
+    return f"Failed to {action} breakpoint at address {hex(ea)}"
 
 class MCP(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
