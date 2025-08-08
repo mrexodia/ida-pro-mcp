@@ -187,7 +187,7 @@ class JSONRPCRequestHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 class MCPHTTPServer(http.server.HTTPServer):
-    allow_reuse_address = False
+    allow_reuse_address = True
 
 class Server:
     HOST = "localhost"
@@ -634,6 +634,8 @@ def convert_number(
             n >>= 1
         size += 7
         size //= 8
+        if size == 0:
+            size = 1
 
     # Convert the number to bytes
     try:
@@ -910,7 +912,22 @@ def disassemble_function(
         ida_kernwin.jumpto(start)
 
     lines = []
-    for address in ida_funcs.func_item_iterator_t(func):
+    # Build list of instruction addresses across IDA versions
+    try:
+        addresses = list(idautils.FuncItems(func.start_ea))
+    except Exception:
+        addresses = []
+        fii = ida_funcs.func_item_iterator_t()
+        if fii.set(func) and fii.first():
+            while True:
+                try:
+                    addresses.append(fii.current())
+                except Exception:
+                    break
+                if not fii.next():
+                    break
+
+    for address in addresses:
         seg = idaapi.getseg(address)
         segment = idaapi.get_segm_name(seg) if seg else None
 
