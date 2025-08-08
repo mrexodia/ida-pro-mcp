@@ -19,7 +19,8 @@ ida_port = 13337
 def make_jsonrpc_request(method: str, *params):
     """Make a JSON-RPC request to the IDA plugin"""
     global jsonrpc_request_id, ida_host, ida_port
-    conn = http.client.HTTPConnection(ida_host, ida_port)
+    # Add a short timeout so clients don't hang indefinitely if IDA isn't responding
+    conn = http.client.HTTPConnection(ida_host, ida_port, timeout=5.0)
     request = {
         "jsonrpc": "2.0",
         "method": method,
@@ -164,7 +165,7 @@ visitor.visit(module)
 code = """# NOTE: This file has been automatically generated, do not modify!
 # Architecture based on https://github.com/mrexodia/ida-pro-mcp (MIT License)
 import sys
-if sys.version_info >= (3, 12):
+if sys.version_info >= (3, 11):
     from typing import Annotated, Optional, TypedDict, Generic, TypeVar, NotRequired
 else:
     from typing_extensions import Annotated, Optional, TypedDict, Generic, TypeVar, NotRequired
