@@ -318,6 +318,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
             # Windows does not support Claude Code, yet.
             "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
+            "VSCode": (os.path.join(os.getenv("APPDATA"), "Code", "User"), "mcp.json"),
         }
     elif sys.platform == "darwin":
         configs = {
@@ -328,6 +329,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
             "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
+            "VSCode": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User"), "mcp.json"),
         }
     elif sys.platform == "linux":
         configs = {
@@ -338,6 +340,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
             "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
+            "VSCode": (os.path.join(os.path.expanduser("~"), ".config", "Code", "User"), "mcp.json"),
         }
     else:
         print(f"Unsupported platform: {sys.platform}")
@@ -365,9 +368,19 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                         if not quiet:
                             print(f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)")
                         continue
-        if "mcpServers" not in config:
-            config["mcpServers"] = {}
-        mcp_servers = config["mcpServers"]
+        
+        # Handle different config formats for different clients
+        if name == "VSCode":
+            # VSCode uses "servers" field instead of "mcpServers"
+            if "servers" not in config:
+                config["servers"] = {}
+            mcp_servers = config["servers"]
+        else:
+            # Other clients use "mcpServers" field
+            if "mcpServers" not in config:
+                config["mcpServers"] = {}
+            mcp_servers = config["mcpServers"]
+        
         if uninstall:
             if mcp.name not in mcp_servers:
                 if not quiet:
@@ -381,18 +394,35 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                     env[key] = value
             if copy_python_env(env):
                 print(f"[WARNING] Custom Python environment variables detected")
-            mcp_servers[mcp.name] = {
-                "command": get_python_executable(),
-                "args": [
-                    __file__,
-                ],
-                "timeout": 1800,
-                "disabled": False,
-                "autoApprove": SAFE_FUNCTIONS,
-                "alwaysAllow": SAFE_FUNCTIONS,
-            }
-            if env:
-                mcp_servers[mcp.name]["env"] = env
+            
+            # Create server configuration based on client type
+            if name == "VSCode":
+                # VSCode specific configuration format
+                server_config = {
+                    "type": "stdio",
+                    "command": get_python_executable(),
+                    "args": [
+                        __file__,
+                    ],
+                }
+                if env:
+                    server_config["env"] = env
+            else:
+                # Standard MCP client configuration format
+                server_config = {
+                    "command": get_python_executable(),
+                    "args": [
+                        __file__,
+                    ],
+                    "timeout": 1800,
+                    "disabled": False,
+                    "autoApprove": SAFE_FUNCTIONS,
+                    "alwaysAllow": SAFE_FUNCTIONS,
+                }
+                if env:
+                    server_config["env"] = env
+            
+            mcp_servers[mcp.name] = server_config
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
         if not quiet:
@@ -440,11 +470,102 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
             if not quiet:
                 print(f"Installed IDA Pro plugin (IDA restart required)\n  Plugin: {plugin_destination}")
 
+def install_vscode_workspace_mcp(workspace_path: str = None, *, uninstall: bool = False, quiet: bool = False):
+    """Install or uninstall MCP server configuration for VSCode workspace"""
+    if workspace_path is None:
+        workspace_path = os.getcwd()
+    
+    vscode_dir = os.path.join(workspace_path, ".vscode")
+    mcp_config_path = os.path.join(vscode_dir, "mcp.json")
+    
+    if uninstall:
+        if os.path.exists(mcp_config_path):
+            try:
+                with open(mcp_config_path, "r") as f:
+                    config = json.load(f)
+                
+                if "servers" in config and mcp.name in config["servers"]:
+                    del config["servers"][mcp.name]
+                    
+                    # Remove the file if no servers left
+                    if not config["servers"]:
+                        os.remove(mcp_config_path)
+                        # Remove .vscode directory if empty
+                        try:
+                            os.rmdir(vscode_dir)
+                        except OSError:
+                            pass  # Directory not empty
+                        if not quiet:
+                            print(f"Uninstalled VSCode workspace MCP config\n  Removed: {mcp_config_path}")
+                    else:
+                        with open(mcp_config_path, "w") as f:
+                            json.dump(config, f, indent=2)
+                        if not quiet:
+                            print(f"Removed IDA Pro MCP from VSCode workspace config\n  Config: {mcp_config_path}")
+                else:
+                    if not quiet:
+                        print(f"IDA Pro MCP not found in VSCode workspace config\n  Config: {mcp_config_path}")
+            except (json.JSONDecodeError, OSError) as e:
+                if not quiet:
+                    print(f"Error processing VSCode workspace config: {e}\n  Config: {mcp_config_path}")
+        else:
+            if not quiet:
+                print(f"VSCode workspace config not found\n  Path: {mcp_config_path}")
+    else:
+        # Install
+        if not os.path.exists(vscode_dir):
+            os.makedirs(vscode_dir)
+        
+        # Load existing config or create new one
+        if os.path.exists(mcp_config_path):
+            try:
+                with open(mcp_config_path, "r") as f:
+                    config = json.load(f)
+            except json.JSONDecodeError:
+                config = {}
+        else:
+            config = {}
+        
+        # Ensure servers section exists
+        if "servers" not in config:
+            config["servers"] = {}
+        
+        env = {}
+        if copy_python_env(env):
+            if not quiet:
+                print(f"[WARNING] Custom Python environment variables detected")
+        
+        # Add IDA Pro MCP server configuration
+        server_config = {
+            "type": "stdio",
+            "command": get_python_executable(),
+            "args": [
+                __file__,
+            ],
+        }
+        
+        if env:
+            server_config["env"] = env
+            
+        config["servers"][mcp.name] = server_config
+        
+        # Write the config
+        with open(mcp_config_path, "w") as f:
+            json.dump(config, f, indent=2)
+        
+        if not quiet:
+            print(f"Installed VSCode workspace MCP config\n  Config: {mcp_config_path}")
+            print("To use the MCP server in VSCode:")
+            print("1. Open this workspace in VSCode")
+            print("2. Enable Agent Mode in Copilot Chat")
+            print("3. Click the 'Tools' button to see available IDA Pro tools")
+
 def main():
     global ida_host, ida_port
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
     parser.add_argument("--install", action="store_true", help="Install the MCP Server and IDA plugin")
     parser.add_argument("--uninstall", action="store_true", help="Uninstall the MCP Server and IDA plugin")
+    parser.add_argument("--vscode-workspace", type=str, help="Install/uninstall MCP config for VSCode workspace at specified path")
     parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--transport", type=str, default="stdio", help="MCP transport protocol to use (stdio or http://127.0.0.1:8744)")
@@ -455,6 +576,10 @@ def main():
 
     if args.install and args.uninstall:
         print("Cannot install and uninstall at the same time")
+        return
+
+    if args.vscode_workspace:
+        install_vscode_workspace_mcp(args.vscode_workspace, uninstall=args.uninstall)
         return
 
     if args.install:

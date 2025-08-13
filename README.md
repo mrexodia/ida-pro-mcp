@@ -83,6 +83,35 @@ https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
 
 _Note_: You need to load a binary in IDA before the plugin menu will show up.
 
+## VSCode Agent Mode Setup
+
+For VSCode Agent Mode users, you have two setup options:
+
+### Option 1: Global Installation (Recommended)
+The standard `--install` command will configure the MCP server globally for VSCode:
+
+```sh
+ida-pro-mcp --install
+```
+
+### Option 2: Workspace-specific Installation
+To configure the MCP server for a specific workspace/project:
+
+```sh
+# Navigate to your workspace directory
+cd /path/to/your/workspace
+
+# Install MCP config for this workspace
+ida-pro-mcp --vscode-workspace .
+```
+
+This creates a `.vscode/mcp.json` file in your workspace that can be shared with your team.
+
+To uninstall the workspace configuration:
+```sh
+ida-pro-mcp --vscode-workspace . --uninstall
+```
+
 ## Prompt Engineering
 
 LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
@@ -177,6 +206,42 @@ To check if the connection works you can perform the following tool call:
 <arguments></arguments>
 </use_mcp_tool>
 ```
+
+## Manual VSCode Agent Mode Installation
+
+To manually configure VSCode Agent Mode:
+
+1. Install the IDA Pro MCP package:
+   ```sh
+   pip install git+https://github.com/mrexodia/ida-pro-mcp
+   ```
+
+2. Install the IDA plugin:
+   ```sh
+   ida-pro-mcp --install-plugin
+   ```
+
+3. **Option A - Global Configuration**: Add to your VSCode user MCP config:
+   - Run the command: `MCP: Open User Configuration` in VSCode
+   - Add the server configuration (see `.vscode/mcp.json.example` in this repository)
+
+4. **Option B - Workspace Configuration**: Create `.vscode/mcp.json` in your project:
+   ```json
+   {
+     "servers": {
+       "github.com/mrexodia/ida-pro-mcp": {
+         "type": "stdio",
+         "command": "python",
+         "args": [
+           "-m",
+           "ida_pro_mcp.server"
+         ]
+       }
+     }
+   }
+   ```
+
+5. Restart VSCode and enable Agent Mode in Copilot Chat.
 
 ## IDA Plugin installation
 
