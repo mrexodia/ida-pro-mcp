@@ -156,7 +156,7 @@ GENERATED_PY = os.path.join(SCRIPT_DIR, "server_generated.py")
 # NOTE: This is in the global scope on purpose
 if not os.path.exists(IDA_PLUGIN_PY):
     raise RuntimeError(f"IDA plugin not found at {IDA_PLUGIN_PY} (did you move it?)")
-with open(IDA_PLUGIN_PY, "r") as f:
+with open(IDA_PLUGIN_PY, "r", encoding="utf-8") as f:
     code = f.read()
 module = ast.parse(code, IDA_PLUGIN_PY)
 visitor = MCPVisitor()
@@ -354,7 +354,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
         if not os.path.exists(config_path):
             config = {}
         else:
-            with open(config_path, "r") as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 data = f.read().strip()
                 if len(data) == 0:
                     config = {}
@@ -393,7 +393,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             }
             if env:
                 mcp_servers[mcp.name]["env"] = env
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
         if not quiet:
             action = "Uninstalled" if uninstall else "Installed"
