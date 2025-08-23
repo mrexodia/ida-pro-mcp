@@ -1526,6 +1526,201 @@ def get_defined_structures() -> list[StructureDefinition]:
     return rv
 
 @jsonrpc
+@idaread
+def analyze_struct_detailed(name: Annotated[str, "Name of the structure to analyze"]) -> dict:
+    """Detailed analysis of a structure with all fields"""
+    # Get tinfo object
+    tif = ida_typeinf.tinfo_t()
+    if not tif.get_named_type(None, name):
+        raise IDAError(f"Structure '{name}' not found!")
+    
+    result = {
+        "name": name,
+        "type": str(tif._print()),
+        "size": tif.get_size(),
+        "is_udt": tif.is_udt()
+    }
+    
+    if not tif.is_udt():
+        result["error"] = "This is not a user-defined type!"
+        return result
+    
+    # Get UDT (User Defined Type) details
+    udt_data = ida_typeinf.udt_type_data_t()
+    if not tif.get_udt_details(udt_data):
+        result["error"] = "Failed to get structure details!"
+        return result
+    
+    result["member_count"] = udt_data.size()
+    result["is_union"] = udt_data.is_union
+    result["udt_type"] = "Union" if udt_data.is_union else "Struct"
+    
+    # Output information about each field
+    members = []
+    for i, member in enumerate(udt_data):
+        offset = member.begin() // 8  # Convert bits to bytes
+        size = member.size // 8 if member.size > 0 else member.type.get_size()
+        member_type = member.type._print()
+        member_name = member.name
+        
+        member_info = {
+            "index": i,
+            "offset": f"0x{offset:08X}",
+            "size": size,
+            "type": member_type,
+            "name": member_name,
+            "is_nested_udt": member.type.is_udt()
+        }
+        
+        # If this is a nested structure, show additional information
+        if member.type.is_udt():
+            member_info["nested_size"] = member.type.get_size()
+        
+        members.append(member_info)
+    
+    result["members"] = members
+    result["total_size"] = tif.get_size()
+    
+    return result
+
+@jsonrpc
+@idaread
+def get_struct_at_address(address: Annotated[str, "Address to analyze structure at"], 
+                         struct_name: Annotated[str, "Name of the structure"]) -> dict:
+    """Get structure field values at a specific address"""
+    addr = parse_address(address)
+    
+    # Get structure tinfo
+    tif = ida_typeinf.tinfo_t()
+    if not tif.get_named_type(None, struct_name):
+        raise IDAError(f"Structure '{struct_name}' not found!")
+    
+    # Get structure details
+    udt_data = ida_typeinf.udt_type_data_t()
+    if not tif.get_udt_details(udt_data):
+        raise IDAError("Failed to get structure details!")
+    
+    result = {
+        "struct_name": struct_name,
+        "address": f"0x{addr:X}",
+        "members": []
+    }
+    
+    for member in udt_data:
+        offset = member.begin() // 8
+        member_addr = addr + offset
+        member_type = member.type._print()
+        member_name = member.name
+        member_size = member.type.get_size()
+        
+        # Try to get value based on size
+        try:
+            if member.type.is_ptr():
+                # Pointer
+                if idaapi.get_inf_structure().is_64bit():
+                    value = idaapi.get_qword(member_addr)
+                    value_str = f"0x{value:016X}"
+                else:
+                    value = idaapi.get_dword(member_addr)
+                    value_str = f"0x{value:08X}"
+            elif member_size == 1:
+                value = idaapi.get_byte(member_addr)
+                value_str = f"0x{value:02X} ({value})"
+            elif member_size == 2:
+                value = idaapi.get_word(member_addr)
+                value_str = f"0x{value:04X} ({value})"
+            elif member_size == 4:
+                value = idaapi.get_dword(member_addr)
+                value_str = f"0x{value:08X} ({value})"
+            elif member_size == 8:
+                value = idaapi.get_qword(member_addr)
+                value_str = f"0x{value:016X} ({value})"
+            else:
+                # For large structures, read first few bytes
+                bytes_data = []
+                for i in range(min(member_size, 16)):
+                    try:
+                        byte_val = idaapi.get_byte(member_addr + i)
+                        bytes_data.append(f"{byte_val:02X}")
+                    except:
+                        break
+                value_str = f"[{' '.join(bytes_data)}{'...' if member_size > 16 else ''}]"
+        except:
+            value_str = "<failed to read>"
+        
+        member_info = {
+            "offset": f"0x{offset:08X}",
+            "type": member_type,
+            "name": member_name,
+            "value": value_str
+        }
+        
+        result["members"].append(member_info)
+    
+    return result
+
+@jsonrpc
+@idaread
+def get_struct_info_simple(name: Annotated[str, "Name of the structure"]) -> dict:
+    """Simple function to get basic structure information"""
+    tif = ida_typeinf.tinfo_t()
+    if not tif.get_named_type(None, name):
+        raise IDAError(f"Structure '{name}' not found!")
+    
+    info = {
+        'name': name,
+        'type': tif._print(),
+        'size': tif.get_size(),
+        'is_udt': tif.is_udt()
+    }
+    
+    if tif.is_udt():
+        udt_data = ida_typeinf.udt_type_data_t()
+        if tif.get_udt_details(udt_data):
+            info['member_count'] = udt_data.size()
+            info['is_union'] = udt_data.is_union
+            
+            members = []
+            for member in udt_data:
+                members.append({
+                    'name': member.name,
+                    'type': member.type._print(),
+                    'offset': member.begin() // 8,
+                    'size': member.type.get_size()
+                })
+            info['members'] = members
+    
+    return info
+
+@jsonrpc
+@idaread
+def search_structures(filter: Annotated[str, "Filter pattern to search for structures (case-insensitive)"]) -> list[dict]:
+    """Search for structures by name pattern"""
+    results = []
+    limit = ida_typeinf.get_ordinal_limit()
+    
+    for ordinal in range(1, limit):
+        tif = ida_typeinf.tinfo_t()
+        if tif.get_numbered_type(None, ordinal):
+            type_name = tif.get_type_name()
+            if type_name and filter.lower() in type_name.lower():
+                if tif.is_udt():
+                    udt_data = ida_typeinf.udt_type_data_t()
+                    member_count = 0
+                    if tif.get_udt_details(udt_data):
+                        member_count = udt_data.size()
+                    
+                    results.append({
+                        "name": type_name,
+                        "size": tif.get_size(),
+                        "member_count": member_count,
+                        "is_union": udt_data.is_union if tif.get_udt_details(udt_data) else False,
+                        "ordinal": ordinal
+                    })
+    
+    return results
+
+@jsonrpc
 @idawrite
 def rename_stack_frame_variable(
         function_address: Annotated[str, "Address of the disassembled function to set the stack frame variables"],
