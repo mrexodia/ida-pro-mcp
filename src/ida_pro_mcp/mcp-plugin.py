@@ -1256,6 +1256,38 @@ def set_global_variable_type(
     if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL):
         raise IDAError(f"Failed to apply type")
 
+def patch_address_assemble(
+    ea: int,
+    assemble: str,
+) -> int:
+    """Patch Address Assemble"""
+    (check_assemble, bytes_to_patch) = idautils.Assemble(ea, assemble)
+    if check_assemble == False:
+        raise IDAError(f"Failed to assemble instruction: {assemble}")
+    try:
+        ida_bytes.patch_bytes(ea, bytes_to_patch)
+    except:
+        raise IDAError(f"Failed to patch bytes at address {hex(ea)}")
+    
+    return len(bytes_to_patch)
+
+@jsonrpc
+@idawrite
+def patch_address_assembles(
+    address: Annotated[str, "Starting Address to apply patch"],
+    assembles: Annotated[str, "Assembly instructions separated by ';'"],
+) -> str:
+    ea = parse_address(address)
+    assembles = assembles.split(";")
+    for assemble in assembles:
+        assemble = assemble.strip()
+        try:
+            patch_bytes_len = patch_address_assemble(ea, assemble)
+        except IDAError as e:
+            raise IDAError(f"Failed to patch bytes at address {hex(address)}: {e}")
+        ea += patch_bytes_len
+    return f"Patched {len(assembles)} instructions"
+
 @jsonrpc
 @idaread
 def get_global_variable_value_by_name(variable_name: Annotated[str, "Name of the global variable"]) -> str:
