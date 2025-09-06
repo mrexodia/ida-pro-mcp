@@ -6,6 +6,7 @@ import shutil
 import argparse
 import http.client
 from urllib.parse import urlparse
+from glob import glob
 
 from mcp.server.fastmcp import FastMCP
 
@@ -413,9 +414,14 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
 
 def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
     if sys.platform == "win32":
-        ida_plugin_folder = os.path.join(os.getenv("APPDATA"), "Hex-Rays", "IDA Pro", "plugins")
+        ida_folder = os.path.join(os.getenv("APPDATA"), "Hex-Rays", "IDA Pro")
     else:
-        ida_plugin_folder = os.path.join(os.path.expanduser("~"), ".idapro", "plugins")
+        ida_folder = os.path.join(os.path.expanduser("~"), ".idapro")
+    free_licenses = glob(os.path.join(ida_folder, "idafree_*.hexlic"))
+    if len(free_licenses) > 0:
+        print(f"IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead.")
+        sys.exit(1)
+    ida_plugin_folder = os.path.join(ida_folder, "plugins")
     plugin_destination = os.path.join(ida_plugin_folder, "mcp-plugin.py")
     if uninstall:
         if not os.path.exists(plugin_destination):
@@ -466,13 +472,13 @@ def main():
         return
 
     if args.install:
-        install_mcp_servers()
         install_ida_plugin()
+        install_mcp_servers()
         return
 
     if args.uninstall:
-        install_mcp_servers(uninstall=True)
         install_ida_plugin(uninstall=True)
+        install_mcp_servers(uninstall=True)
         return
 
     # NOTE: Developers can use this to generate the README
