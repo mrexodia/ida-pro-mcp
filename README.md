@@ -68,7 +68,7 @@ Install the latest version of the IDA Pro MCP package:
 
 ```sh
 pip uninstall ida-pro-mcp
-pip install git+https://github.com/mrexodia/ida-pro-mcp
+pip install https://github.com/mrexodia/ida-pro-mcp/archive/refs/heads/main.zip
 ```
 
 Configure the MCP servers and install the IDA Plugin:
