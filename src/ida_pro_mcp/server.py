@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from mcp.server.fastmcp import FastMCP
 
 # The log_level is necessary for Cline to work: https://github.com/jlowin/fastmcp/issues/81
-mcp = FastMCP("github.com/mrexodia/ida-pro-mcp", log_level="ERROR")
+mcp = FastMCP("ida-pro-mcp", log_level="ERROR")
 
 jsonrpc_request_id = 1
 ida_host = "127.0.0.1"
@@ -368,6 +368,11 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
         if "mcpServers" not in config:
             config["mcpServers"] = {}
         mcp_servers = config["mcpServers"]
+        # Migrate old name
+        old_name = "github.com/mrexodia/ida-pro-mcp"
+        if old_name in mcp_servers:
+            mcp_servers[mcp.name] = mcp_servers[old_name]
+            del mcp_servers[old_name]
         if uninstall:
             if mcp.name not in mcp_servers:
                 if not quiet:
