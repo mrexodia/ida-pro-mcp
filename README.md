@@ -26,7 +26,8 @@ Available functionality:
 - `get_xrefs_to(address)`: Get all cross references to the given address.
 - `get_xrefs_to_field(struct_name, field_name)`: Get all cross references to a named struct field (member).
 - `get_entry_points()`: Get all entry points in the database.
-- `set_comment(address, comment)`: Set a comment for a given address in the function disassembly and pseudocode.
+- `set_comment_in_disassembly(address, comment)`: Set a comment for a given address in the function disassembly.
+- `set_comment_in_decompilation(address, comment)`: Set a comment for a given address in the function pseudocode.
 - `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function.
 - `rename_global_variable(old_name, new_name)`: Rename a global variable.
 - `set_global_variable_type(variable_name, new_type)`: Set a global variable's type.

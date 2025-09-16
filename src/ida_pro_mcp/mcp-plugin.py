@@ -1150,26 +1150,28 @@ def get_entry_points() -> list[Function]:
 
 @jsonrpc
 @idawrite
-def set_comment(
+def set_comment_in_disassembly(
     address: Annotated[str, "Address in the function to set the comment for"],
     comment: Annotated[str, "Comment text"],
 ):
-    """Set a comment for a given address in the function disassembly and pseudocode"""
+    """Set a comment for a given address in the function disassembly"""
     address = parse_address(address)
-
     if not idaapi.set_cmt(address, comment, False):
         raise IDAError(f"Failed to set disassembly comment at {hex(address)}")
 
-    if not ida_hexrays.init_hexrays_plugin():
-        return
+@jsonrpc
+@idawrite
+def set_comment_in_decompilation(
+    address: Annotated[str, "Address in the function to set the comment for"],
+    comment: Annotated[str, "Comment text"],
+):
+    """Set a comment for a given address in the function pseudocode"""
+    address = parse_address(address)
 
-    # Reference: https://cyber.wtf/2019/03/22/using-ida-python-to-analyze-trickbot/
-    # Check if the address corresponds to a line
-    try:
-        cfunc = decompile_checked(address)
-    except DecompilerLicenseError:
-        # We failed to decompile the function due to a decompiler license error
-        return
+    if not ida_hexrays.init_hexrays_plugin():
+        raise IDAError("Hex-Rays decompiler is not available")
+
+    cfunc = decompile_checked(address)
 
     # Special case for function entry comments
     if address == cfunc.entry_ea:
@@ -1179,8 +1181,8 @@ def set_comment(
 
     eamap = cfunc.get_eamap()
     if address not in eamap:
-        print(f"Failed to set decompiler comment at {hex(address)}")
-        return
+        raise IDAError(f"Address {hex(address)} not found in decompiled function")
+
     nearest_ea = eamap[address][0].ea
 
     # Remove existing orphan comments
@@ -1200,7 +1202,8 @@ def set_comment(
             return
         cfunc.del_orphan_cmts()
         cfunc.save_user_cmts()
-    print(f"Failed to set decompiler comment at {hex(address)}")
+
+    raise IDAError(f"Failed to set decompilation comment at {hex(address)}")
 
 def refresh_decompiler_widget():
     widget = ida_kernwin.get_current_widget()
