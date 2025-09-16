@@ -1153,15 +1153,20 @@ def get_entry_points() -> list[Function]:
 def set_comment(
     address: Annotated[str, "Address in the function to set the comment for"],
     comment: Annotated[str, "Comment text"],
+    in_decompile_window: Annotated[bool, "Set comment in decompile window (True) or disassembly window (False)"] = True,
 ):
-    """Set a comment for a given address in the function disassembly and pseudocode"""
+    """Set a comment for a given address in the function disassembly or pseudocode"""
     address = parse_address(address)
 
-    if not idaapi.set_cmt(address, comment, False):
-        raise IDAError(f"Failed to set disassembly comment at {hex(address)}")
-
-    if not ida_hexrays.init_hexrays_plugin():
+    if not in_decompile_window:
+        # Only set comment in disassembly window
+        if not idaapi.set_cmt(address, comment, False):
+            raise IDAError(f"Failed to set disassembly comment at {hex(address)}")
         return
+
+    # Only set comment in decompile window
+    if not ida_hexrays.init_hexrays_plugin():
+        raise IDAError("Hex-Rays decompiler is not available")
 
     # Reference: https://cyber.wtf/2019/03/22/using-ida-python-to-analyze-trickbot/
     # Check if the address corresponds to a line
@@ -1169,7 +1174,7 @@ def set_comment(
         cfunc = decompile_checked(address)
     except DecompilerLicenseError:
         # We failed to decompile the function due to a decompiler license error
-        return
+        raise DecompilerLicenseError("Decompiler licence is not available. Use in_decompile_window=False to set comment in disassembly window instead.")
 
     # Special case for function entry comments
     if address == cfunc.entry_ea:
@@ -1179,8 +1184,7 @@ def set_comment(
 
     eamap = cfunc.get_eamap()
     if address not in eamap:
-        print(f"Failed to set decompiler comment at {hex(address)}")
-        return
+        raise IDAError(f"Failed to set decompiler comment at {hex(address)}")
     nearest_ea = eamap[address][0].ea
 
     # Remove existing orphan comments
@@ -1200,7 +1204,7 @@ def set_comment(
             return
         cfunc.del_orphan_cmts()
         cfunc.save_user_cmts()
-    print(f"Failed to set decompiler comment at {hex(address)}")
+    raise IDAError(f"Failed to set decompiler comment at {hex(address)}")
 
 def refresh_decompiler_widget():
     widget = ida_kernwin.get_current_widget()
