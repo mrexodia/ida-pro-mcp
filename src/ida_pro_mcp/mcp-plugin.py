@@ -12,6 +12,10 @@ from urllib.parse import urlparse
 from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated, TypeVar, Generic, NotRequired
 
 
+# OpenAI API Configuration
+GPT_MODEL = "gpt-5"
+OPENAI_API_KEY = "sk-..."
+
 class JSONRPCError(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
         self.code = code
@@ -1475,6 +1479,37 @@ def set_local_variable_type(
     if not ida_hexrays.modify_user_lvars(func.start_ea, modifier):
         raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(func.start_ea)
+
+@jsonrpc
+def deep_reasoning(prompt: str) -> str:
+    """Perform advanced AI-powered analysis using OpenAI's GPT model for complex reverse engineering tasks. This tool leverages GPT's superior reasoning capabilities for tasks that require deep contextual understanding, complex pattern recognition, and detailed analysis beyond standard static analysis. Use for understanding complex data structures, algorithm analysis, cryptographic patterns, and sophisticated code analysis. Not for simple queries - use only when deep reasoning is specifically needed."""
+    from openai import OpenAI
+
+    model=GPT_MODEL
+    api_key = OPENAI_API_KEY
+    if not api_key:
+        return "OpenAI API key not set. Please set the OPENAI_API_KEY environment variable."
+    
+    if len(prompt) > 32000:
+        return "Prompt too long. Please limit to 32,000 characters."
+    
+    client = OpenAI(api_key=api_key)
+    try:
+        r = client.responses.create(
+            model=model,
+            reasoning={"effort": "high"},        # low | medium | high
+            text={"verbosity": "high"},          # optional: low | medium | high
+            input=[
+                {"role": "system", "content": " You are an expert reverse engineer and security researcher. Provide detailed, accurate, and context-aware analysis based on the provided information. Use technical language appropriate for experienced professionals in the field."},
+                {"role": "user", "content": prompt},
+            ],
+            max_output_tokens=8192               # use this name with Responses API
+            # note: omit temperature/top_p for GPT-5
+        )
+        return r.output_text
+    except Exception as e:
+        return f"OpenAI API error: {e}"
+
 
 class StackFrameVariable(TypedDict):
     name: str
