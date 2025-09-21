@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 
 if sys.version_info < (3, 11):
     raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
@@ -15,6 +16,10 @@ from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated
 # OpenAI API Configuration
 GPT_MODEL = "gpt-5"
 OPENAI_API_KEY = "sk-..."
+
+# Capa Configuration
+ELF_CAPA_PATH="/home/mateim/Desktop/ida_mcp_dev/ida-pro-mcp/capa"
+WIN_CAPA_PATH="/home/mateim/Desktop/ida_mcp_dev/ida-pro-mcp/capa.exe"
 
 class JSONRPCError(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
@@ -1510,6 +1515,69 @@ def deep_reasoning(prompt: str) -> str:
     except Exception as e:
         return f"OpenAI API error: {e}"
 
+
+@jsonrpc
+@idaread
+def run_capa_on_file() -> str:
+    """Run capa analysis on the current file with verbose output"""
+    
+    # Get the full path of the current file
+    file_path = idaapi.get_input_file_path()
+    if not file_path or not os.path.exists(file_path):
+        raise IDAError("Could not get valid input file path")
+    
+    # Detect architecture to choose appropriate capa executable
+    try:
+        info = idaapi.get_inf_structure()
+        is_64bit = info.is_64bit()
+        is_windows = info.filetype == idaapi.f_PE
+    except AttributeError:
+        # Use newer IDA API
+        is_64bit = ida_ida.inf_is_64bit()
+        is_windows = ida_ida.inf_get_filetype() == idaapi.f_PE
+    
+    # Choose capa executable based on platform and architecture
+    if is_windows or os.name == 'nt':
+        capa_path = WIN_CAPA_PATH
+    else:
+        capa_path = ELF_CAPA_PATH
+    
+    if not os.path.exists(capa_path):
+        raise IDAError(f"Capa executable not found at: {capa_path}")
+    
+    # Build command with verbose flags
+    cmd = [capa_path, "-vv", file_path]
+    
+    try:
+        # Run capa with subprocess
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=400  
+        )
+        
+        # Return clean output - prioritize stdout, include stderr only if there are errors
+        if result.returncode == 0:
+            # Successful execution - return stdout directly
+            output = result.stdout.strip() if result.stdout else ""
+        else:
+            # Error occurred - include both stdout and stderr with labels
+            output = ""
+            if result.stdout:
+                output += result.stdout.strip() + "\n\n"
+            if result.stderr:
+                output += "ERRORS:\n" + result.stderr.strip() + "\n"
+            output += f"\nCapa exited with return code: {result.returncode}"
+        
+        return output if output else "Capa analysis completed but produced no output"
+        
+    except subprocess.TimeoutExpired:
+        raise IDAError("Capa analysis timed out after 5 minutes")
+    except subprocess.CalledProcessError as e:
+        raise IDAError(f"Capa execution failed: {e}")
+    except Exception as e:
+        raise IDAError(f"Error running capa: {str(e)}")
 
 class StackFrameVariable(TypedDict):
     name: str
