@@ -34,6 +34,8 @@ Available functionality:
 - `set_function_prototype(function_address, prototype)`: Set a function's prototype.
 - `declare_c_type(c_declaration)`: Create or update a local type from a C declaration.
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type.
+- `deep_reasoning(prompt)`: Send a complex prompt to a GPT model for solving complex tasks. (MODIFY THE CONFIG AT THE TOP OF THE mcp-plugin.py file)
+- `run_capa_on_file()`: Runs the capa utility from flare-on on the binary. (MODIFY THE CONFIG AT THE TOP OF THE mcp-plugin.py file)
 
 Unsafe functions (`--unsafe` flag required):
 
@@ -228,3 +230,4 @@ Generate the changelog of direct commits to `main`:
 ```sh
 git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 ```
+
