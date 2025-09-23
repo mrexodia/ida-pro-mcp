@@ -1546,7 +1546,7 @@ def run_capa_on_file() -> str:
         raise IDAError(f"Capa executable not found at: {capa_path}")
     
     # Build command with verbose flags
-    cmd = [capa_path, "-vv", file_path]
+    cmd = (['wine', capa_path] if capa_path.lower().endswith('.exe') and os.name != 'nt' else [capa_path]) + ["-vv", file_path]
     
     try:
         # Run capa with subprocess
@@ -2260,3 +2260,4 @@ class MCP(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return MCP()
+
