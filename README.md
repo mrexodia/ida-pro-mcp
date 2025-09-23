@@ -134,7 +134,11 @@ Workflow
    - If runtime string decryptors exist, statically simulate with constants.
 
 8) Escalate if stuck
-   - Call deep_reasoning with exact decomp/disasm slice and current hypothesis.Make sure that the prompt is very explciative and well made adn it includes enough context for the GPT model to work with, provide a a lot of context.
+   - Call deep_reasoning with the exact decomp/disasm slice and the current hypothesis.
+   - Make sure that the prompt is very explciative and well made adn it includes enough context for the GPT model to work with, provide a a lot of context.
+   - Make sure that the prompt has facts and data, like code samples taken from IDA, the things you try, and the things you are struggling with.
+   - Use it not just for explaining stuff, but use it for analysis of very complex structures
+   - Do not abuse this tool; use it only when necessary.  
 
 9) Derive solution
    - Reconstruct transform and invert to get password/flag.
@@ -283,6 +287,7 @@ Generate the changelog of direct commits to `main`:
 ```sh
 git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 ```
+
 
 
 
