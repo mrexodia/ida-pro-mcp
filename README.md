@@ -99,6 +99,7 @@ Rules
 - Prefer decomp; drop to disasm for detail.
 - Rename symbols and fix types.
 - Create files only when necessary (report.md; tiny helper script if essential).
+- Make sure to add a lot of comments in IDA for me to understand every bit of the code.
 
 How the tools work
 - All actions via MCP. Read-mostly unless a write tool is explicit.
@@ -282,6 +283,7 @@ Generate the changelog of direct commits to `main`:
 ```sh
 git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 ```
+
 
 
 
