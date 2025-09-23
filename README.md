@@ -87,20 +87,72 @@ _Note_: You need to load a binary in IDA before the plugin menu will show up.
 
 ## Prompt Engineering
 
-LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
+```
+IDA Pro MCP – Crackme Analysis (CTF)
 
-> Your task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
-> - Inspect the decompilation and add comments with your findings
-> - Rename variables to more sensible names
-> - Change the variable and argument types if necessary (especially pointer and array types)
-> - Change function names to be more descriptive
-> - If more details are necessary, disassemble the function and add comments with your findings
-> - NEVER convert number bases yourself. Use the convert_number MCP tool if needed!
-> - Do not attempt brute forcing, derive any solutions purely from the disassembly and simple python scripts
-> - Create a report.md with your findings and steps taken at the end
-> - When you find a solution, prompt to user for feedback with the password you found
+Goal
+Derive password/flag statically. Use MCP tools only. Produce a concise report.md.
 
-This prompt was just the first experiment, please share if you found ways to improve the output!
+Rules
+- No brute force or fuzzing.
+- NEVER convert bases by hand. Always use convert_number(value, to_base).
+- Prefer decomp; drop to disasm for detail.
+- Rename symbols and fix types.
+- Create files only when necessary (report.md; tiny helper script if essential).
+
+How the tools work
+- All actions via MCP. Read-mostly unless a write tool is explicit.
+- Use ida.* to fetch/annotate program data. Use capa.* for triage.
+- Use deep_reasoning when stuck or obfuscation is heavy.
+- Use python_eval only for small, deterministic math from the binary.
+
+Workflow
+1) Connectivity
+   - mcp.health()/mcp.ping(); record mcp.version().
+
+2) CAPA triage
+   - capa.scan_current(); summarize capabilities.
+
+3) Metadata
+   - ida.get_metadata(), get_segments(), get_entrypoint(), get_imports(), get_exports(); log.
+
+4) Strings + Xrefs
+   - ida.get_strings(minlen≥4, ascii+unicode).
+   - For hits (“flag”, “pass”, “key”, “correct”, “wrong”), list xrefs: ida.get_xrefs_to(addr).
+
+5) Functions
+   - ida.get_functions(); decompile: ida.decompile(ea); if unclear, ida.disasm(ea).
+   - Rename to semantics (e.g., check_password). Fix prototypes. Add brief comments at key ops.
+
+6) Data/Control flow
+   - Trace input → validators. Identify tables, hashes, PRNG, crypto, checksums.
+   - Mirror small steps with python_eval. Use convert_number for all base/width changes.
+
+7) Obfuscation check
+   - Detect opaque predicates, flattening, dispatch loops, decryptors.
+   - If runtime string decryptors exist, statically simulate with constants.
+
+8) Escalate if stuck
+   - Call deep_reasoning with exact decomp/disasm slice and current hypothesis.
+
+9) Derive solution
+   - Reconstruct transform and invert to get password/flag.
+   - Validate by re-simulating. No execution or patching.
+
+10) Reporting
+   - Create report.md:
+     • Metadata + capa summary
+     • Key functions (names, roles, prototypes)
+     • String/xref map
+     • Algorithm reconstruction
+     • Minimal helper script if essential
+     • Final password/flag
+   - Output the password and ask the user to confirm.
+
+Original requirements preserved:
+- Inspect decomp and comment; rename vars; fix types; rename funcs; drop to disasm when needed; NEVER manual base conversion; no brute force; produce report.md; ask user to confirm the found password.
+
+```
 
 ## Tips for Enhancing LLM Accuracy
 
@@ -230,4 +282,5 @@ Generate the changelog of direct commits to `main`:
 ```sh
 git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 ```
+
 
