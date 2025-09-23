@@ -1487,31 +1487,59 @@ def set_local_variable_type(
 
 @jsonrpc
 def deep_reasoning(prompt: str) -> str:
-    """Perform advanced AI-powered analysis using OpenAI's GPT model for complex reverse engineering tasks. This tool leverages GPT's superior reasoning capabilities for tasks that require deep contextual understanding, complex pattern recognition, and detailed analysis beyond standard static analysis. Use for understanding complex data structures, algorithm analysis, cryptographic patterns, and sophisticated code analysis. Not for simple queries - use only when deep reasoning is specifically needed."""
+    """High-effort analysis via OpenAI Responses API."""
     from openai import OpenAI
-
-    model=GPT_MODEL
+    model = GPT_MODEL
     api_key = OPENAI_API_KEY
     if not api_key:
-        return "OpenAI API key not set. Please set the OPENAI_API_KEY environment variable."
-    
+        return "OpenAI API key not set."
+
     if len(prompt) > 32000:
-        return "Prompt too long. Please limit to 32,000 characters."
-    
+        return "Prompt too long. Max 32,000 chars."
+
     client = OpenAI(api_key=api_key)
     try:
-        r = client.responses.create(
+        resp = client.responses.create(
             model=model,
-            reasoning={"effort": "high"},        # low | medium | high
-            text={"verbosity": "high"},          # optional: low | medium | high
-            input=[
-                {"role": "system", "content": " You are an expert reverse engineer and security researcher. Provide detailed, accurate, and context-aware analysis based on the provided information. Use technical language appropriate for experienced professionals in the field."},
-                {"role": "user", "content": prompt},
-            ],
-            max_output_tokens=8192               # use this name with Responses API
-            # note: omit temperature/top_p for GPT-5
+            instructions=(
+                "You are an expert reverse engineer and security researcher. "
+                "Provide precise, reproducible analysis for experienced practitioners."
+            ),
+            input=prompt,               # pass the user content only
+            reasoning={"effort": "high"},
+            text={"verbosity": "high"},
+            max_output_tokens=80000,
+            # store=False  # uncomment if you do not want server-side retention
         )
-        return r.output_text
+
+        # Robust text extraction (do not rely on resp.output_text)
+        pieces = []
+        for item in getattr(resp, "output", []) or []:
+            for c in getattr(item, "content", []) or []:
+                t = getattr(c, "text", None)
+                if t:
+                    pieces.append(t)
+
+        out = "".join(pieces).strip()
+
+        # If empty, return a compact diagnostic
+        if not out:
+            meta = {
+                "status": getattr(resp, "status", None),
+                "incomplete": getattr(resp, "incomplete_details", None),
+                "error": getattr(resp, "error", None),
+                "usage": getattr(resp, "usage", None),
+                "types": [
+                    [getattr(it, "type", None),
+                     [getattr(cc, "type", None) for cc in (getattr(it, "content", []) or [])]]
+                    for it in (getattr(resp, "output", []) or [])
+                ],
+                "request_id": getattr(resp, "_request_id", None),
+            }
+            return f"[empty text output]\n{meta}"
+
+        return out
+
     except Exception as e:
         return f"OpenAI API error: {e}"
 
@@ -2260,4 +2288,5 @@ class MCP(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return MCP()
+
 
