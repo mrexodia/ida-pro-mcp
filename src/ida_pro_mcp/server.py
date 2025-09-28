@@ -386,7 +386,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
         else:
             # Copy environment variables from the existing server if present
             if mcp.name in mcp_servers:
-                for key, value in mcp_servers[mcp.name].get("env", {}):
+                for key, value in mcp_servers[mcp.name].get("env", {}).items():
                     env[key] = value
             if copy_python_env(env):
                 print(f"[WARNING] Custom Python environment variables detected")
