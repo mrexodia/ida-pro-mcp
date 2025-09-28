@@ -910,7 +910,7 @@ class DisassemblyFunction(TypedDict):
 def disassemble_function(
     start_address: Annotated[str, "Address of the function to disassemble"],
 ) -> DisassemblyFunction:
-    """Get assembly code for a function"""
+    """Get assembly code for a function (API-compatible with older IDA builds)"""
     start = parse_address(start_address)
     func: ida_funcs.func_t = idaapi.get_func(start)
     if not func:
@@ -918,107 +918,62 @@ def disassemble_function(
     if is_window_active():
         ida_kernwin.jumpto(start)
 
-    lines = []
-    for address in ida_funcs.func_item_iterator_t(func):
-        seg = idaapi.getseg(address)
+    func_name = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
+
+    lines: list[DisassemblyLine] = []
+    for ea in idautils.FuncItems(func.start_ea):
+        if ea == idaapi.BADADDR:
+            continue
+
+        seg = idaapi.getseg(ea)
         segment = idaapi.get_segm_name(seg) if seg else None
 
-        label = idc.get_name(address, 0)
-        if label and label == func.name and address == func.start_ea:
+        label = idc.get_name(ea, 0)
+        if label and label == func_name and ea == func.start_ea:
             label = None
         if label == "":
             label = None
 
         comments = []
-        if comment := idaapi.get_cmt(address, False):
-            comments += [comment]
-        if comment := idaapi.get_cmt(address, True):
-            comments += [comment]
+        c = idaapi.get_cmt(ea, False)
+        if c: comments.append(c)
+        c = idaapi.get_cmt(ea, True)
+        if c: comments.append(c)
 
-        raw_instruction = idaapi.generate_disasm_line(address, 0)
-        tls = ida_kernwin.tagged_line_sections_t()
-        ida_kernwin.parse_tagged_line_sections(tls, raw_instruction)
-        insn_section = tls.first(ida_lines.COLOR_INSN)
-
-        operands = []
-        for op_tag in range(ida_lines.COLOR_OPND1, ida_lines.COLOR_OPND8 + 1):
-            op_n = tls.first(op_tag)
-            if not op_n:
+        mnem = idc.print_insn_mnem(ea) or ""
+        ops = []
+        for n in range(8):
+            if idc.get_operand_type(ea, n) == idaapi.o_void:
                 break
+            ops.append(idc.print_operand(ea, n) or "")
+        instruction = f"{mnem} {', '.join(ops)}".rstrip()
 
-            op: str = op_n.substr(raw_instruction)
-            op_str = ida_lines.tag_remove(op)
+        line: DisassemblyLine = {"address": f"{ea:#x}", "instruction": instruction}
+        if segment: line["segment"] = segment
+        if label:   line["label"] = label
+        if comments: line["comments"] = comments
+        lines.append(line)
 
-            # Do a lot of work to add address comments for symbols
-            for idx in range(len(op) - 2):
-                if op[idx] != idaapi.COLOR_ON:
-                    continue
+    # prototype and args via tinfo (safe across versions)
+    rettype = None
+    args: Optional[list[Argument]] = None
+    tif = ida_typeinf.tinfo_t()
+    if ida_nalt.get_tinfo(tif, func.start_ea) and tif.is_func():
+        ftd = ida_typeinf.func_type_data_t()
+        if tif.get_func_details(ftd):
+            rettype = str(ftd.rettype)
+            args = [Argument(name=(a.name or f"arg{i}"), type=str(a.type))
+                    for i, a in enumerate(ftd)]
 
-                idx += 1
-                if ord(op[idx]) != idaapi.COLOR_ADDR:
-                    continue
-
-                idx += 1
-                addr_string = op[idx:idx + idaapi.COLOR_ADDR_SIZE]
-                idx += idaapi.COLOR_ADDR_SIZE
-
-                addr = int(addr_string, 16)
-
-                # Find the next color and slice until there
-                symbol = op[idx:op.find(idaapi.COLOR_OFF, idx)]
-
-                if symbol == '':
-                    # We couldn't figure out the symbol, so use the whole op_str
-                    symbol = op_str
-
-                comments += [f"{symbol}={addr:#x}"]
-
-                # print its value if its type is available
-                try:
-                    value = get_global_variable_value_internal(addr)
-                except:
-                    continue
-
-                comments += [f"*{symbol}={value}"]
-
-            operands += [op_str]
-
-        mnem = ida_lines.tag_remove(insn_section.substr(raw_instruction))
-        instruction = f"{mnem} {', '.join(operands)}"
-
-        line = DisassemblyLine(
-            address=f"{address:#x}",
-            instruction=instruction,
-        )
-
-        if len(comments) > 0:
-            line.update(comments=comments)
-
-        if segment:
-            line.update(segment=segment)
-
-        if label:
-            line.update(label=label)
-
-        lines += [line]
-
-    prototype = func.get_prototype()
-    arguments: list[Argument] = [Argument(name=arg.name, type=f"{arg.type}") for arg in prototype.iter_func()] if prototype else None
-
-    disassembly_function = DisassemblyFunction(
-        name=func.name,
-        start_ea=f"{func.start_ea:#x}",
-        stack_frame=get_stack_frame_variables_internal(func.start_ea),
-        lines=lines
-    )
-
-    if prototype:
-        disassembly_function.update(return_type=f"{prototype.get_rettype()}")
-
-    if arguments:
-        disassembly_function.update(arguments=arguments)
-
-    return disassembly_function
+    out: DisassemblyFunction = {
+        "name": func_name,
+        "start_ea": f"{func.start_ea:#x}",
+        "stack_frame": get_stack_frame_variables_internal(func.start_ea),
+        "lines": lines,
+    }
+    if rettype: out["return_type"] = rettype
+    if args:    out["arguments"] = args
+    return out
 
 class Xref(TypedDict):
     address: str
