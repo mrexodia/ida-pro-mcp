@@ -100,6 +100,10 @@ LLMs are prone to hallucinations and you need to be specific with your prompting
 
 This prompt was just the first experiment, please share if you found ways to improve the output!
 
+Live stream discussing prompting and showing some real-world malware analysis:
+
+[![](https://img.youtube.com/vi/iFxNuk3kxhk/0.jpg)](https://www.youtube.com/watch?v=iFxNuk3kxhk)
+
 ## Tips for Enhancing LLM Accuracy
 
 Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts). Make sure to tell the LLM to use the `conver_number` MCP and you might also need [math-mcp](https://github.com/EthanHenrickson/math-mcp) for certain operations.
@@ -228,3 +232,4 @@ Generate the changelog of direct commits to `main`:
 ```sh
 git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 ```
+
