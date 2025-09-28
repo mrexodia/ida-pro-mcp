@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 
 if sys.version_info < (3, 11):
     raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
@@ -11,6 +12,14 @@ import http.server
 from urllib.parse import urlparse
 from typing import Any, Callable, get_type_hints, TypedDict, Optional, Annotated, TypeVar, Generic, NotRequired
 
+
+# OpenAI API Configuration
+GPT_MODEL = "gpt-5"
+OPENAI_API_KEY = "sk-..."
+
+# Capa Configuration
+ELF_CAPA_PATH="/home/mateim/Desktop/ida_mcp_dev/ida-pro-mcp/capa"
+WIN_CAPA_PATH="/home/mateim/Desktop/ida_mcp_dev/ida-pro-mcp/capa.exe"
 
 class JSONRPCError(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
@@ -901,7 +910,7 @@ class DisassemblyFunction(TypedDict):
 def disassemble_function(
     start_address: Annotated[str, "Address of the function to disassemble"],
 ) -> DisassemblyFunction:
-    """Get assembly code for a function"""
+    """Get assembly code for a function (API-compatible with older IDA builds)"""
     start = parse_address(start_address)
     func: ida_funcs.func_t = idaapi.get_func(start)
     if not func:
@@ -909,107 +918,62 @@ def disassemble_function(
     if is_window_active():
         ida_kernwin.jumpto(start)
 
-    lines = []
-    for address in ida_funcs.func_item_iterator_t(func):
-        seg = idaapi.getseg(address)
+    func_name = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
+
+    lines: list[DisassemblyLine] = []
+    for ea in idautils.FuncItems(func.start_ea):
+        if ea == idaapi.BADADDR:
+            continue
+
+        seg = idaapi.getseg(ea)
         segment = idaapi.get_segm_name(seg) if seg else None
 
-        label = idc.get_name(address, 0)
-        if label and label == func.name and address == func.start_ea:
+        label = idc.get_name(ea, 0)
+        if label and label == func_name and ea == func.start_ea:
             label = None
         if label == "":
             label = None
 
         comments = []
-        if comment := idaapi.get_cmt(address, False):
-            comments += [comment]
-        if comment := idaapi.get_cmt(address, True):
-            comments += [comment]
+        c = idaapi.get_cmt(ea, False)
+        if c: comments.append(c)
+        c = idaapi.get_cmt(ea, True)
+        if c: comments.append(c)
 
-        raw_instruction = idaapi.generate_disasm_line(address, 0)
-        tls = ida_kernwin.tagged_line_sections_t()
-        ida_kernwin.parse_tagged_line_sections(tls, raw_instruction)
-        insn_section = tls.first(ida_lines.COLOR_INSN)
-
-        operands = []
-        for op_tag in range(ida_lines.COLOR_OPND1, ida_lines.COLOR_OPND8 + 1):
-            op_n = tls.first(op_tag)
-            if not op_n:
+        mnem = idc.print_insn_mnem(ea) or ""
+        ops = []
+        for n in range(8):
+            if idc.get_operand_type(ea, n) == idaapi.o_void:
                 break
+            ops.append(idc.print_operand(ea, n) or "")
+        instruction = f"{mnem} {', '.join(ops)}".rstrip()
 
-            op: str = op_n.substr(raw_instruction)
-            op_str = ida_lines.tag_remove(op)
+        line: DisassemblyLine = {"address": f"{ea:#x}", "instruction": instruction}
+        if segment: line["segment"] = segment
+        if label:   line["label"] = label
+        if comments: line["comments"] = comments
+        lines.append(line)
 
-            # Do a lot of work to add address comments for symbols
-            for idx in range(len(op) - 2):
-                if op[idx] != idaapi.COLOR_ON:
-                    continue
+    # prototype and args via tinfo (safe across versions)
+    rettype = None
+    args: Optional[list[Argument]] = None
+    tif = ida_typeinf.tinfo_t()
+    if ida_nalt.get_tinfo(tif, func.start_ea) and tif.is_func():
+        ftd = ida_typeinf.func_type_data_t()
+        if tif.get_func_details(ftd):
+            rettype = str(ftd.rettype)
+            args = [Argument(name=(a.name or f"arg{i}"), type=str(a.type))
+                    for i, a in enumerate(ftd)]
 
-                idx += 1
-                if ord(op[idx]) != idaapi.COLOR_ADDR:
-                    continue
-
-                idx += 1
-                addr_string = op[idx:idx + idaapi.COLOR_ADDR_SIZE]
-                idx += idaapi.COLOR_ADDR_SIZE
-
-                addr = int(addr_string, 16)
-
-                # Find the next color and slice until there
-                symbol = op[idx:op.find(idaapi.COLOR_OFF, idx)]
-
-                if symbol == '':
-                    # We couldn't figure out the symbol, so use the whole op_str
-                    symbol = op_str
-
-                comments += [f"{symbol}={addr:#x}"]
-
-                # print its value if its type is available
-                try:
-                    value = get_global_variable_value_internal(addr)
-                except:
-                    continue
-
-                comments += [f"*{symbol}={value}"]
-
-            operands += [op_str]
-
-        mnem = ida_lines.tag_remove(insn_section.substr(raw_instruction))
-        instruction = f"{mnem} {', '.join(operands)}"
-
-        line = DisassemblyLine(
-            address=f"{address:#x}",
-            instruction=instruction,
-        )
-
-        if len(comments) > 0:
-            line.update(comments=comments)
-
-        if segment:
-            line.update(segment=segment)
-
-        if label:
-            line.update(label=label)
-
-        lines += [line]
-
-    prototype = func.get_prototype()
-    arguments: list[Argument] = [Argument(name=arg.name, type=f"{arg.type}") for arg in prototype.iter_func()] if prototype else None
-
-    disassembly_function = DisassemblyFunction(
-        name=func.name,
-        start_ea=f"{func.start_ea:#x}",
-        stack_frame=get_stack_frame_variables_internal(func.start_ea),
-        lines=lines
-    )
-
-    if prototype:
-        disassembly_function.update(return_type=f"{prototype.get_rettype()}")
-
-    if arguments:
-        disassembly_function.update(arguments=arguments)
-
-    return disassembly_function
+    out: DisassemblyFunction = {
+        "name": func_name,
+        "start_ea": f"{func.start_ea:#x}",
+        "stack_frame": get_stack_frame_variables_internal(func.start_ea),
+        "lines": lines,
+    }
+    if rettype: out["return_type"] = rettype
+    if args:    out["arguments"] = args
+    return out
 
 class Xref(TypedDict):
     address: str
@@ -1475,6 +1439,128 @@ def set_local_variable_type(
     if not ida_hexrays.modify_user_lvars(func.start_ea, modifier):
         raise IDAError(f"Failed to modify local variable: {variable_name}")
     refresh_decompiler_ctext(func.start_ea)
+
+@jsonrpc
+def deep_reasoning(prompt: str) -> str:
+    """High-effort analysis via OpenAI Responses API."""
+    from openai import OpenAI
+    model = GPT_MODEL
+    api_key = OPENAI_API_KEY
+    if not api_key:
+        return "OpenAI API key not set."
+
+    if len(prompt) > 32000:
+        return "Prompt too long. Max 32,000 chars."
+
+    client = OpenAI(api_key=api_key)
+    try:
+        resp = client.responses.create(
+            model=model,
+            instructions=(
+                "You are an expert reverse engineer and security researcher. "
+                "Provide precise, reproducible analysis for experienced practitioners."
+            ),
+            input=prompt,               # pass the user content only
+            reasoning={"effort": "high"},
+            text={"verbosity": "high"},
+            max_output_tokens=80000,
+            # store=False  # uncomment if you do not want server-side retention
+        )
+
+        # Robust text extraction (do not rely on resp.output_text)
+        pieces = []
+        for item in getattr(resp, "output", []) or []:
+            for c in getattr(item, "content", []) or []:
+                t = getattr(c, "text", None)
+                if t:
+                    pieces.append(t)
+
+        out = "".join(pieces).strip()
+
+        # If empty, return a compact diagnostic
+        if not out:
+            meta = {
+                "status": getattr(resp, "status", None),
+                "incomplete": getattr(resp, "incomplete_details", None),
+                "error": getattr(resp, "error", None),
+                "usage": getattr(resp, "usage", None),
+                "types": [
+                    [getattr(it, "type", None),
+                     [getattr(cc, "type", None) for cc in (getattr(it, "content", []) or [])]]
+                    for it in (getattr(resp, "output", []) or [])
+                ],
+                "request_id": getattr(resp, "_request_id", None),
+            }
+            return f"[empty text output]\n{meta}"
+
+        return out
+
+    except Exception as e:
+        return f"OpenAI API error: {e}"
+
+
+@jsonrpc
+@idaread
+def run_capa_on_file() -> str:
+    """Run capa analysis on the current file with verbose output"""
+    
+    # Get the full path of the current file
+    file_path = idaapi.get_input_file_path()
+    if not file_path or not os.path.exists(file_path):
+        raise IDAError("Could not get valid input file path")
+    
+    # Detect architecture to choose appropriate capa executable
+    try:
+        info = idaapi.get_inf_structure()
+        is_64bit = info.is_64bit()
+        is_windows = info.filetype == idaapi.f_PE
+    except AttributeError:
+        # Use newer IDA API
+        is_64bit = ida_ida.inf_is_64bit()
+        is_windows = ida_ida.inf_get_filetype() == idaapi.f_PE
+    
+    # Choose capa executable based on platform and architecture
+    if is_windows or os.name == 'nt':
+        capa_path = WIN_CAPA_PATH
+    else:
+        capa_path = ELF_CAPA_PATH
+    
+    if not os.path.exists(capa_path):
+        raise IDAError(f"Capa executable not found at: {capa_path}")
+    
+    # Build command with verbose flags
+    cmd = (['wine', capa_path] if capa_path.lower().endswith('.exe') and os.name != 'nt' else [capa_path]) + ["-vv", file_path]
+    
+    try:
+        # Run capa with subprocess
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=400  
+        )
+        
+        # Return clean output - prioritize stdout, include stderr only if there are errors
+        if result.returncode == 0:
+            # Successful execution - return stdout directly
+            output = result.stdout.strip() if result.stdout else ""
+        else:
+            # Error occurred - include both stdout and stderr with labels
+            output = ""
+            if result.stdout:
+                output += result.stdout.strip() + "\n\n"
+            if result.stderr:
+                output += "ERRORS:\n" + result.stderr.strip() + "\n"
+            output += f"\nCapa exited with return code: {result.returncode}"
+        
+        return output if output else "Capa analysis completed but produced no output"
+        
+    except subprocess.TimeoutExpired:
+        raise IDAError("Capa analysis timed out after 5 minutes")
+    except subprocess.CalledProcessError as e:
+        raise IDAError(f"Capa execution failed: {e}")
+    except Exception as e:
+        raise IDAError(f"Error running capa: {str(e)}")
 
 class StackFrameVariable(TypedDict):
     name: str
@@ -2157,3 +2243,5 @@ class MCP(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return MCP()
+
+
