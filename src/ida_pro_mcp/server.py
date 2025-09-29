@@ -518,7 +518,7 @@ def main():
             mcp.settings.host = url.hostname
             mcp.settings.port = url.port
             # NOTE: npx @modelcontextprotocol/inspector for debugging
-            print(f"MCP Server availabile at http://{mcp.settings.host}:{mcp.settings.port}/sse")
+            print(f"MCP Server available at http://{mcp.settings.host}:{mcp.settings.port}/sse")
             mcp.settings.log_level = "INFO"
             mcp.run(transport="sse")
     except KeyboardInterrupt:
