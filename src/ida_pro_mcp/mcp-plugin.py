@@ -1979,8 +1979,8 @@ def dbg_get_registers() -> list[dict[str, str]]:
                 "value": reg_value,
             })
         result.append({
-            "thread_id": tid,
-            "registers": regs,
+            "thread_id": str(tid),
+            "registers": json.dumps(regs),
         })
     return result
 
