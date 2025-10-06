@@ -15,7 +15,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "mcp>=1.6.0",
+    "mcp>=1.16.0",
 ]
 
 [project.urls]
@@ -29,8 +29,13 @@ build-backend = "setuptools.build_meta"
 [dependency-groups]
 dev = [
     "mcp[cli]>=1.6.0",
+    "ty>=0.0.1a21",
 ]
 
 [project.scripts]
 ida-pro-mcp = "ida_pro_mcp.server:main"
 idalib-mcp = "ida_pro_mcp.idalib_server:main"
+
+[tool.pyright]
+include = ["src/ida_pro_mcp"]
+exclude = ["src/ida_pro_mcp/server_generated.py"]
