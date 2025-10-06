@@ -18,34 +18,60 @@ Available functionality:
 - `list_functions(offset, count)`: List all functions in the database (paginated).
 - `list_globals_filter(offset, count, filter)`: List matching globals in the database (paginated, filtered).
 - `list_globals(offset, count)`: List all globals in the database (paginated).
+- `list_imports(offset, count)`: List all imported symbols with their name and module (paginated).
 - `list_strings_filter(offset, count, filter)`: List matching strings in the database (paginated, filtered).
 - `list_strings(offset, count)`: List all strings in the database (paginated).
 - `list_local_types()`: List all Local types in the database.
 - `decompile_function(address)`: Decompile a function at the given address.
-- `disassemble_function(start_address)`: Get assembly code (address: instruction; comment) for a function.
+- `disassemble_function(start_address)`: Get assembly code for a function (API-compatible with older IDA builds).     
 - `get_xrefs_to(address)`: Get all cross references to the given address.
 - `get_xrefs_to_field(struct_name, field_name)`: Get all cross references to a named struct field (member).
+- `get_callees(function_address)`: Get all the functions called (callees) by the function at function_address.        
+- `get_callers(function_address)`: Get all callers of the given address.
 - `get_entry_points()`: Get all entry points in the database.
-- `set_comment(address, comment)`: Set a comment for a given address in the function disassembly and pseudocode.
+- `set_comment(address, comment)`: Set a comment for a given address in the function disassembly and pseudocode.      
 - `rename_local_variable(function_address, old_name, new_name)`: Rename a local variable in a function.
 - `rename_global_variable(old_name, new_name)`: Rename a global variable.
 - `set_global_variable_type(variable_name, new_type)`: Set a global variable's type.
+- `patch_address_assembles(address, instructions)`: <no description>.
+- `get_global_variable_value_by_name(variable_name)`: Read a global variable's value (if known at compile-time).      
+- `get_global_variable_value_at_address(address)`: Read a global variable's value by its address (if known at compile-time).
 - `rename_function(function_address, new_name)`: Rename a function.
 - `set_function_prototype(function_address, prototype)`: Set a function's prototype.
 - `declare_c_type(c_declaration)`: Create or update a local type from a C declaration.
 - `set_local_variable_type(function_address, variable_name, new_type)`: Set a local variable's type.
+- `get_stack_frame_variables(function_address)`: Retrieve the stack frame variables for a given function.
+- `get_defined_structures()`: Returns a list of all defined structures.
+- `analyze_struct_detailed(name)`: Detailed analysis of a structure with all fields.
+- `get_struct_at_address(address, struct_name)`: Get structure field values at a specific address.
+- `get_struct_info_simple(name)`: Simple function to get basic structure information.
+- `search_structures(filter)`: Search for structures by name pattern.
+- `rename_stack_frame_variable(function_address, old_name, new_name)`: Change the name of a stack variable for an IDA 
+function.
+- `create_stack_frame_variable(function_address, offset, variable_name, type_name)`: For a given function, create a stack variable at an offset and with a specific type.
+- `set_stack_frame_variable_type(function_address, variable_name, type_name)`: For a given disassembled function, set 
+the type of a stack variable.
+- `delete_stack_frame_variable(function_address, variable_name)`: Delete the named stack variable for a given function.
+- `read_memory_bytes(memory_address, size)`: Read bytes at a given address.
+- `data_read_byte(address)`: Read the 1 byte value at the specified address.
+- `data_read_word(address)`: Read the 2 byte value at the specified address as a WORD.
+- `data_read_dword(address)`: Read the 4 byte value at the specified address as a DWORD.
+- `data_read_qword(address)`: Read the 8 byte value at the specified address as a QWORD.
+- `data_read_string(address)`: Read the string at the specified address.
 
 Unsafe functions (`--unsafe` flag required):
 
 - `dbg_get_registers()`: Get all registers and their values. This function is only available when debugging.
 - `dbg_get_call_stack()`: Get the current call stack.
 - `dbg_list_breakpoints()`: List all breakpoints in the program.
-- `dbg_start_process()`: Start the debugger.
+- `dbg_start_process()`: Start the debugger, returns the current instruction pointer.
 - `dbg_exit_process()`: Exit the debugger.
-- `dbg_continue_process()`: Continue the debugger.
+- `dbg_continue_process()`: Continue the debugger, returns the current instruction pointer.
 - `dbg_run_to(address)`: Run the debugger to the specified address.
 - `dbg_set_breakpoint(address)`: Set a breakpoint at the specified address.
-- `dbg_delete_breakpoint(address)`: del a breakpoint at the specified address.
+- `dbg_step_into()`: Step into the current instruction.
+- `dbg_step_over()`: Step over the current instruction.
+- `dbg_delete_breakpoint(address)`: Delete a breakpoint at the specified address.
 - `dbg_enable_breakpoint(address, enable)`: Enable or disable a breakpoint at the specified address.
 
 ## Prerequisites

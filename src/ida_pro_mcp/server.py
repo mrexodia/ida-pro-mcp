@@ -211,12 +211,13 @@ def generate_readme():
                 signature += ", "
             signature += arg.arg
         signature += ")"
-        description = visitor.descriptions.get(function.name, "<no description>").strip()
+        description = visitor.descriptions.get(function.name, "<no description>").strip().split("\n")[0]
         if description[-1] != ".":
             description += "."
         return f"- `{signature}`: {description}"
     for safe_function in SAFE_FUNCTIONS:
-        print(get_description(safe_function))
+        if safe_function != "check_connection":
+            print(get_description(safe_function))
     print("\nUnsafe functions (`--unsafe` flag required):\n")
     for unsafe_function in UNSAFE_FUNCTIONS:
         print(get_description(unsafe_function))
@@ -312,10 +313,10 @@ def print_mcp_config():
 def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
     if sys.platform == "win32":
         configs = {
-            "Cline": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
-            "Roo Code": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
-            "Kilo Code": (os.path.join(os.getenv("APPDATA"), "Code", "User", "globalStorage", "kilocode.kilo-code", "settings"), "mcp_settings.json"),
-            "Claude": (os.path.join(os.getenv("APPDATA"), "Claude"), "claude_desktop_config.json"),
+            "Cline": (os.path.join(os.getenv("APPDATA", ""), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
+            "Roo Code": (os.path.join(os.getenv("APPDATA", ""), "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
+            "Kilo Code": (os.path.join(os.getenv("APPDATA", ""), "Code", "User", "globalStorage", "kilocode.kilo-code", "settings"), "mcp_settings.json"),
+            "Claude": (os.path.join(os.getenv("APPDATA", ""), "Claude"), "claude_desktop_config.json"),
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
             "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
