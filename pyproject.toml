@@ -1,6 +1,6 @@
 [project]
 name = "ida-pro-mcp"
-version = "1.4.0"
+version = "1.5.0"
 description = "Vibe reversing with IDA Pro"
 readme = "README.md"
 requires-python = ">=3.11"
