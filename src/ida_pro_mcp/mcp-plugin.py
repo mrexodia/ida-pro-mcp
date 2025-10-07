@@ -202,12 +202,28 @@ class MCPHTTPServer(http.server.HTTPServer):
 
 class Server:
     HOST = "localhost"
-    PORT = 13337
+    BASE_PORT = 13337
+    MAX_PORT_ATTEMPTS = 100  # Try ports 13337-13436
 
     def __init__(self):
         self.server = None
         self.server_thread = None
         self.running = False
+        self.port = None
+
+    def _find_available_port(self):
+        """Find an available port starting from BASE_PORT"""
+        import socket
+        for port_offset in range(self.MAX_PORT_ATTEMPTS):
+            port = self.BASE_PORT + port_offset
+            try:
+                # Try to bind to the port to check if it's available
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind((self.HOST, port))
+                    return port
+            except OSError:
+                continue
+        return None
 
     def start(self):
         if self.running:
@@ -229,17 +245,83 @@ class Server:
         if self.server_thread:
             self.server_thread.join()
             self.server = None
-        print("[MCP] Server stopped")
+        if self.port:
+            print(f"[MCP] Server stopped (was using port {self.port})")
+            self.port = None
+        else:
+            print("[MCP] Server stopped")
 
     def _run_server(self):
         try:
+            # Find an available port
+            self.port = self._find_available_port()
+            if self.port is None:
+                print(f"[MCP] Error: No available ports in range {self.BASE_PORT}-{self.BASE_PORT + self.MAX_PORT_ATTEMPTS - 1}")
+                self.running = False
+                return
+
             # Create server in the thread to handle binding
-            self.server = MCPHTTPServer((Server.HOST, Server.PORT), JSONRPCRequestHandler)
-            print(f"[MCP] Server started at http://{Server.HOST}:{Server.PORT}")
+            self.server = MCPHTTPServer((self.HOST, self.port), JSONRPCRequestHandler)
+            print(f"[MCP] Server started at http://{self.HOST}:{self.port}")
+            
+            # Update IDA window title to show the port (compatible with different IDA versions)
+            try:
+                import ida_kernwin
+                import idaapi
+                
+                # Try different methods depending on IDA version
+                current_title = None
+                
+                # Method 1: Try get_window_title (IDA 7.6+)
+                if hasattr(ida_kernwin, 'get_window_title'):
+                    current_title = ida_kernwin.get_window_title()
+                
+                # Method 2: Try via QWidget (if Qt is available)
+                if not current_title:
+                    try:
+                        from PyQt5.QtWidgets import QApplication
+                        app = QApplication.instance()
+                        if app:
+                            for widget in app.topLevelWidgets():
+                                if widget.isVisible() and "IDA" in widget.windowTitle():
+                                    current_title = widget.windowTitle()
+                                    break
+                    except:
+                        pass
+                
+                # Only update if we successfully got the title and it doesn't already have the MCP tag
+                if current_title and "[MCP:" not in current_title:
+                    new_title = f"{current_title} [MCP:{self.port}]"
+                    
+                    # Method 1: Try set_window_title
+                    if hasattr(ida_kernwin, 'set_window_title'):
+                        ida_kernwin.set_window_title(new_title)
+                    else:
+                        # Method 2: Try via QWidget
+                        try:
+                            from PyQt5.QtWidgets import QApplication
+                            app = QApplication.instance()
+                            if app:
+                                for widget in app.topLevelWidgets():
+                                    if widget.isVisible() and current_title in widget.windowTitle():
+                                        widget.setWindowTitle(new_title)
+                                        break
+                        except:
+                            pass
+                    
+                    print(f"[MCP] Window title updated: {new_title}")
+                elif not current_title:
+                    # If we couldn't get the title, just print the port info
+                    print(f"[MCP] Port info: {self.port} (window title update not available)")
+                    
+            except Exception as e:
+                # Silently fail - window title update is not critical
+                print(f"[MCP] Note: Window title not updated (port: {self.port})")
+            
             self.server.serve_forever()
         except OSError as e:
             if e.errno == 98 or e.errno == 10048:  # Port already in use (Linux/Windows)
-                print("[MCP] Error: Port 13337 is already in use")
+                print(f"[MCP] Error: Port {self.port} is already in use")
             else:
                 print(f"[MCP] Server error: {e}")
             self.running = False

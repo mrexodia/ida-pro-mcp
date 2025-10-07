@@ -8,7 +8,9 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 
 Available functionality:
 
-- `check_connection()`: Check if the IDA plugin is running.
+- `check_connection()`: Check if the IDA plugin is running and show the connected port.
+- `list_ida_instances()`: List all running IDA Pro instances with their ports and open files.
+- `switch_ida_instance(port)`: Switch to a different IDA Pro instance by port number.
 - `get_metadata()`: Get metadata about the current IDB.
 - `get_function_by_name(name)`: Get a function by its name.
 - `get_function_by_address(address)`: Get a function by its address.

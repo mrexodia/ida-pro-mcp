@@ -55,18 +55,220 @@ def make_jsonrpc_request(method: str, *params):
     finally:
         conn.close()
 
+def _scan_all_instances():
+    """Internal helper to scan all IDA instances"""
+    import http.client
+    instances = []
+    
+    # Check ports 13337-13436 for running IDA instances
+    for port_offset in range(100):
+        port = 13337 + port_offset
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
+            request = {
+                "jsonrpc": "2.0",
+                "method": "get_metadata",
+                "params": [],
+                "id": 1,
+            }
+            conn.request("POST", "/mcp", json.dumps(request), {
+                "Content-Type": "application/json"
+            })
+            response = conn.getresponse()
+            data = json.loads(response.read().decode())
+            conn.close()
+            
+            if "result" in data:
+                metadata = data["result"]
+                instances.append({
+                    "port": port,
+                    "module": metadata.get("module", "unknown"),
+                    "path": metadata.get("path", "unknown"),
+                    "base": metadata.get("base", "unknown"),
+                    "metadata": metadata
+                })
+        except Exception:
+            pass
+    
+    return instances
+
 @mcp.tool()
 def check_connection() -> str:
-    """Check if the IDA plugin is running"""
+    """Check if the IDA plugin is running and show current context"""
     try:
         metadata = make_jsonrpc_request("get_metadata")
-        return f"Successfully connected to IDA Pro (open file: {metadata['module']})"
+        current_file = metadata['module']
+        current_path = metadata.get('path', 'unknown')
+        
+        # Also show other available instances for context
+        all_instances = _scan_all_instances()
+        
+        result = f"Connected to IDA Pro on port {ida_port}\n"
+        result += f"Current file: {current_file}\n"
+        result += f"Path: {current_path}\n"
+        
+        if len(all_instances) > 1:
+            result += f"\nFound {len(all_instances)} IDA instances running:\n"
+            for inst in all_instances:
+                if inst['port'] == ida_port:
+                    result += f"  Port {inst['port']}: {inst['module']} (current)\n"
+                else:
+                    result += f"  Port {inst['port']}: {inst['module']}\n"
+            result += "\nUse 'switch_to_file(filename)' to switch to a different instance"
+        
+        return result
     except Exception as e:
         if sys.platform == "darwin":
             shortcut = "Ctrl+Option+M"
         else:
             shortcut = "Ctrl+Alt+M"
-        return f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?"
+        
+        # Try to find other running instances
+        all_instances = _scan_all_instances()
+        if all_instances:
+            result = f"Not connected to port {ida_port}, but found {len(all_instances)} running instance(s):\n"
+            for inst in all_instances:
+                result += f"   • Port {inst['port']}: {inst['module']}\n"
+            result += f"\nUse 'switch_to_file(\"{all_instances[0]['module']}\")' to connect"
+            return result
+        
+        return f"Failed to connect to IDA Pro on port {ida_port}!\n\nDid you run Edit -> Plugins -> MCP ({shortcut}) to start the server?"
+
+@mcp.tool()
+def list_ida_instances() -> str:
+    """List all running IDA Pro instances with their ports and open files"""
+    instances = _scan_all_instances()
+    
+    if not instances:
+        if sys.platform == "darwin":
+            shortcut = "Ctrl+Option+M"
+        else:
+            shortcut = "Ctrl+Alt+M"
+        return f"No running IDA Pro instances found.\n\nOpen IDA Pro and press {shortcut} to start the MCP server."
+    
+    result = f"Found {len(instances)} running IDA Pro instance(s):\n\n"
+    for idx, inst in enumerate(instances, 1):
+        is_current = (inst['port'] == ida_port)
+        marker = "→" if is_current else "•"
+        status = " (current)" if is_current else ""
+        
+        result += f"{marker} Instance #{idx}{status}\n"
+        result += f"  Port: {inst['port']}\n"
+        result += f"  File: {inst['module']}\n"
+        result += f"  Path: {inst['path']}\n"
+        result += f"  Base: {inst['base']}\n"
+        result += "\n"
+    
+    result += "Quick commands:\n"
+    result += "   • switch_to_file(\"filename.exe\") - Switch by filename\n"
+    result += "   • switch_ida_instance(port) - Switch by port number\n"
+    
+    return result
+
+@mcp.tool()
+def switch_ida_instance(port: int) -> str:
+    """Switch to a different IDA Pro instance by port number"""
+    global ida_port
+    import http.client
+    
+    try:
+        # Test if the instance is running
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+        request = {
+            "jsonrpc": "2.0",
+            "method": "get_metadata",
+            "params": [],
+            "id": 1,
+        }
+        conn.request("POST", "/mcp", json.dumps(request), {
+            "Content-Type": "application/json"
+        })
+        response = conn.getresponse()
+        data = json.loads(response.read().decode())
+        conn.close()
+        
+        if "result" in data:
+            metadata = data["result"]
+            old_port = ida_port
+            ida_port = port
+            return f"Switched from port {old_port} to port {port}\nNow connected to: {metadata.get('module', 'unknown')}\nPath: {metadata.get('path', 'unknown')}"
+        else:
+            return f"Failed to connect to IDA Pro on port {port}"
+    except Exception as e:
+        # Show available instances
+        instances = _scan_all_instances()
+        result = f"Failed to connect to port {port}: {str(e)}\n"
+        if instances:
+            result += f"\nAvailable instances:\n"
+            for inst in instances:
+                result += f"   • Port {inst['port']}: {inst['module']}\n"
+        return result
+
+@mcp.tool()
+def switch_to_file(filename: str) -> str:
+    """
+    Switch to an IDA Pro instance by filename (smart matching).
+    Examples: 'malware.exe', 'sample.dll', 'app'
+    """
+    global ida_port
+    
+    instances = _scan_all_instances()
+    
+    if not instances:
+        return "No running IDA Pro instances found."
+    
+    # Normalize search term
+    search_term = filename.lower().strip()
+    
+    # Try exact match first
+    matches = []
+    for inst in instances:
+        module = inst['module'].lower()
+        if module == search_term:
+            matches.append((inst, 100))  # Perfect match
+        elif search_term in module:
+            matches.append((inst, 80))   # Contains match
+        elif module.replace('.exe', '').replace('.dll', '') == search_term.replace('.exe', '').replace('.dll', ''):
+            matches.append((inst, 90))   # Name without extension match
+    
+    if not matches:
+        # Try partial matching on path
+        for inst in instances:
+            path = inst['path'].lower()
+            if search_term in path:
+                matches.append((inst, 60))  # Path match
+    
+    if not matches:
+        result = f"No instance found matching '{filename}'\n\n"
+        result += f"Available instances ({len(instances)}):\n"
+        for idx, inst in enumerate(instances, 1):
+            result += f"   {idx}. {inst['module']} (port {inst['port']})\n"
+        result += f"\nTry: switch_to_file(\"{instances[0]['module']}\")"
+        return result
+    
+    # Sort by match score and use best match
+    matches.sort(key=lambda x: x[1], reverse=True)
+    best_match = matches[0][0]
+    
+    old_port = ida_port
+    old_file = "unknown"
+    try:
+        metadata = make_jsonrpc_request("get_metadata")
+        old_file = metadata.get('module', 'unknown')
+    except:
+        pass
+    
+    ida_port = best_match['port']
+    
+    result = f"Switched to: {best_match['module']}\n"
+    result += f"   From: port {old_port} ({old_file})\n"
+    result += f"   To:   port {ida_port} ({best_match['module']})\n"
+    result += f"Path: {best_match['path']}\n"
+    
+    if len(matches) > 1:
+        result += f"\nNote: Found {len(matches)} matches, using best match"
+    
+    return result
 
 # Code taken from https://github.com/mrexodia/ida-pro-mcp (MIT License)
 class MCPVisitor(ast.NodeVisitor):
