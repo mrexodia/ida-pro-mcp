@@ -264,60 +264,6 @@ class Server:
             self.server = MCPHTTPServer((self.HOST, self.port), JSONRPCRequestHandler)
             print(f"[MCP] Server started at http://{self.HOST}:{self.port}")
             
-            # Update IDA window title to show the port (compatible with different IDA versions)
-            try:
-                import ida_kernwin
-                import idaapi
-                
-                # Try different methods depending on IDA version
-                current_title = None
-                
-                # Method 1: Try get_window_title (IDA 7.6+)
-                if hasattr(ida_kernwin, 'get_window_title'):
-                    current_title = ida_kernwin.get_window_title()
-                
-                # Method 2: Try via QWidget (if Qt is available)
-                if not current_title:
-                    try:
-                        from PyQt5.QtWidgets import QApplication
-                        app = QApplication.instance()
-                        if app:
-                            for widget in app.topLevelWidgets():
-                                if widget.isVisible() and "IDA" in widget.windowTitle():
-                                    current_title = widget.windowTitle()
-                                    break
-                    except:
-                        pass
-                
-                # Only update if we successfully got the title and it doesn't already have the MCP tag
-                if current_title and "[MCP:" not in current_title:
-                    new_title = f"{current_title} [MCP:{self.port}]"
-                    
-                    # Method 1: Try set_window_title
-                    if hasattr(ida_kernwin, 'set_window_title'):
-                        ida_kernwin.set_window_title(new_title)
-                    else:
-                        # Method 2: Try via QWidget
-                        try:
-                            from PyQt5.QtWidgets import QApplication
-                            app = QApplication.instance()
-                            if app:
-                                for widget in app.topLevelWidgets():
-                                    if widget.isVisible() and current_title in widget.windowTitle():
-                                        widget.setWindowTitle(new_title)
-                                        break
-                        except:
-                            pass
-                    
-                    print(f"[MCP] Window title updated: {new_title}")
-                elif not current_title:
-                    # If we couldn't get the title, just print the port info
-                    print(f"[MCP] Port info: {self.port} (window title update not available)")
-                    
-            except Exception as e:
-                # Silently fail - window title update is not critical
-                print(f"[MCP] Note: Window title not updated (port: {self.port})")
-            
             self.server.serve_forever()
         except OSError as e:
             if e.errno == 98 or e.errno == 10048:  # Port already in use (Linux/Windows)
