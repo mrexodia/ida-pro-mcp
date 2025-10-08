@@ -729,8 +729,8 @@ def list_globals_filter(
     """List matching globals in the database (paginated, filtered)"""
     globals: list[Global] = []
     for addr, name in idautils.Names():
-        # Skip functions
-        if not idaapi.get_func(addr):
+        # Skip functions and none
+        if not idaapi.get_func(addr) or name is None:
             globals += [Global(address=hex(addr), name=name)]
 
     globals = pattern_filter(globals, filter, "name")
