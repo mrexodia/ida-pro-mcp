@@ -1953,6 +1953,15 @@ class ThreadRegisters(TypedDict):
     thread_id: int
     registers: list[RegisterValue]
 
+# General purpose registers for x86 and x86-64
+GENERAL_PURPOSE_REGISTERS = {
+    # x86
+    "EAX", "EBX", "ECX", "EDX", "ESI", "EDI", "EBP", "ESP", "EIP",
+    # x86-64
+    "RAX", "RBX", "RCX", "RDX", "RSI", "RDI", "RBP", "RSP", "RIP",
+    "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15",
+}
+
 def dbg_ensure_running() -> "ida_idd.debugger_t":
     dbg = ida_idd.get_dbg()
     if not dbg:
@@ -1990,6 +1999,30 @@ def _get_registers_for_thread(dbg: "ida_idd.debugger_t", tid: int) -> ThreadRegi
         registers=regs,
     )
 
+def _get_registers_general_for_thread(dbg: "ida_idd.debugger_t", tid: int) -> ThreadRegisters:
+    """Helper to get general-purpose registers for a specific thread."""
+    all_registers = _get_registers_for_thread(dbg, tid)
+    general_registers = [
+        reg for reg in all_registers["registers"]
+        if reg["name"] in GENERAL_PURPOSE_REGISTERS
+    ]
+    return ThreadRegisters(
+        thread_id=tid,
+        registers=general_registers,
+    )
+
+def _get_registers_specific_for_thread(dbg: "ida_idd.debugger_t", tid: int, register_names: list[str]) -> ThreadRegisters:
+    """Helper to get specific registers for a given thread."""
+    all_registers = _get_registers_for_thread(dbg, tid)
+    specific_registers = [
+        reg for reg in all_registers["registers"]
+        if reg["name"] in register_names
+    ]
+    return ThreadRegisters(
+        thread_id=tid,
+        registers=specific_registers,
+    )
+
 @jsonrpc
 @idaread
 @unsafe
@@ -2017,11 +2050,56 @@ def dbg_get_registers_for_thread(
 @jsonrpc
 @idaread
 @unsafe
-def dbg_get_current_thread_registers() -> ThreadRegisters:
-    """Get registers and their values for the current thread."""
+def dbg_get_registers_for_thread_current() -> ThreadRegisters:
+    """Get registers for the thread currently paused in the debugger (top of the call stack)."""
     dbg = dbg_ensure_running()
     tid = ida_dbg.get_current_thread()
     return _get_registers_for_thread(dbg, tid)
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_get_registers_general_for_thread(
+    thread_id: Annotated[int, "ID of the thread to get general registers for"]
+) -> ThreadRegisters:
+    """Get general-purpose registers and their values for a specific thread."""
+    dbg = dbg_ensure_running()
+    if thread_id not in [ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())]:
+        raise IDAError(f"Thread with ID {thread_id} not found")
+    return _get_registers_general_for_thread(dbg, thread_id)
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_get_registers_general_for_thread_current() -> ThreadRegisters:
+    """Get general-purpose registers for the thread currently paused in the debugger."""
+    dbg = dbg_ensure_running()
+    tid = ida_dbg.get_current_thread()
+    return _get_registers_general_for_thread(dbg, tid)
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_get_registers_specific_for_thread(
+    thread_id: Annotated[int, "ID of the thread to get specific registers for"],
+    register_names: Annotated[list[str], "A list of register names to retrieve"],
+) -> ThreadRegisters:
+    """Get specific registers and their values for a given thread."""
+    dbg = dbg_ensure_running()
+    if thread_id not in [ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())]:
+        raise IDAError(f"Thread with ID {thread_id} not found")
+    return _get_registers_specific_for_thread(dbg, thread_id, register_names)
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_get_registers_specific_for_thread_current(
+    register_names: Annotated[list[str], "A list of register names to retrieve"],
+) -> ThreadRegisters:
+    """Get specific registers for the thread currently paused in the debugger."""
+    dbg = dbg_ensure_running()
+    tid = ida_dbg.get_current_thread()
+    return _get_registers_specific_for_thread(dbg, tid, register_names)
 
 @jsonrpc
 @idaread
