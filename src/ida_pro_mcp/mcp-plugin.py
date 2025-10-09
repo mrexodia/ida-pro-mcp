@@ -1957,6 +1957,8 @@ def dbg_ensure_running() -> "ida_idd.debugger_t":
     dbg = ida_idd.get_dbg()
     if not dbg:
         raise IDAError("Debugger not running")
+    if ida_dbg.get_ip_val() is None:
+        raise IDAError("Debugger not running")
     return dbg
 
 @jsonrpc
@@ -1969,10 +1971,17 @@ def dbg_get_registers() -> list[ThreadRegisters]:
     for thread_index in range(ida_dbg.get_thread_qty()):
         tid = ida_dbg.getn_thread(thread_index)
         regs = []
-        regvals = ida_dbg.get_reg_vals(tid)
+        regvals: ida_idd.regvals_t = ida_dbg.get_reg_vals(tid)
         for reg_index, rv in enumerate(regvals):
+            rv: ida_idd.regval_t
             reg_info = dbg.regs(reg_index)
-            reg_value = rv.pyval(reg_info.dtype)
+
+            # NOTE: Apparently this can fail under some circumstances
+            try:
+                reg_value = rv.pyval(reg_info.dtype)
+            except ValueError:
+                reg_value = ida_idaapi.BADADDR
+
             if isinstance(reg_value, int):
                 reg_value = hex(reg_value)
             if isinstance(reg_value, bytes):
