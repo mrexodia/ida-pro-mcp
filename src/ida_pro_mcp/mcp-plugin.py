@@ -1961,42 +1961,67 @@ def dbg_ensure_running() -> "ida_idd.debugger_t":
         raise IDAError("Debugger not running")
     return dbg
 
+def _get_registers_for_thread(dbg: "ida_idd.debugger_t", tid: int) -> ThreadRegisters:
+    """Helper to get registers for a specific thread."""
+    regs = []
+    regvals: ida_idd.regvals_t = ida_dbg.get_reg_vals(tid)
+    for reg_index, rv in enumerate(regvals):
+        rv: ida_idd.regval_t
+        reg_info = dbg.regs(reg_index)
+
+        # NOTE: Apparently this can fail under some circumstances
+        try:
+            reg_value = rv.pyval(reg_info.dtype)
+        except ValueError:
+            reg_value = ida_idaapi.BADADDR
+
+        if isinstance(reg_value, int):
+            reg_value = hex(reg_value)
+        if isinstance(reg_value, bytes):
+            reg_value = reg_value.hex(" ")
+        else:
+            reg_value = str(reg_value)
+        regs.append(RegisterValue(
+            name=reg_info.name,
+            value=reg_value,
+        ))
+    return ThreadRegisters(
+        thread_id=tid,
+        registers=regs,
+    )
+
 @jsonrpc
 @idaread
 @unsafe
 def dbg_get_registers() -> list[ThreadRegisters]:
     """Get all registers and their values. This function is only available when debugging."""
-    result: list[ThreadRegisters] = []
     dbg = dbg_ensure_running()
+    result: list[ThreadRegisters] = []
     for thread_index in range(ida_dbg.get_thread_qty()):
         tid = ida_dbg.getn_thread(thread_index)
-        regs = []
-        regvals: ida_idd.regvals_t = ida_dbg.get_reg_vals(tid)
-        for reg_index, rv in enumerate(regvals):
-            rv: ida_idd.regval_t
-            reg_info = dbg.regs(reg_index)
-
-            # NOTE: Apparently this can fail under some circumstances
-            try:
-                reg_value = rv.pyval(reg_info.dtype)
-            except ValueError:
-                reg_value = ida_idaapi.BADADDR
-
-            if isinstance(reg_value, int):
-                reg_value = hex(reg_value)
-            if isinstance(reg_value, bytes):
-                reg_value = reg_value.hex(" ")
-            else:
-                reg_value = str(reg_value)
-            regs.append({
-                "name": reg_info.name,
-                "value": reg_value,
-            })
-        result.append({
-            "thread_id": tid,
-            "registers": regs,
-        })
+        result.append(_get_registers_for_thread(dbg, tid))
     return result
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_get_registers_for_thread(
+    thread_id: Annotated[int, "ID of the thread to get registers for"]
+) -> ThreadRegisters:
+    """Get registers and their values for a specific thread."""
+    dbg = dbg_ensure_running()
+    if thread_id not in [ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())]:
+        raise IDAError(f"Thread with ID {thread_id} not found")
+    return _get_registers_for_thread(dbg, thread_id)
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_get_current_thread_registers() -> ThreadRegisters:
+    """Get registers and their values for the current thread."""
+    dbg = dbg_ensure_running()
+    tid = ida_dbg.get_current_thread()
+    return _get_registers_for_thread(dbg, tid)
 
 @jsonrpc
 @idaread
