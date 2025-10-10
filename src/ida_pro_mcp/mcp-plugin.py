@@ -2028,8 +2028,8 @@ def _get_registers_specific_for_thread(dbg: "ida_idd.debugger_t", tid: int, regi
 @unsafe
 def dbg_get_registers() -> list[ThreadRegisters]:
     """Get all registers and their values. This function is only available when debugging."""
-    dbg = dbg_ensure_running()
     result: list[ThreadRegisters] = []
+    dbg = dbg_ensure_running()
     for thread_index in range(ida_dbg.get_thread_qty()):
         tid = ida_dbg.getn_thread(thread_index)
         result.append(_get_registers_for_thread(dbg, tid))
