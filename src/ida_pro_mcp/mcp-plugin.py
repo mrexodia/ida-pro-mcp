@@ -13,15 +13,20 @@ from typing import (
     Any,
     Callable,
     get_type_hints,
-    TypedDict,
     Optional,
     Annotated,
     TypeVar,
     Generic,
-    NotRequired,
     overload,
     Literal,
 )
+
+# Use typing_extensions for TypedDict and NotRequired on Python < 3.12
+# to ensure compatibility with Pydantic
+if sys.version_info >= (3, 12):
+    from typing import TypedDict, NotRequired
+else:
+    from typing_extensions import TypedDict, NotRequired
 
 class JSONRPCError(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
@@ -2211,3 +2216,4 @@ class MCP(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return MCP()
+
