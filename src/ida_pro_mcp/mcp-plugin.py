@@ -277,6 +277,7 @@ import ida_dbg
 import ida_name
 import ida_ida
 import ida_frame
+import ida_segment
 
 ida_major, ida_minor = map(int, idaapi.get_kernel_version().split("."))
 
@@ -812,6 +813,43 @@ def list_strings(
 ) -> Page[String]:
     """List all strings in the database (paginated)"""
     return list_strings_filter(offset, count, "")
+
+class Segment(TypedDict):
+    name: str
+    start: str
+    end: str
+    size: str
+    permissions: str
+
+
+def ida_segment_perm2str(perm: int) -> str:
+    perms = []
+    if perm & ida_segment.SEGPERM_READ:
+        perms.append("r")
+    else:
+        perms.append("-")
+    if perm & ida_segment.SEGPERM_WRITE:
+        perms.append("w")
+    else:
+        perms.append("-")
+    if perm & ida_segment.SEGPERM_EXEC:
+        perms.append("x")
+    else:
+        perms.append("-")
+    return "".join(perms)
+
+@jsonrpc
+@idaread
+def list_segments() -> list[Segment]:
+    """List all segments in the binary."""
+    segments = []
+    for i in range(ida_segment.get_segm_qty()):
+        seg = ida_segment.getnseg(i)
+        if not seg:
+            continue
+        seg_name = ida_segment.get_segm_name(seg)
+        segments.append(Segment(name=seg_name,start=hex(seg.start_ea), end=hex(seg.end_ea), size=hex(seg.end_ea - seg.start_ea), permissions=ida_segment_perm2str(seg.perm)))
+    return segments
 
 @jsonrpc
 @idaread
