@@ -707,13 +707,24 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
 
 @jsonrpc
 @idaread
+def list_functions_filter(
+    offset: Annotated[int, "Offset to start listing from (start at 0)"],
+    count: Annotated[int, "Number of functions to list (100 is a good default, 0 means remainder)"],
+    filter: Annotated[str, "Filter to apply to the list (required parameter, empty string for no filter). Case-insensitive contains or /regex/ syntax"],
+) -> Page[Function]:
+    """List matching functions in the database (paginated, filtered)"""
+    functions = [get_function(address) for address in idautils.Functions()]
+    functions = pattern_filter(functions, filter, "name")
+    return paginate(functions, offset, count)
+
+@jsonrpc
+@idaread
 def list_functions(
     offset: Annotated[int, "Offset to start listing from (start at 0)"],
     count: Annotated[int, "Number of functions to list (100 is a good default, 0 means remainder)"],
 ) -> Page[Function]:
     """List all functions in the database (paginated)"""
-    functions = [get_function(address) for address in idautils.Functions()]
-    return paginate(functions, offset, count)
+    return list_functions_filter(offset, count, "")
 
 class Global(TypedDict):
     address: str
