@@ -15,6 +15,7 @@ Available functionality:
 - `get_current_address()`: Get the address currently selected by the user.
 - `get_current_function()`: Get the function currently selected by the user.
 - `convert_number(text, size)`: Convert a number (decimal, hexadecimal) to different representations.
+- `list_functions_filter(offset, count, filter)`: List matching functions in the database (paginated).
 - `list_functions(offset, count)`: List all functions in the database (paginated).
 - `list_globals_filter(offset, count, filter)`: List matching globals in the database (paginated, filtered).
 - `list_globals(offset, count)`: List all globals in the database (paginated).
