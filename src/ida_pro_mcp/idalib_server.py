@@ -1,4 +1,6 @@
 import sys
+import signal
+import atexit
 import inspect
 import logging
 import argparse
@@ -151,12 +153,35 @@ def main():
     # NOTE: https://github.com/modelcontextprotocol/python-sdk/issues/466
     fixup_tool_argument_descriptions(mcp)
 
+    # Setup signal handlers to ensure IDA database is properly closed on shutdown.
+    #
+    # PROBLEM: When uvicorn (used by FastMCP's SSE transport) receives SIGINT/SIGTERM:
+    #   1. It captures the signal and performs graceful shutdown
+    #   2. After shutdown, it re-raises the signal with the default handler
+    #   3. The default handler immediately terminates the process at the OS level
+    #   4. This bypasses all remaining Python code (try/except/finally blocks)
+    #
+    # SOLUTION: Register our signal handlers BEFORE calling mcp.run(). When a signal
+    # arrives, our handlers execute first, allowing us to close the IDA database
+    # cleanly before the process terminates.
+    #
+    # The atexit handler provides backup cleanup for normal (non-signal) exits,
+    # though it won't be called when exiting via signal handlers.
+    def cleanup_and_exit(signum, frame):
+        logger.info("Closing IDA database...")
+        idapro.close_database()
+        logger.info("IDA database closed.")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, cleanup_and_exit)
+    signal.signal(signal.SIGTERM, cleanup_and_exit)
+
+    # Backup cleanup handler for normal exits
+    atexit.register(lambda: idapro.close_database())
+
     # NOTE: npx @modelcontextprotocol/inspector for debugging
     logger.info("MCP Server availabile at: http://%s:%d/sse", mcp.settings.host, mcp.settings.port)
-    try:
-        mcp.run(transport="sse")
-    except KeyboardInterrupt:
-        pass
+    mcp.run(transport="sse")
 
 if __name__ == "__main__":
     main()
