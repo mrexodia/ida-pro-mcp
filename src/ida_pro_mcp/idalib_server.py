@@ -164,9 +164,6 @@ def main():
     # SOLUTION: Register our signal handlers BEFORE calling mcp.run(). When a signal
     # arrives, our handlers execute first, allowing us to close the IDA database
     # cleanly before the process terminates.
-    #
-    # The atexit handler provides backup cleanup for normal (non-signal) exits,
-    # though it won't be called when exiting via signal handlers.
     def cleanup_and_exit(signum, frame):
         logger.info("Closing IDA database...")
         idapro.close_database()
@@ -175,9 +172,6 @@ def main():
 
     signal.signal(signal.SIGINT, cleanup_and_exit)
     signal.signal(signal.SIGTERM, cleanup_and_exit)
-
-    # Backup cleanup handler for normal exits
-    atexit.register(lambda: idapro.close_database())
 
     # NOTE: npx @modelcontextprotocol/inspector for debugging
     logger.info("MCP Server availabile at: http://%s:%d/sse", mcp.settings.host, mcp.settings.port)
