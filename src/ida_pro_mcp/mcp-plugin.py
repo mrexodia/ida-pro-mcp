@@ -718,7 +718,6 @@ def list_functions_filter(
     return paginate(functions, offset, count)
 
 @jsonrpc
-@idaread
 def list_functions(
     offset: Annotated[int, "Offset to start listing from (start at 0)"],
     count: Annotated[int, "Number of functions to list (100 is a good default, 0 means remainder)"],
@@ -2222,3 +2221,4 @@ class MCP(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return MCP()
+
