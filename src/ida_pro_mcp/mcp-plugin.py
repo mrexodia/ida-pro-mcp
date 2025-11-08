@@ -1986,11 +1986,23 @@ def dbg_get_registers() -> list[ThreadRegisters]:
             rv: ida_idd.regval_t
             reg_info = dbg.regs(reg_index)
 
-            # NOTE: Apparently this can fail under some circumstances
             try:
                 reg_value = rv.pyval(reg_info.dtype)
             except ValueError:
-                reg_value = ida_idaapi.BADADDR
+                # pyval() fails for floating point and vector registers (FPU, MMX, XMM, YMM)
+                # Check the register value type and handle accordingly
+                if rv.rvtype == ida_idd.RVT_INT:
+                    # Integer type but pyval() failed - use raw integer value
+                    reg_value = rv.ival
+                elif rv.rvtype == ida_idd.RVT_FLOAT or rv.rvtype > ida_idd.RVT_UNAVAILABLE:
+                    # Floating point or custom type - get raw bytes
+                    try:
+                        reg_value = bytes(rv.bytes()).hex(" ")
+                    except:
+                        reg_value = "<error>"
+                else:
+                    # Unavailable or unknown
+                    reg_value = ida_idaapi.BADADDR
 
             if isinstance(reg_value, int):
                 reg_value = hex(reg_value)
