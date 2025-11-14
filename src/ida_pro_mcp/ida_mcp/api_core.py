@@ -65,9 +65,14 @@ def idb_meta() -> Metadata:
 
 @jsonrpc
 @idaread
-def list_funcs(queries: Annotated[list[str] | str, "Address(es) or name(s)"]) -> list[dict]:
+def lookup_funcs(queries: Annotated[list[str] | str, "Address(es) or name(s)"]) -> list[dict]:
     """Get functions by address or name (auto-detects)"""
     queries = normalize_list_input(queries)
+
+    # Treat empty/"*" as "all functions"
+    if not queries or (len(queries) == 1 and queries[0] in ("*", "")):
+        all_funcs = [get_function(addr) for addr in idautils.Functions()]
+        return [{"query": "*", "fn": fn, "error": None} for fn in all_funcs]
 
     if len(DEMANGLED_TO_EA) == 0:
         create_demangled_to_ea_map()
@@ -186,7 +191,7 @@ def conv_num(
 
 @jsonrpc
 @idaread
-def fns(
+def list_funcs(
     queries: Annotated[
         list[dict] | dict, "[{offset, count, filter}, ...] or {offset, count, filter}"
     ],
@@ -202,6 +207,10 @@ def fns(
         offset = query.get("offset", 0)
         count = query.get("count", 100)
         filter_pattern = query.get("filter", "")
+
+        # Treat empty/"*" filter as "all"
+        if filter_pattern in ("", "*"):
+            filter_pattern = ""
 
         filtered = pattern_filter(all_functions, filter_pattern, "name")
         results.append(paginate(filtered, offset, count))
@@ -230,6 +239,10 @@ def gvars(
         offset = query.get("offset", 0)
         count = query.get("count", 100)
         filter_pattern = query.get("filter", "")
+
+        # Treat empty/"*" filter as "all"
+        if filter_pattern in ("", "*"):
+            filter_pattern = ""
 
         filtered = pattern_filter(all_globals, filter_pattern, "name")
         results.append(paginate(filtered, offset, count))
@@ -294,6 +307,10 @@ def strings(
         offset = query.get("offset", 0)
         count = query.get("count", 100)
         filter_pattern = query.get("filter", "")
+
+        # Treat empty/"*" filter as "all"
+        if filter_pattern in ("", "*"):
+            filter_pattern = ""
 
         filtered = pattern_filter(all_strings, filter_pattern, "string")
         results.append(paginate(filtered, offset, count))

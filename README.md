@@ -11,11 +11,11 @@ Available functionality:
 ## Core Functions
 
 - `idb_meta()`: Get IDB metadata (path, module, base address, size, hashes).
-- `list_funcs(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).
+- `lookup_funcs(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).
 - `cursor_addr()`: Get current cursor address.
 - `cursor_func()`: Get current function at cursor.
 - `conv_num(inputs)`: Convert numbers to different formats (decimal, hex, bytes, ASCII, binary).
-- `fns(queries)`: List functions (paginated, filtered).
+- `list_funcs(queries)`: List functions (paginated, filtered).
 - `gvars(queries)`: List global variables (paginated, filtered).
 - `imports(offset, count)`: List all imported symbols with module names (paginated).
 - `strings(queries)`: List strings in the database (paginated, filtered).
@@ -84,7 +84,7 @@ Available functionality:
 
 ## Advanced Analysis Operations
 
-- `py_eval(code)`: Execute arbitrary Python code in IDA context (returns string result, supports Jupyter-style evaluation).
+- `py_eval(code)`: Execute arbitrary Python code in IDA context (returns dict with result/stdout/stderr, supports Jupyter-style evaluation).
 - `analyze_funcs(addrs)`: Comprehensive function analysis (decompilation, assembly, xrefs, callees, callers, strings, constants, basic blocks).
 
 ## Pattern Matching & Search
@@ -263,7 +263,7 @@ To check if the connection works you can perform the following tool call:
 
 The IDA Pro plugin will be installed automatically when the MCP server starts. If you disabled the `--install-plugin` option, use the following steps:
 
-1. Copy (**not move**) `src/ida_pro_mcp/mcp-plugin.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows).
+1. Copy (**not move**) `src/ida_pro_mcp/ida_mcp.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows).
 2. Open an IDB and click `Edit -> Plugins -> MCP` to start the server.
 
 </details>
@@ -286,7 +286,7 @@ Feel free to open a PR to add your IDA Pro MCP server here.
 
 ## Development
 
-Adding new features is a super easy and streamlined process. All you have to do is add a new `@jsonrpc` function to [`mcp-plugin.py`](https://github.com/mrexodia/ida-pro-mcp/blob/164df8cf4ae251cc9cc0f464591fa6df8e0d9df4/src/ida_pro_mcp/mcp-plugin.py#L406-L419) and your function will be available in the MCP server without any additional boilerplate! Below is a video where I add the `get_metadata` function in less than 2 minutes (including testing):
+Adding new features is a super easy and streamlined process. All you have to do is add a new `@jsonrpc` function to the modular API files in `src/ida_pro_mcp/ida_mcp/api_*.py` and your function will be available in the MCP server without any additional boilerplate! Below is a video where I add the `get_metadata` function in less than 2 minutes (including testing):
 
 https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
 

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("github.com/mrexodia/ida-pro-mcp#idalib")
 
 def fixup_tool_argument_descriptions(mcp: FastMCP):
-    # In our tool definitions within `mcp-plugin.py`, we use `typing.Annotated` on function parameters
+    # In our tool definitions within the ida_mcp package, we use `typing.Annotated` on function parameters
     # to attach documentation. For example:
     #
     #     def get_function_by_name(
@@ -142,7 +142,7 @@ def main():
     if not ida_hexrays.init_hexrays_plugin():
         raise RuntimeError("failed to initialize Hex-Rays decompiler")
 
-    plugin = importlib.import_module("ida_pro_mcp.mcp-plugin")
+    plugin = importlib.import_module("ida_pro_mcp.ida_mcp")
     logger.debug("adding tools...")
     for name, callable in plugin.rpc_registry.methods.items():
         if args.unsafe or name not in plugin.rpc_registry.unsafe:
