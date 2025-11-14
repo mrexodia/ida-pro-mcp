@@ -458,7 +458,7 @@ class SSEServer:
                 # No SSE connection found
                 error_msg = f"No active SSE connection found for session {session_id}"
                 print(f"[MCP SSE ERROR] {error_msg}")
-                print(f"[MCP SSE DEBUG] Active connections: {[c.session_id for c in self.connections if c.alive]}")
+                # print(f"[MCP SSE DEBUG] Active connections: {[c.session_id for c in self.connections if c.alive]}")
                 self._send_http_response(client_socket, 400, {
                     "Content-Type": "text/plain"
                 }, error_msg.encode('utf-8'))
@@ -545,7 +545,7 @@ class SSEServer:
             method, path, headers, body = self._parse_http_request(data)
 
             # Debug logging
-            print(f"[MCP SSE DEBUG] {method} {path} from {client_address}")
+            # print(f"[MCP SSE DEBUG] {method} {path} from {client_address}")
 
             # Route request
             # Extract base path (before query params)

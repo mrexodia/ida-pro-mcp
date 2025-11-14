@@ -5,6 +5,7 @@ import json
 import shutil
 import argparse
 import http.client
+import socket
 from urllib.parse import urlparse
 from glob import glob
 
@@ -17,43 +18,167 @@ jsonrpc_request_id = 1
 ida_host = "127.0.0.1"
 ida_port = 13337
 
+class SSEClientSession:
+    """Minimal SSE client for talking to the IDA plugin."""
+
+    def __init__(self, host: str, port: int, timeout: float = 10.0):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.endpoint = "/sse"
+        self._connection = None
+        self._response = None
+
+    def __enter__(self) -> "SSEClientSession":
+        self._connection = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
+        try:
+            self._connection.request("GET", "/sse", headers={"Accept": "text/event-stream"})
+            self._response = self._connection.getresponse()
+            if self._response.status != 200:
+                raise RuntimeError(f"Failed to open SSE stream (status {self._response.status})")
+            self._wait_for_endpoint()
+        except Exception:
+            self.close()
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
+    def close(self):
+        if self._response is not None:
+            try:
+                self._response.close()
+            except Exception:
+                pass
+            self._response = None
+        if self._connection is not None:
+            try:
+                self._connection.close()
+            except Exception:
+                pass
+            self._connection = None
+
+    def send_request(self, request: dict) -> dict:
+        if self._response is None:
+            raise RuntimeError("SSE connection not initialized")
+
+        post_conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
+        try:
+            post_conn.request(
+                "POST",
+                self.endpoint,
+                json.dumps(request),
+                {"Content-Type": "application/json"},
+            )
+            post_response = post_conn.getresponse()
+            if post_response.status not in (200, 202):
+                raise RuntimeError(f"SSE POST failed with status {post_response.status}")
+            post_response.read()
+        finally:
+            post_conn.close()
+
+        while True:
+            event_type, payload = self._read_event()
+            if event_type != "message" or not payload:
+                continue
+            try:
+                message = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if message.get("id") == request["id"]:
+                return message
+
+    def _wait_for_endpoint(self):
+        while True:
+            event_type, payload = self._read_event()
+            if event_type == "endpoint":
+                endpoint = payload.strip()
+                if endpoint:
+                    self.endpoint = endpoint
+                return
+
+    def _read_event(self) -> tuple[str, str]:
+        if self._response is None or self._response.fp is None:
+            raise RuntimeError("SSE stream closed")
+
+        event_type = None
+        data_lines: list[str] = []
+
+        while True:
+            try:
+                line = self._response.fp.readline()
+            except socket.timeout as exc:
+                raise TimeoutError("Timed out waiting for SSE data") from exc
+
+            if not line:
+                raise RuntimeError("SSE connection closed")
+
+            text = line.decode("utf-8", errors="replace").rstrip("\r\n")
+
+            if not text:
+                if event_type is None:
+                    continue
+                payload = "\n".join(data_lines)
+                return event_type, payload
+
+            if text.startswith(":"):
+                continue
+
+            if text.startswith("event:"):
+                event_type = text[len("event:"):].strip() or "message"
+            elif text.startswith("data:"):
+                if event_type is None:
+                    event_type = "message"
+                data_lines.append(text[len("data:"):].strip())
+
 def make_jsonrpc_request(method: str, *params):
-    """Make a JSON-RPC request to the IDA plugin"""
+    """Call an MCP tool on the IDA plugin via its SSE transport."""
+
     global jsonrpc_request_id, ida_host, ida_port
-    conn = http.client.HTTPConnection(ida_host, ida_port)
-    request = {
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": list(params),
-        "id": jsonrpc_request_id,
-    }
+
+    request_id = jsonrpc_request_id
     jsonrpc_request_id += 1
 
-    try:
-        conn.request("POST", "/mcp", json.dumps(request), {
-            "Content-Type": "application/json"
-        })
-        response = conn.getresponse()
-        data = json.loads(response.read().decode())
+    request = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": method,
+            "arguments": list(params),
+        },
+        "id": request_id,
+    }
 
-        if "error" in data:
-            error = data["error"]
-            code = error["code"]
-            message = error["message"]
-            pretty = f"JSON-RPC error {code}: {message}"
-            if "data" in error:
-                pretty += "\n" + error["data"]
-            raise Exception(pretty)
+    with SSEClientSession(ida_host, ida_port) as session:
+        response = session.send_request(request)
 
-        result = data["result"]
-        # NOTE: LLMs do not respond well to empty responses
-        if result is None:
-            result = "success"
-        return result
-    except Exception:
-        raise
-    finally:
-        conn.close()
+    if "error" in response:
+        error = response["error"]
+        code = error.get("code", -32603)
+        message = error.get("message", "Unknown error")
+        pretty = f"JSON-RPC error {code}: {message}"
+        if "data" in error:
+            pretty += "\n" + str(error["data"])
+        raise Exception(pretty)
+
+    result = response.get("result")
+    if isinstance(result, dict) and "content" in result:
+        content = result.get("content") or []
+        if content and isinstance(content[0], dict):
+            text = content[0].get("text", "")
+            if text:
+                try:
+                    result = json.loads(text)
+                except json.JSONDecodeError:
+                    result = text
+            else:
+                result = None
+
+    # NOTE: LLMs do not respond well to empty responses
+    if result is None:
+        result = "success"
+    return result
 
 @mcp.tool()
 def check_connection() -> str:
