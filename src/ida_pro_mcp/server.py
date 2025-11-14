@@ -61,7 +61,7 @@ def check_connection() -> str:
     try:
         metadata = make_jsonrpc_request("get_metadata")
         return f"Successfully connected to IDA Pro (open file: {metadata['module']})"
-    except Exception as e:
+    except Exception:
         if sys.platform == "darwin":
             shortcut = "Ctrl+Option+M"
         else:

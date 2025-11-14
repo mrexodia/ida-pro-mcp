@@ -179,7 +179,7 @@ class MCPProtocolHandler:
     def generate_tool_schema(self, func_name: str, func: Callable) -> dict:
         """Generate MCP tool schema from a function"""
         hints = get_type_hints(func)
-        return_type = hints.pop("return", None)
+        hints.pop("return", None)
 
         # Build parameter schema
         properties = {}
@@ -663,7 +663,7 @@ class MCPServer:
                 "code": -32000,
                 "message": e.message,
             }
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
             response["error"] = {
                 "code": -32603,
@@ -673,7 +673,7 @@ class MCPServer:
 
         try:
             response_body = json.dumps(response).encode("utf-8")
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
             response_body = json.dumps({
                 "error": {
@@ -837,12 +837,11 @@ import logging
 import queue
 import traceback
 import functools
-from enum import IntEnum, IntFlag
+from enum import IntEnum
 
 import ida_hexrays
 import ida_kernwin
 import ida_funcs
-import ida_gdl
 import ida_lines
 import ida_idaapi
 import idc
@@ -853,7 +852,6 @@ import ida_bytes
 import ida_typeinf
 import ida_xref
 import ida_entry
-import idautils
 import ida_idd
 import ida_dbg
 import ida_name
@@ -937,7 +935,7 @@ def sync_wrapper(ff, safety_mode: IDASafety):
             call_stack.get()
             #logger.debug('Finished runned')
 
-    ret_val = idaapi.execute_sync(runned, safety_mode)
+    idaapi.execute_sync(runned, safety_mode)
     res = res_container.get()
     if isinstance(res, Exception):
         raise res
@@ -1959,7 +1957,7 @@ def set_function_prototype(
         if not ida_typeinf.apply_tinfo(func.start_ea, tif, ida_typeinf.PT_SIL):
             raise IDAError(f"Failed to apply type")
         refresh_decompiler_ctext(func.start_ea)
-    except Exception as e:
+    except Exception:
         raise IDAError(f"Failed to parse prototype string: {prototype}")
 
 class my_modifier_t(ida_hexrays.user_lvar_modifier_t):
@@ -2631,7 +2629,7 @@ def dbg_get_call_stack() -> list[dict[str, str]]:
 
             callstack.append(frame_info)
 
-    except Exception as e:
+    except Exception:
         pass
     return callstack
 
