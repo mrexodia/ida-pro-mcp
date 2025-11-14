@@ -61,7 +61,7 @@ def check_connection() -> str:
     try:
         metadata = make_jsonrpc_request("get_metadata")
         return f"Successfully connected to IDA Pro (open file: {metadata['module']})"
-    except Exception:
+    except Exception as e:
         if sys.platform == "darwin":
             shortcut = "Ctrl+Option+M"
         else:
@@ -291,13 +291,24 @@ def copy_python_env(env: dict[str, str]):
     return result
 
 def print_mcp_config():
-    mcp_url = f"http://{ida_host}:{ida_port}/mcp"
+    mcp_config = {
+        "command": get_python_executable(),
+        "args": [
+            __file__,
+        ],
+        "timeout": 1800,
+        "disabled": False,
+    }
+    env = {}
+    if copy_python_env(env):
+        print(f"[WARNING] Custom Python environment variables detected")
+        mcp_config["env"] = env
     print(json.dumps({
-        "ida-pro-mcp": {
-            "type": "http",
-            "url": mcp_url
-        }
-    }, indent=2))
+            "mcpServers": {
+                mcp.name: mcp_config
+            }
+        }, indent=2)
+    )
 
 def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
     if sys.platform == "win32":
