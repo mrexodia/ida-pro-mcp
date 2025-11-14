@@ -1323,17 +1323,62 @@ def normalize_list_input(value: list | str) -> list:
     return [value]
 
 
-def normalize_dict_list(value: list[dict] | dict) -> list[dict]:
-    """Normalize input to list[dict] - accepts list[dict] or single dict"""
+def normalize_dict_list(
+    value: list[dict] | dict | str | list[str] | Any,
+    string_parser: Optional[Callable[[str], dict]] = None,
+) -> list[dict]:
+    """Normalize input to list[dict] with optional string parsing
+
+    Args:
+        value: Input value (dict, list[dict], str, list[str], or any)
+        string_parser: Optional function to convert string → dict
+                      If None, strings → empty dict
+
+    Flow:
+        dict → [dict]
+        str → split by ',' → list[str] → map(string_parser) → list[dict]
+        list[str] → map(string_parser) → list[dict]
+        list[dict] → list[dict]
+        Any → [{}]
+    """
     if isinstance(value, dict):
         return [value]
     elif isinstance(value, list):
-        return value
+        if not value:
+            return [{}]
+        # Check if list[str] or list[dict]
+        if all(isinstance(item, dict) for item in value):
+            return value
+        elif all(isinstance(item, str) for item in value):
+            # list[str] → map with parser
+            if string_parser:
+                return [string_parser(s.strip()) for s in value if s.strip()]
+            return [{}]
+        else:
+            # Mixed types - filter dicts only
+            return [item for item in value if isinstance(item, dict)] or [{}]
+    elif isinstance(value, str):
+        # Try JSON parse first
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return [parsed]
+            elif isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Not JSON - split by comma and parse
+        parts = [s.strip() for s in value.split(",") if s.strip()]
+        if not parts:
+            return [{}]
+
+        if string_parser:
+            return [string_parser(part) for part in parts]
+        return [{}]
     else:
-        raise JSONRPCError(
-            -32602,
-            f"Invalid type: expected list[dict] or dict, got {type(value).__name__}",
-        )
+        # Any other type → empty dict
+        return [{}]
 
 
 def looks_like_address(s: str) -> bool:
@@ -1347,7 +1392,7 @@ def looks_like_address(s: str) -> bool:
 
 
 class Function(TypedDict):
-    ea: str
+    addr: str
     name: str
     size: str
 
@@ -1376,7 +1421,7 @@ def get_function(addr, *, raise_error=True):
     except AttributeError:
         name = ida_funcs.get_func_name(fn.start_ea)
 
-    return Function(ea=hex(addr), name=name, size=hex(fn.end_ea - fn.start_ea))
+    return Function(addr=hex(addr), name=name, size=hex(fn.end_ea - fn.start_ea))
 
 
 def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
@@ -1658,7 +1703,7 @@ def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, list[str]]:
 
 @jsonrpc
 @idaread
-def meta() -> Metadata:
+def idb_meta() -> Metadata:
     """Get IDB metadata"""
 
     def hash(f):
@@ -1681,7 +1726,7 @@ def meta() -> Metadata:
 
 @jsonrpc
 @idaread
-def fn(queries: Annotated[list[str] | str, "Address(es) or name(s)"]) -> list[dict]:
+def list_funcs(queries: Annotated[list[str] | str, "Address(es) or name(s)"]) -> list[dict]:
     """Get functions by address or name (auto-detects)"""
     queries = normalize_list_input(queries)
 
@@ -1722,14 +1767,14 @@ def fn(queries: Annotated[list[str] | str, "Address(es) or name(s)"]) -> list[di
 
 @jsonrpc
 @idaread
-def cur_ea() -> str:
+def cursor_addr() -> str:
     """Get current address"""
     return hex(idaapi.get_screen_ea())
 
 
 @jsonrpc
 @idaread
-def cur_fn() -> Optional[Function]:
+def cursor_func() -> Optional[Function]:
     """Get current function"""
     return get_function(idaapi.get_screen_ea())
 
@@ -1747,8 +1792,7 @@ def conv_num(
     inputs: Annotated[list[dict] | dict, "[{text, size}, ...] or {text, size}"],
 ) -> list[dict]:
     """Convert numbers to different formats"""
-    if isinstance(inputs, dict):
-        inputs = [inputs]
+    inputs = normalize_dict_list(inputs, lambda s: {"text": s, "size": 64})
 
     results = []
     for item in inputs:
@@ -1817,14 +1861,9 @@ def fns(
     ],
 ) -> list[Page[Function]]:
     """List functions"""
-    if isinstance(queries, dict):
-        queries = [queries]
-    elif not isinstance(queries, list):
-        raise JSONRPCError(
-            -32602,
-            f"Invalid type for 'queries': expected list[dict] or dict, got {type(queries).__name__}",
-        )
-
+    queries = normalize_dict_list(
+        queries, lambda s: {"offset": 0, "count": 50, "filter": s}
+    )
     all_functions = [get_function(addr) for addr in idautils.Functions()]
 
     results = []
@@ -1840,30 +1879,25 @@ def fns(
 
 
 class Global(TypedDict):
-    ea: str
+    addr: str
     name: str
 
 
 @jsonrpc
 @idaread
-def globs(
+def gvars(
     queries: Annotated[
         list[dict] | dict, "[{offset, count, filter}, ...] or {offset, count, filter}"
     ],
 ) -> list[Page[Global]]:
     """List globals"""
-    if isinstance(queries, dict):
-        queries = [queries]
-    elif not isinstance(queries, list):
-        raise JSONRPCError(
-            -32602,
-            f"Invalid type for 'queries': expected list[dict] or dict, got {type(queries).__name__}",
-        )
-
+    queries = normalize_dict_list(
+        queries, lambda s: {"offset": 0, "count": 50, "filter": s}
+    )
     all_globals: list[Global] = []
     for addr, name in idautils.Names():
         if not idaapi.get_func(addr) and name is not None:
-            all_globals.append(Global(ea=hex(addr), name=name))
+            all_globals.append(Global(addr=hex(addr), name=name))
 
     results = []
     for query in queries:
@@ -1878,7 +1912,7 @@ def globs(
 
 
 class Import(TypedDict):
-    ea: str
+    addr: str
     imported_name: str
     module: str
 
@@ -1901,7 +1935,7 @@ def imports(
         def imp_cb(ea, symbol_name, ordinal, acc):
             if not symbol_name:
                 symbol_name = f"#{ordinal}"
-            acc += [Import(ea=hex(ea), imported_name=symbol_name, module=module_name)]
+            acc += [Import(addr=hex(ea), imported_name=symbol_name, module=module_name)]
             return True
 
         def imp_cb_w_context(ea, symbol_name, ordinal):
@@ -1912,7 +1946,7 @@ def imports(
 
 
 class String(TypedDict):
-    ea: str
+    addr: str
     length: int
     string: str
 
@@ -1925,13 +1959,9 @@ def strings(
     ],
 ) -> list[Page[String]]:
     """List strings"""
-    if isinstance(queries, dict):
-        queries = [queries]
-    elif not isinstance(queries, list):
-        raise JSONRPCError(
-            -32602,
-            f"Invalid type for 'queries': expected list[dict] or dict, got {type(queries).__name__}",
-        )
+    queries = normalize_dict_list(
+        queries, lambda s: {"offset": 0, "count": 50, "filter": s}
+    )
     all_strings: list[String] = []
     for item in idautils.Strings():
         if item is None:
@@ -1940,7 +1970,7 @@ def strings(
             string = str(item)
             if string:
                 all_strings.append(
-                    String(ea=hex(item.ea), length=item.length, string=string)
+                    String(addr=hex(item.ea), length=item.length, string=string)
                 )
         except Exception:
             continue
@@ -2075,7 +2105,7 @@ def decompile_checked(addr: int) -> ida_hexrays.cfunc_t:
 
 @jsonrpc
 @idaread
-def decomp(
+def decompile(
     addrs: Annotated[list[str] | str, "Address(es)"],
 ) -> list[dict]:
     """Decompile functions"""
@@ -2111,16 +2141,16 @@ def decomp(
                 else:
                     code += f"/* line: {i}, address: {hex(ea)} */ {line}"
 
-            results.append({"ea": addr, "code": code})
+            results.append({"addr": addr, "code": code})
         except Exception as e:
-            results.append({"ea": addr, "code": None, "error": str(e)})
+            results.append({"addr": addr, "code": None, "error": str(e)})
 
     return results
 
 
 class DisassemblyLine(TypedDict):
     segment: NotRequired[str]
-    ea: str
+    addr: str
     label: NotRequired[str]
     instruction: str
     comments: NotRequired[list[str]]
@@ -2162,7 +2192,7 @@ def disasm(
             func = idaapi.get_func(start)
             if not func:
                 results.append(
-                    {"ea": start_addr, "asm": None, "error": "No function found"}
+                    {"addr": start_addr, "asm": None, "error": "No function found"}
                 )
                 continue
             if is_window_active():
@@ -2198,7 +2228,7 @@ def disasm(
                     ops.append(idc.print_operand(ea, n) or "")
                 instruction = f"{mnem} {', '.join(ops)}".rstrip()
 
-                line: DisassemblyLine = {"ea": hex(ea), "instruction": instruction}
+                line: DisassemblyLine = {"addr": hex(ea), "instruction": instruction}
                 if segment:
                     line["segment"] = segment
                 if label:
@@ -2230,15 +2260,15 @@ def disasm(
             if args is not None:
                 out["arguments"] = args
 
-            results.append({"ea": start_addr, "asm": out})
+            results.append({"addr": start_addr, "asm": out})
         except Exception as e:
-            results.append({"ea": start_addr, "asm": None, "error": str(e)})
+            results.append({"addr": start_addr, "asm": None, "error": str(e)})
 
     return results
 
 
 class Xref(TypedDict):
-    ea: str
+    addr: str
     type: str
     fn: Optional[Function]
 
@@ -2259,14 +2289,14 @@ def xrefs_to(
             for xref in idautils.XrefsTo(parse_address(addr)):
                 xrefs += [
                     Xref(
-                        ea=hex(xref.frm),
+                        addr=hex(xref.frm),
                         type="code" if xref.iscode else "data",
                         fn=get_function(xref.frm, raise_error=False),
                     )
                 ]
-            results.append({"ea": addr, "xrefs": xrefs})
+            results.append({"addr": addr, "xrefs": xrefs})
         except Exception as e:
-            results.append({"ea": addr, "xrefs": None, "error": str(e)})
+            results.append({"addr": addr, "xrefs": None, "error": str(e)})
 
     return results
 
@@ -2277,8 +2307,19 @@ def xrefs_to_field(
     queries: Annotated[list[dict] | dict, "[{struct, field}, ...] or {struct, field}"],
 ) -> list[dict]:
     """Get xrefs to struct fields"""
-    if isinstance(queries, dict):
-        queries = [queries]
+
+    def parse_struct_field(s: str) -> dict:
+        # Support "StructName.field" or "StructName::field" syntax
+        if "." in s:
+            parts = s.split(".", 1)
+            return {"struct": parts[0].strip(), "field": parts[1].strip()}
+        elif "::" in s:
+            parts = s.split("::", 1)
+            return {"struct": parts[0].strip(), "field": parts[1].strip()}
+        # Just field name without struct
+        return {"struct": "", "field": s.strip()}
+
+    queries = normalize_dict_list(queries, parse_struct_field)
 
     results = []
     til = ida_typeinf.get_idati()
@@ -2341,7 +2382,7 @@ def xrefs_to_field(
             for xref in idautils.XrefsTo(tid):
                 xrefs += [
                     Xref(
-                        ea=hex(xref.frm),
+                        addr=hex(xref.frm),
                         type="code" if xref.iscode else "data",
                         fn=get_function(xref.frm, raise_error=False),
                     )
@@ -2375,7 +2416,7 @@ def callees(
             func = idaapi.get_func(func_start)
             if not func:
                 results.append(
-                    {"ea": fn_addr, "callees": None, "error": "No function found"}
+                    {"addr": fn_addr, "callees": None, "error": "No function found"}
                 )
                 continue
             func_end = idc.find_func_end(func_start)
@@ -2397,7 +2438,7 @@ def callees(
                         if func_name is not None:
                             callees.append(
                                 {
-                                    "ea": hex(target),
+                                    "addr": hex(target),
                                     "name": func_name,
                                     "type": func_type,
                                 }
@@ -2406,9 +2447,9 @@ def callees(
 
             unique_callee_tuples = {tuple(callee.items()) for callee in callees}
             unique_callees = [dict(callee) for callee in unique_callee_tuples]
-            results.append({"ea": fn_addr, "callees": unique_callees})
+            results.append({"addr": fn_addr, "callees": unique_callees})
         except Exception as e:
-            results.append({"ea": fn_addr, "callees": None, "error": str(e)})
+            results.append({"addr": fn_addr, "callees": None, "error": str(e)})
 
     return results
 
@@ -2437,11 +2478,11 @@ def callers(
                     idaapi.NN_callni,
                 ]:
                     continue
-                callers[func["ea"]] = func
+                callers[func["addr"]] = func
 
-            results.append({"ea": fn_addr, "callers": list(callers.values())})
+            results.append({"addr": fn_addr, "callers": list(callers.values())})
         except Exception as e:
-            results.append({"ea": fn_addr, "callers": None, "error": str(e)})
+            results.append({"addr": fn_addr, "callers": None, "error": str(e)})
 
     return results
 
@@ -2471,12 +2512,20 @@ def set_cmt(
     items: Annotated[list[dict] | dict, "[{addr, comment}, ...] or {addr, comment}"],
 ):
     """Set comments"""
-    if isinstance(items, dict):
-        items = [items]
+
+    def parse_addr_comment(s: str) -> dict:
+        # Support "addr: comment" format
+        if ":" in s:
+            parts = s.split(":", 1)
+            return {"addr": parts[0].strip(), "comment": parts[1].strip()}
+        # Just address without comment (will clear comment)
+        return {"addr": s.strip(), "comment": ""}
+
+    items = normalize_dict_list(items, parse_addr_comment)
 
     results = []
     for item in items:
-        addr_str = item.get("ea", "")
+        addr_str = item.get("addr", "")
         comment = item.get("comment", "")
 
         try:
@@ -2485,33 +2534,33 @@ def set_cmt(
             if not idaapi.set_cmt(ea, comment, False):
                 results.append(
                     {
-                        "ea": addr_str,
+                        "addr": addr_str,
                         "error": f"Failed to set disassembly comment at {hex(ea)}",
                     }
                 )
                 continue
 
             if not ida_hexrays.init_hexrays_plugin():
-                results.append({"ea": addr_str, "ok": True})
+                results.append({"addr": addr_str, "ok": True})
                 continue
 
             try:
                 cfunc = decompile_checked(ea)
             except IDAError:
-                results.append({"ea": addr_str, "ok": True})
+                results.append({"addr": addr_str, "ok": True})
                 continue
 
             if ea == cfunc.entry_ea:
                 idc.set_func_cmt(ea, comment, True)
                 cfunc.refresh_func_ctext()
-                results.append({"ea": addr_str, "ok": True})
+                results.append({"addr": addr_str, "ok": True})
                 continue
 
             eamap = cfunc.get_eamap()
             if ea not in eamap:
                 results.append(
                     {
-                        "ea": addr_str,
+                        "addr": addr_str,
                         "ok": True,
                         "error": f"Failed to set decompiler comment at {hex(ea)}",
                     }
@@ -2531,20 +2580,20 @@ def set_cmt(
                 cfunc.save_user_cmts()
                 cfunc.refresh_func_ctext()
                 if not cfunc.has_orphan_cmts():
-                    results.append({"ea": addr_str, "ok": True})
+                    results.append({"addr": addr_str, "ok": True})
                     break
                 cfunc.del_orphan_cmts()
                 cfunc.save_user_cmts()
             else:
                 results.append(
                     {
-                        "ea": addr_str,
+                        "addr": addr_str,
                         "ok": True,
                         "error": f"Failed to set decompiler comment at {hex(ea)}",
                     }
                 )
         except Exception as e:
-            results.append({"ea": addr_str, "error": str(e)})
+            results.append({"addr": addr_str, "error": str(e)})
 
     return results
 
@@ -2555,12 +2604,20 @@ def patch_asm(
     items: Annotated[list[dict] | dict, "[{addr, asm}, ...] or {addr, asm}"],
 ) -> list[dict]:
     """Patch assembly"""
-    if isinstance(items, dict):
-        items = [items]
+
+    def parse_addr_asm(s: str) -> dict:
+        # Support "addr: instruction" format
+        if ":" in s:
+            parts = s.split(":", 1)
+            return {"addr": parts[0].strip(), "asm": parts[1].strip()}
+        # Just instruction without address (invalid, but let it fail gracefully)
+        return {"addr": "", "asm": s.strip()}
+
+    items = normalize_dict_list(items, parse_addr_asm)
 
     results = []
     for item in items:
-        addr_str = item.get("ea", "")
+        addr_str = item.get("addr", "")
         instructions = item.get("asm", "")
 
         try:
@@ -2572,20 +2629,20 @@ def patch_asm(
                     (check_assemble, bytes_to_patch) = idautils.Assemble(ea, assemble)
                     if not check_assemble:
                         results.append(
-                            {"ea": addr_str, "error": f"Failed to assemble: {assemble}"}
+                            {"addr": addr_str, "error": f"Failed to assemble: {assemble}"}
                         )
                         break
                     ida_bytes.patch_bytes(ea, bytes_to_patch)
                     ea += len(bytes_to_patch)
                 except Exception as e:
                     results.append(
-                        {"ea": addr_str, "error": f"Failed at {hex(ea)}: {e}"}
+                        {"addr": addr_str, "error": f"Failed at {hex(ea)}: {e}"}
                     )
                     break
             else:
-                results.append({"ea": addr_str, "ok": True})
+                results.append({"addr": addr_str, "ok": True})
         except Exception as e:
-            results.append({"ea": addr_str, "error": str(e)})
+            results.append({"addr": addr_str, "error": str(e)})
 
     return results
 
@@ -2687,20 +2744,26 @@ def get_bytes(
     addrs: Annotated[list[dict] | dict, "[{addr, size}, ...] or {addr, size}"],
 ) -> list[dict]:
     """Read bytes"""
-    if isinstance(addrs, dict):
-        addrs = [addrs]
 
+    def parse_addr_size(s: str) -> dict:
+        # Support "addr:size" or just "addr" (default size=256)
+        if ":" in s:
+            parts = s.split(":", 1)
+            return {"addr": parts[0].strip(), "size": int(parts[1].strip())}
+        return {"addr": s.strip(), "size": 256}
+
+    addrs = normalize_dict_list(addrs, parse_addr_size)
     results = []
     for item in addrs:
-        addr = item.get("ea", "")
+        addr = item.get("addr", "")
         size = item.get("size", 0)
 
         try:
             ea = parse_address(addr)
             data = " ".join(f"{x:#02x}" for x in ida_bytes.get_bytes(ea, size))
-            results.append({"ea": addr, "data": data})
+            results.append({"addr": addr, "data": data})
         except Exception as e:
-            results.append({"ea": addr, "data": None, "error": str(e)})
+            results.append({"addr": addr, "data": None, "error": str(e)})
 
     return results
 
@@ -2716,9 +2779,9 @@ def get_u8(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
         try:
             ea = parse_address(addr)
             value = ida_bytes.get_wide_byte(ea)
-            results.append({"ea": addr, "value": value})
+            results.append({"addr": addr, "value": value})
         except Exception as e:
-            results.append({"ea": addr, "value": None, "error": str(e)})
+            results.append({"addr": addr, "value": None, "error": str(e)})
 
     return results
 
@@ -2734,9 +2797,9 @@ def get_u16(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
         try:
             ea = parse_address(addr)
             value = ida_bytes.get_wide_word(ea)
-            results.append({"ea": addr, "value": value})
+            results.append({"addr": addr, "value": value})
         except Exception as e:
-            results.append({"ea": addr, "value": None, "error": str(e)})
+            results.append({"addr": addr, "value": None, "error": str(e)})
 
     return results
 
@@ -2752,9 +2815,9 @@ def get_u32(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
         try:
             ea = parse_address(addr)
             value = ida_bytes.get_wide_dword(ea)
-            results.append({"ea": addr, "value": value})
+            results.append({"addr": addr, "value": value})
         except Exception as e:
-            results.append({"ea": addr, "value": None, "error": str(e)})
+            results.append({"addr": addr, "value": None, "error": str(e)})
 
     return results
 
@@ -2770,9 +2833,9 @@ def get_u64(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
         try:
             ea = parse_address(addr)
             value = ida_bytes.get_qword(ea)
-            results.append({"ea": addr, "value": value})
+            results.append({"addr": addr, "value": value})
         except Exception as e:
-            results.append({"ea": addr, "value": None, "error": str(e)})
+            results.append({"addr": addr, "value": None, "error": str(e)})
 
     return results
 
@@ -2788,9 +2851,9 @@ def get_string(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
         try:
             ea = parse_address(addr)
             value = idaapi.get_strlit_contents(ea, -1, 0).decode("utf-8")
-            results.append({"ea": addr, "value": value})
+            results.append({"addr": addr, "value": value})
         except Exception as e:
-            results.append({"ea": addr, "value": None, "error": str(e)})
+            results.append({"addr": addr, "value": None, "error": str(e)})
 
     return results
 
@@ -2835,7 +2898,7 @@ def get_stack_frame_variables_internal(
 
 @jsonrpc
 @idaread
-def stack_vars(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
+def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
     """Get stack vars"""
     addrs = normalize_list_input(addrs)
     results = []
@@ -2844,27 +2907,25 @@ def stack_vars(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
         try:
             ea = parse_address(addr)
             vars = get_stack_frame_variables_internal(ea, True)
-            results.append({"ea": addr, "vars": vars})
+            results.append({"addr": addr, "vars": vars})
         except Exception as e:
-            results.append({"ea": addr, "vars": None, "error": str(e)})
+            results.append({"addr": addr, "vars": None, "error": str(e)})
 
     return results
 
 
 @jsonrpc
 @idawrite
-def create_stkvar(
+def declare_stack(
     items: Annotated[
-        list[dict] | dict, "[{ea, offset, name, type}, ...] or {ea, offset, name, type}"
+        list[dict] | dict, "[{addr, offset, name, type}, ...] or {addr, offset, name, type}"
     ],
 ):
     """Create stack vars"""
-    if isinstance(items, dict):
-        items = [items]
-
+    items = normalize_dict_list(items)
     results = []
     for item in items:
-        fn_addr = item.get("ea", "")
+        fn_addr = item.get("addr", "")
         offset = item.get("offset", "")
         var_name = item.get("name", "")
         type_name = item.get("type", "")
@@ -2873,7 +2934,7 @@ def create_stkvar(
             func = idaapi.get_func(parse_address(fn_addr))
             if not func:
                 results.append(
-                    {"ea": fn_addr, "name": var_name, "error": "No function found"}
+                    {"addr": fn_addr, "name": var_name, "error": "No function found"}
                 )
                 continue
 
@@ -2882,57 +2943,64 @@ def create_stkvar(
             frame_tif = ida_typeinf.tinfo_t()
             if not ida_frame.get_func_frame(frame_tif, func):
                 results.append(
-                    {"ea": fn_addr, "name": var_name, "error": "No frame returned"}
+                    {"addr": fn_addr, "name": var_name, "error": "No frame returned"}
                 )
                 continue
 
             tif = get_type_by_name(type_name)
             if not ida_frame.define_stkvar(func, var_name, ea, tif):
                 results.append(
-                    {"ea": fn_addr, "name": var_name, "error": "Failed to define"}
+                    {"addr": fn_addr, "name": var_name, "error": "Failed to define"}
                 )
                 continue
 
-            results.append({"ea": fn_addr, "name": var_name, "ok": True})
+            results.append({"addr": fn_addr, "name": var_name, "ok": True})
         except Exception as e:
-            results.append({"ea": fn_addr, "name": var_name, "error": str(e)})
+            results.append({"addr": fn_addr, "name": var_name, "error": str(e)})
 
     return results
 
 
 @jsonrpc
 @idawrite
-def delete_stkvar(
-    items: Annotated[list[dict] | dict, "[{ea, name}, ...] or {ea, name}"],
+def delete_stack(
+    items: Annotated[list[dict] | dict, "[{addr, name}, ...] or {addr, name}"],
 ):
     """Delete stack vars"""
-    if isinstance(items, dict):
-        items = [items]
 
+    def parse_addr_name(s: str) -> dict:
+        # Support "addr:varname" format
+        if ":" in s:
+            parts = s.split(":", 1)
+            return {"addr": parts[0].strip(), "name": parts[1].strip()}
+        # Just varname without address (invalid)
+        return {"addr": "", "name": s.strip()}
+
+    items = normalize_dict_list(items, parse_addr_name)
     results = []
     for item in items:
-        fn_addr = item.get("ea", "")
+        fn_addr = item.get("addr", "")
         var_name = item.get("name", "")
 
         try:
             func = idaapi.get_func(parse_address(fn_addr))
             if not func:
                 results.append(
-                    {"ea": fn_addr, "name": var_name, "error": "No function found"}
+                    {"addr": fn_addr, "name": var_name, "error": "No function found"}
                 )
                 continue
 
             frame_tif = ida_typeinf.tinfo_t()
             if not ida_frame.get_func_frame(frame_tif, func):
                 results.append(
-                    {"ea": fn_addr, "name": var_name, "error": "No frame returned"}
+                    {"addr": fn_addr, "name": var_name, "error": "No frame returned"}
                 )
                 continue
 
             idx, udm = frame_tif.get_udm(var_name)
             if not udm:
                 results.append(
-                    {"ea": fn_addr, "name": var_name, "error": f"{var_name} not found"}
+                    {"addr": fn_addr, "name": var_name, "error": f"{var_name} not found"}
                 )
                 continue
 
@@ -2940,7 +3008,7 @@ def delete_stkvar(
             if ida_frame.is_special_frame_member(tid):
                 results.append(
                     {
-                        "ea": fn_addr,
+                        "addr": fn_addr,
                         "name": var_name,
                         "error": f"{var_name} is special frame member",
                     }
@@ -2954,7 +3022,7 @@ def delete_stkvar(
             if ida_frame.is_funcarg_off(func, offset):
                 results.append(
                     {
-                        "ea": fn_addr,
+                        "addr": fn_addr,
                         "name": var_name,
                         "error": f"{var_name} is argument member",
                     }
@@ -2963,13 +3031,13 @@ def delete_stkvar(
 
             if not ida_frame.delete_frame_members(func, offset, offset + size):
                 results.append(
-                    {"ea": fn_addr, "name": var_name, "error": "Failed to delete"}
+                    {"addr": fn_addr, "name": var_name, "error": "Failed to delete"}
                 )
                 continue
 
-            results.append({"ea": fn_addr, "name": var_name, "ok": True})
+            results.append({"addr": fn_addr, "name": var_name, "ok": True})
         except Exception as e:
-            results.append({"ea": fn_addr, "name": var_name, "error": str(e)})
+            results.append({"addr": fn_addr, "name": var_name, "error": str(e)})
 
     return results
 
@@ -3097,12 +3165,19 @@ def struct_at(
     queries: Annotated[list[dict] | dict, "[{addr, struct}, ...] or {addr, struct}"],
 ) -> list[dict]:
     """Read struct fields"""
-    if isinstance(queries, dict):
-        queries = [queries]
+
+    def parse_addr_struct(s: str) -> dict:
+        # Support "addr:struct" or just "addr" (auto-detect struct)
+        if ":" in s:
+            parts = s.split(":", 1)
+            return {"addr": parts[0].strip(), "struct": parts[1].strip()}
+        return {"addr": s.strip(), "struct": ""}
+
+    queries = normalize_dict_list(queries, parse_addr_struct)
 
     results = []
     for query in queries:
-        addr_str = query.get("ea", "")
+        addr_str = query.get("addr", "")
         struct_name = query.get("struct", "")
 
         try:
@@ -3112,7 +3187,7 @@ def struct_at(
             if not tif.get_named_type(None, struct_name):
                 results.append(
                     {
-                        "ea": addr_str,
+                        "addr": addr_str,
                         "struct": struct_name,
                         "members": None,
                         "error": f"Struct '{struct_name}' not found",
@@ -3124,7 +3199,7 @@ def struct_at(
             if not tif.get_udt_details(udt_data):
                 results.append(
                     {
-                        "ea": addr_str,
+                        "addr": addr_str,
                         "struct": struct_name,
                         "members": None,
                         "error": "Failed to get struct details",
@@ -3186,11 +3261,11 @@ def struct_at(
 
                 members.append(member_info)
 
-            results.append({"ea": addr_str, "struct": struct_name, "members": members})
+            results.append({"addr": addr_str, "struct": struct_name, "members": members})
         except Exception as e:
             results.append(
                 {
-                    "ea": addr_str,
+                    "addr": addr_str,
                     "struct": struct_name,
                     "members": None,
                     "error": str(e),
@@ -3525,7 +3600,7 @@ def dbg_callstack() -> list[dict[str, str]]:
             return []
         for frame in trace:
             frame_info = {
-                "ea": hex(frame.callea),
+                "addr": hex(frame.callea),
             }
             try:
                 module_info = ida_idd.modinfo_t()
@@ -3558,7 +3633,7 @@ def dbg_callstack() -> list[dict[str, str]]:
 
 
 class Breakpoint(TypedDict):
-    ea: str
+    addr: str
     enabled: bool
     condition: Optional[str]
 
@@ -3570,7 +3645,7 @@ def list_breakpoints():
         if ida_dbg.getn_bpt(i, bpt):
             breakpoints.append(
                 Breakpoint(
-                    ea=hex(bpt.ea),
+                    addr=hex(bpt.ea),
                     enabled=bpt.flags & ida_dbg.BPT_ENABLED,
                     condition=str(bpt.condition) if bpt.condition else None,
                 )
@@ -3657,17 +3732,17 @@ def dbg_bp_add(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
         try:
             ea = parse_address(addr)
             if idaapi.add_bpt(ea, 0, idaapi.BPT_SOFT):
-                results.append({"ea": addr, "ok": True})
+                results.append({"addr": addr, "ok": True})
             else:
                 breakpoints = list_breakpoints()
                 for bpt in breakpoints:
-                    if bpt["ea"] == hex(ea):
-                        results.append({"ea": addr, "ok": True})
+                    if bpt["addr"] == hex(ea):
+                        results.append({"addr": addr, "ok": True})
                         break
                 else:
-                    results.append({"ea": addr, "error": "Failed to set breakpoint"})
+                    results.append({"addr": addr, "error": "Failed to set breakpoint"})
         except Exception as e:
-            results.append({"ea": addr, "error": str(e)})
+            results.append({"addr": addr, "error": str(e)})
 
     return results
 
@@ -3710,11 +3785,11 @@ def dbg_bp_del(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
         try:
             ea = parse_address(addr)
             if idaapi.del_bpt(ea):
-                results.append({"ea": addr, "ok": True})
+                results.append({"addr": addr, "ok": True})
             else:
-                results.append({"ea": addr, "error": "Failed to delete breakpoint"})
+                results.append({"addr": addr, "error": "Failed to delete breakpoint"})
         except Exception as e:
-            results.append({"ea": addr, "error": str(e)})
+            results.append({"addr": addr, "error": str(e)})
 
     return results
 
@@ -3726,27 +3801,35 @@ def dbg_bp_enable(
     items: Annotated[list[dict] | dict, "[{addr, enabled}, ...] or {addr, enabled}"],
 ) -> list[dict]:
     """Enable/disable breakpoints"""
-    if isinstance(items, dict):
-        items = [items]
+
+    def parse_addr_enabled(s: str) -> dict:
+        # Support "addr:0" or "addr:1" or just "addr" (defaults to enabled)
+        if ":" in s:
+            parts = s.split(":", 1)
+            enabled = parts[1].strip().lower() in ("1", "true", "yes", "on")
+            return {"addr": parts[0].strip(), "enabled": enabled}
+        return {"addr": s.strip(), "enabled": True}
+
+    items = normalize_dict_list(items, parse_addr_enabled)
 
     results = []
     for item in items:
-        addr = item.get("ea", "")
+        addr = item.get("addr", "")
         enable = item.get("enabled", True)
 
         try:
             ea = parse_address(addr)
             if idaapi.enable_bpt(ea, enable):
-                results.append({"ea": addr, "ok": True})
+                results.append({"addr": addr, "ok": True})
             else:
                 results.append(
                     {
-                        "ea": addr,
+                        "addr": addr,
                         "error": f"Failed to {'enable' if enable else 'disable'} breakpoint",
                     }
                 )
         except Exception as e:
-            results.append({"ea": addr, "error": str(e)})
+            results.append({"addr": addr, "error": str(e)})
 
     return results
 
@@ -3887,7 +3970,7 @@ def py_eval(
 
 
 class FunctionAnalysis(TypedDict):
-    ea: str
+    addr: str
     name: Optional[str]
     code: Optional[str]
     asm: Optional[list]
@@ -3927,7 +4010,7 @@ def get_callees(addr: str) -> list[dict]:
                     if func_name is not None:
                         callees.append(
                             {
-                                "ea": hex(target),
+                                "addr": hex(target),
                                 "name": func_name,
                                 "type": func_type,
                             }
@@ -3957,7 +4040,7 @@ def get_callers(addr: str) -> list[Function]:
                 idaapi.NN_callni,
             ]:
                 continue
-            callers[func["ea"]] = func
+            callers[func["addr"]] = func
 
         return list(callers.values())
     except Exception:
@@ -3970,7 +4053,7 @@ def get_xrefs_from_internal(ea: int) -> list[Xref]:
     for xref in idautils.XrefsFrom(ea, 0):
         xrefs.append(
             Xref(
-                ea=hex(xref.to),
+                addr=hex(xref.to),
                 type="code" if xref.iscode else "data",
                 fn=get_function(xref.to, raise_error=False),
             )
@@ -3997,7 +4080,7 @@ def extract_function_strings(ea: int) -> list[String]:
                     if str_content:
                         strings.append(
                             String(
-                                ea=hex(xref.to),
+                                addr=hex(xref.to),
                                 length=len(str_content),
                                 string=str_content.decode("utf-8", errors="replace"),
                             )
@@ -4021,7 +4104,7 @@ def extract_function_constants(ea: int) -> list[dict]:
                 if op.type == idaapi.o_imm:
                     constants.append(
                         {
-                            "ea": hex(item_ea),
+                            "addr": hex(item_ea),
                             "value": hex(op.value),
                             "decimal": op.value,
                         }
@@ -4059,7 +4142,7 @@ def get_assembly_lines(ea: int) -> list[dict]:
                 break
             ops.append(idc.print_operand(item_ea, n) or "")
         lines.append(
-            {"ea": hex(item_ea), "instruction": f"{mnem} {', '.join(ops)}".rstrip()}
+            {"addr": hex(item_ea), "instruction": f"{mnem} {', '.join(ops)}".rstrip()}
         )
     return lines
 
@@ -4068,11 +4151,11 @@ def get_all_xrefs(ea: int) -> dict:
     """Get all xrefs to and from an address"""
     return {
         "to": [
-            {"ea": hex(x.frm), "type": "code" if x.iscode else "data"}
+            {"addr": hex(x.frm), "type": "code" if x.iscode else "data"}
             for x in idautils.XrefsTo(ea, 0)
         ],
         "from": [
-            {"ea": hex(x.to), "type": "code" if x.iscode else "data"}
+            {"addr": hex(x.to), "type": "code" if x.iscode else "data"}
             for x in idautils.XrefsFrom(ea, 0)
         ],
     }
@@ -4099,7 +4182,7 @@ def get_all_comments(ea: int) -> dict:
 
 @jsonrpc
 @idaread
-def analyze_fns(addrs: Annotated[list[str], "Address(es)"]) -> list[FunctionAnalysis]:
+def analyze_funcs(addrs: Annotated[list[str], "Address(es)"]) -> list[FunctionAnalysis]:
     """Analyze functions: decomp, xrefs, callees, strings"""
     results = []
     for addr in addrs:
@@ -4110,7 +4193,7 @@ def analyze_fns(addrs: Annotated[list[str], "Address(es)"]) -> list[FunctionAnal
             if not func:
                 results.append(
                     FunctionAnalysis(
-                        ea=addr,
+                        addr=addr,
                         name=None,
                         code=None,
                         asm=None,
@@ -4139,13 +4222,13 @@ def analyze_fns(addrs: Annotated[list[str], "Address(es)"]) -> list[FunctionAnal
                 )
 
             result = FunctionAnalysis(
-                ea=addr,
+                addr=addr,
                 name=ida_funcs.get_func_name(func.start_ea),
                 code=decompile_function_safe(ea),
                 asm=get_assembly_lines(ea),
                 xto=[
                     Xref(
-                        ea=hex(x.frm),
+                        addr=hex(x.frm),
                         type="code" if x.iscode else "data",
                         fn=get_function(x.frm, raise_error=False),
                     )
@@ -4163,7 +4246,7 @@ def analyze_fns(addrs: Annotated[list[str], "Address(es)"]) -> list[FunctionAnal
         except Exception as e:
             results.append(
                 FunctionAnalysis(
-                    ea=addr,
+                    addr=addr,
                     name=None,
                     code=None,
                     asm=None,
@@ -4314,7 +4397,7 @@ def basic_blocks(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
             func = idaapi.get_func(ea)
             if not func:
                 results.append(
-                    {"ea": fn_addr, "error": "Function not found", "blocks": []}
+                    {"addr": fn_addr, "error": "Function not found", "blocks": []}
                 )
                 continue
 
@@ -4333,10 +4416,10 @@ def basic_blocks(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
                 )
 
             results.append(
-                {"ea": fn_addr, "blocks": blocks, "count": len(blocks), "error": None}
+                {"addr": fn_addr, "blocks": blocks, "count": len(blocks), "error": None}
             )
         except Exception as e:
-            results.append({"ea": fn_addr, "error": str(e), "blocks": []})
+            results.append({"addr": fn_addr, "error": str(e), "blocks": []})
     return results
 
 
@@ -4432,10 +4515,10 @@ def find_paths(
 def apply_types(
     applications: Annotated[
         list[dict] | dict,
-        "[{kind, ea, type, ...}, ...] or {kind, ea, type, ...}. kind: function|global|local|stkvar",
+        "[{kind, addr, type, ...}, ...] or {kind, addr, type, ...}. kind: function|global|local|stack",
     ],
 ) -> list[dict]:
-    """Apply types (function/global/local/stkvar)"""
+    """Apply types (function/global/local/stack)"""
     applications = normalize_dict_list(applications)
     results = []
 
@@ -4444,7 +4527,7 @@ def apply_types(
             kind = app["kind"]
 
             if kind == "function":
-                func = idaapi.get_func(parse_address(app["ea"]))
+                func = idaapi.get_func(parse_address(app["addr"]))
                 if not func:
                     results.append({"edit": app, "error": "Function not found"})
                     continue
@@ -4468,7 +4551,7 @@ def apply_types(
             elif kind == "global":
                 ea = idaapi.get_name_ea(idaapi.BADADDR, app.get("name", ""))
                 if ea == idaapi.BADADDR:
-                    ea = parse_address(app["ea"])
+                    ea = parse_address(app["addr"])
 
                 tif = get_type_by_name(app["type"])
                 success = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL)
@@ -4481,7 +4564,7 @@ def apply_types(
                 )
 
             elif kind == "local":
-                func = idaapi.get_func(parse_address(app["ea"]))
+                func = idaapi.get_func(parse_address(app["addr"]))
                 if not func:
                     results.append({"edit": app, "error": "Function not found"})
                     continue
@@ -4497,8 +4580,8 @@ def apply_types(
                     }
                 )
 
-            elif kind == "stkvar":
-                func = idaapi.get_func(parse_address(app["ea"]))
+            elif kind == "stack":
+                func = idaapi.get_func(parse_address(app["addr"]))
                 if not func:
                     results.append({"edit": app, "error": "No function found"})
                     continue
@@ -4552,7 +4635,7 @@ def infer_types(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
             if ida_hexrays.init_hexrays_plugin() and ida_hexrays.guess_tinfo(tif, ea):
                 results.append(
                     {
-                        "ea": addr,
+                        "addr": addr,
                         "inferred_type": str(tif),
                         "method": "hexrays",
                         "confidence": "high",
@@ -4564,7 +4647,7 @@ def infer_types(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
             if ida_nalt.get_tinfo(tif, ea):
                 results.append(
                     {
-                        "ea": addr,
+                        "addr": addr,
                         "inferred_type": str(tif),
                         "method": "existing",
                         "confidence": "high",
@@ -4584,7 +4667,7 @@ def infer_types(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
 
                 results.append(
                     {
-                        "ea": addr,
+                        "addr": addr,
                         "inferred_type": type_guess,
                         "method": "size_based",
                         "confidence": "low",
@@ -4594,7 +4677,7 @@ def infer_types(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
 
             results.append(
                 {
-                    "ea": addr,
+                    "addr": addr,
                     "inferred_type": None,
                     "method": None,
                     "confidence": "none",
@@ -4604,7 +4687,7 @@ def infer_types(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
         except Exception as e:
             results.append(
                 {
-                    "ea": addr,
+                    "addr": addr,
                     "inferred_type": None,
                     "method": None,
                     "confidence": "none",
@@ -4626,7 +4709,9 @@ def search(
     queries: Annotated[list[dict] | dict, "[{type, ...}, ...] or {type, ...}"],
 ) -> list[dict]:
     """Search (type: 'immediate'|'string'|'data_ref'|'code_ref')"""
-    queries = normalize_dict_list(queries)
+    queries = normalize_dict_list(
+        queries, lambda s: {"type": "string", "pattern": s}
+    )
     results = []
 
     for query in queries:
@@ -4695,7 +4780,7 @@ def search(
 
 @jsonrpc
 @idaread
-def export_fns(
+def export_funcs(
     addrs: Annotated[list[str], "Address(es)"],
     format: Annotated[str, "Format: json|c_header|prototypes"] = "json",
 ) -> dict:
@@ -4707,11 +4792,11 @@ def export_fns(
             ea = parse_address(addr)
             func = idaapi.get_func(ea)
             if not func:
-                results.append({"ea": addr, "error": "Function not found"})
+                results.append({"addr": addr, "error": "Function not found"})
                 continue
 
             func_data = {
-                "ea": addr,
+                "addr": addr,
                 "name": ida_funcs.get_func_name(func.start_ea),
                 "prototype": get_prototype(func),
                 "size": hex(func.end_ea - func.start_ea),
@@ -4726,7 +4811,7 @@ def export_fns(
             results.append(func_data)
 
         except Exception as e:
-            results.append({"ea": addr, "error": str(e)})
+            results.append({"addr": addr, "error": str(e)})
 
     if format == "c_header":
         # Generate C header file
@@ -4792,7 +4877,7 @@ def callgraph(
                     return
 
                 func_name = ida_funcs.get_func_name(f.start_ea)
-                nodes[hex(addr)] = {"ea": hex(addr), "name": func_name, "depth": depth}
+                nodes[hex(addr)] = {"addr": hex(addr), "name": func_name, "depth": depth}
 
                 # Get callees
                 for item_ea in idautils.FuncItems(f.start_ea):
@@ -4836,10 +4921,10 @@ def callgraph(
 def rename_all(
     renamings: Annotated[
         list[dict] | dict,
-        "[{type, ea, old, new}, ...] or {type, ea, old, new}. type: function|global|local|stkvar",
+        "[{type, addr, old, new}, ...] or {type, addr, old, new}. type: function|global|local|stack",
     ],
 ) -> list[dict]:
-    """Rename anything (function/global/local/stkvar)"""
+    """Rename anything (function/global/local/stack)"""
     renamings = normalize_dict_list(renamings)
     results = []
 
@@ -4849,7 +4934,7 @@ def rename_all(
             success = False
 
             if item_type == "function":
-                ea = parse_address(item["ea"])
+                ea = parse_address(item["addr"])
                 success = idaapi.set_name(ea, item["new"], idaapi.SN_CHECK)
                 if success:
                     func = idaapi.get_func(ea)
@@ -4862,7 +4947,7 @@ def rename_all(
                     success = idaapi.set_name(ea, item["new"], idaapi.SN_CHECK)
 
             elif item_type == "local":
-                func = idaapi.get_func(parse_address(item["ea"]))
+                func = idaapi.get_func(parse_address(item["addr"]))
                 if func:
                     success = ida_hexrays.rename_lvar(
                         func.start_ea, item["old"], item["new"]
@@ -4870,8 +4955,8 @@ def rename_all(
                     if success:
                         refresh_decompiler_ctext(func.start_ea)
 
-            elif item_type == "stkvar":
-                func = idaapi.get_func(parse_address(item["ea"]))
+            elif item_type == "stack":
+                func = idaapi.get_func(parse_address(item["addr"]))
                 if not func:
                     results.append({"item": item, "error": "No function found"})
                     continue
@@ -4924,23 +5009,31 @@ def rename_all(
 @idaread
 @unsafe
 def dbg_read_mem(
-    regions: Annotated[list[dict] | dict, "[{ea, size}, ...] or {ea, size}"],
+    regions: Annotated[list[dict] | dict, "[{addr, size}, ...] or {addr, size}"],
 ) -> list[dict]:
     """Read debug memory"""
-    regions = normalize_dict_list(regions)
+
+    def parse_addr_size(s: str) -> dict:
+        # Support "addr:size" or just "addr" (default size=256)
+        if ":" in s:
+            parts = s.split(":", 1)
+            return {"addr": parts[0].strip(), "size": int(parts[1].strip())}
+        return {"addr": s.strip(), "size": 256}
+
+    regions = normalize_dict_list(regions, parse_addr_size)
     dbg_ensure_running()
     results = []
 
     for region in regions:
         try:
-            addr = parse_address(region["ea"])
+            addr = parse_address(region["addr"])
             size = region["size"]
 
             data = idaapi.dbg_read_memory(addr, size)
             if data:
                 results.append(
                     {
-                        "ea": region["ea"],
+                        "addr": region["addr"],
                         "size": len(data),
                         "data": data.hex(),
                         "error": None,
@@ -4949,7 +5042,7 @@ def dbg_read_mem(
             else:
                 results.append(
                     {
-                        "ea": region["ea"],
+                        "addr": region["addr"],
                         "size": 0,
                         "data": None,
                         "error": "Failed to read memory",
@@ -4958,7 +5051,7 @@ def dbg_read_mem(
 
         except Exception as e:
             results.append(
-                {"ea": region.get("ea"), "size": 0, "data": None, "error": str(e)}
+                {"addr": region.get("addr"), "size": 0, "data": None, "error": str(e)}
             )
 
     return results
@@ -4969,23 +5062,32 @@ def dbg_read_mem(
 @unsafe
 def dbg_write_mem(
     regions: Annotated[
-        list[dict] | dict, "[{ea, data (hex)}, ...] or {ea, data (hex)}"
+        list[dict] | dict, "[{addr, data (hex)}, ...] or {addr, data (hex)}"
     ],
 ) -> list[dict]:
     """Write debug memory"""
-    regions = normalize_dict_list(regions)
+
+    def parse_addr_data(s: str) -> dict:
+        # Support "addr:hexdata" format
+        if ":" in s:
+            parts = s.split(":", 1)
+            return {"addr": parts[0].strip(), "data": parts[1].strip()}
+        # Just hex data without address (invalid)
+        return {"addr": "", "data": s.strip()}
+
+    regions = normalize_dict_list(regions, parse_addr_data)
     dbg_ensure_running()
     results = []
 
     for region in regions:
         try:
-            addr = parse_address(region["ea"])
+            addr = parse_address(region["addr"])
             data = bytes.fromhex(region["data"])
 
             success = idaapi.dbg_write_memory(addr, data)
             results.append(
                 {
-                    "ea": region["ea"],
+                    "addr": region["addr"],
                     "size": len(data) if success else 0,
                     "ok": success,
                     "error": None if success else "Write failed",
@@ -4993,7 +5095,7 @@ def dbg_write_mem(
             )
 
         except Exception as e:
-            results.append({"ea": region.get("ea"), "size": 0, "error": str(e)})
+            results.append({"addr": region.get("addr"), "size": 0, "error": str(e)})
 
     return results
 
@@ -5007,7 +5109,7 @@ def dbg_write_mem(
 @idawrite
 def put_bytes(
     patches: Annotated[
-        list[dict] | dict, "[{ea, data (hex)}, ...] or {ea, data (hex)}"
+        list[dict] | dict, "[{addr, data (hex)}, ...] or {addr, data (hex)}"
     ],
 ) -> list[dict]:
     """Patch bytes"""
@@ -5016,16 +5118,16 @@ def put_bytes(
 
     for patch in patches:
         try:
-            ea = parse_address(patch["ea"])
+            ea = parse_address(patch["addr"])
             data = bytes.fromhex(patch["data"])
 
             ida_bytes.patch_bytes(ea, data)
             results.append(
-                {"ea": patch["ea"], "size": len(data), "ok": True, "error": None}
+                {"addr": patch["addr"], "size": len(data), "ok": True, "error": None}
             )
 
         except Exception as e:
-            results.append({"ea": patch.get("ea"), "size": 0, "error": str(e)})
+            results.append({"addr": patch.get("addr"), "size": 0, "error": str(e)})
 
     return results
 
@@ -5089,7 +5191,7 @@ def analyze_strings(
         try:
             all_strings.append(
                 {
-                    "ea": hex(s.ea),
+                    "addr": hex(s.ea),
                     "length": s.length,
                     "string": str(s),
                     "type": s.strtype,
@@ -5111,7 +5213,7 @@ def analyze_strings(
                 continue
 
             # Add xref info
-            s_ea = parse_address(s["ea"])
+            s_ea = parse_address(s["addr"])
             xrefs = [hex(x.frm) for x in idautils.XrefsTo(s_ea, 0)]
 
             matches.append({**s, "xrefs": xrefs, "xref_count": len(xrefs)})

@@ -10,18 +10,18 @@ Available functionality:
 
 ## Core Functions
 
-- `meta()`: Get IDB metadata (path, module, base address, size, hashes).
-- `fn(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).
-- `cur_ea()`: Get current cursor address.
-- `cur_fn()`: Get current function at cursor.
+- `idb_meta()`: Get IDB metadata (path, module, base address, size, hashes).
+- `list_funcs(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).
+- `cursor_addr()`: Get current cursor address.
+- `cursor_func()`: Get current function at cursor.
 - `conv_num(inputs)`: Convert numbers to different formats (decimal, hex, bytes, ASCII, binary).
 - `fns(queries)`: List functions (paginated, filtered).
-- `globs(queries)`: List global variables (paginated, filtered).
+- `gvars(queries)`: List global variables (paginated, filtered).
 - `imports(offset, count)`: List all imported symbols with module names (paginated).
 - `strings(queries)`: List strings in the database (paginated, filtered).
 - `segments()`: List all memory segments with permissions.
 - `local_types()`: List all local types defined in the database.
-- `decomp(addrs)`: Decompile function(s) at given address(es).
+- `decompile(addrs)`: Decompile function(s) at given address(es).
 - `disasm(addrs)`: Disassemble function(s) with full details (arguments, stack frame, etc).
 - `xrefs_to(addrs)`: Get all cross-references to address(es).
 - `xrefs_to_field(queries)`: Get cross-references to specific struct field(s).
@@ -47,9 +47,9 @@ Available functionality:
 
 ## Stack Frame Operations
 
-- `stack_vars(addrs)`: Get stack frame variables for function(s).
-- `create_stkvar(items)`: Create stack variable(s) at specified offset(s).
-- `delete_stkvar(items)`: Delete stack variable(s) by name.
+- `stack_frame(addrs)`: Get stack frame variables for function(s).
+- `declare_stack(items)`: Create stack variable(s) at specified offset(s).
+- `delete_stack(items)`: Delete stack variable(s) by name.
 
 ## Structure Operations
 
@@ -85,7 +85,7 @@ Available functionality:
 ## Advanced Analysis Operations
 
 - `py_eval(code)`: Execute arbitrary Python code in IDA context (returns string result, supports Jupyter-style evaluation).
-- `analyze_fns(addrs)`: Comprehensive function analysis (decompilation, assembly, xrefs, callees, callers, strings, constants, basic blocks).
+- `analyze_funcs(addrs)`: Comprehensive function analysis (decompilation, assembly, xrefs, callees, callers, strings, constants, basic blocks).
 
 ## Pattern Matching & Search
 
@@ -105,7 +105,7 @@ Available functionality:
 
 ## Export Operations
 
-- `export_fns(addrs, format)`: Export function(s) in specified format (json, c_header, or prototypes).
+- `export_funcs(addrs, format)`: Export function(s) in specified format (json, c_header, or prototypes).
 
 ## Graph Operations
 
