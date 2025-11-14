@@ -5,6 +5,7 @@ if sys.version_info < (3, 11):
     raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
 
 import json
+import re
 import struct
 import threading
 import socket
@@ -109,11 +110,16 @@ class SessionState:
         self.session_id = session_id
         self.created_at = time.time()
         self.last_activity = time.time()
-        # Can store session-specific state here if needed
+        self.initialized = False
 
     def update_activity(self):
         """Update last activity timestamp"""
         self.last_activity = time.time()
+
+    def mark_initialized(self):
+        """Mark the session as initialized"""
+        self.initialized = True
+        self.update_activity()
 
 # ============================================================================
 # MCP Server-Sent Events (SSE) Implementation
@@ -121,11 +127,12 @@ class SessionState:
 
 class SSEConnection:
     """Manages a single SSE client connection"""
-    def __init__(self, client_socket, client_address):
+    def __init__(self, client_socket, client_address, session_id: str | None = None):
         self.socket = client_socket
         self.address = client_address
-        self.session_id = str(uuid.uuid4())  # Unique session identifier
+        self.session_id = session_id or str(uuid.uuid4())
         self.alive = True
+        self.initialized = False
 
     def send_event(self, event_type: str, data):
         """Send an SSE event to the client
@@ -173,7 +180,9 @@ class MCPProtocolHandler:
             "version": "1.0.0"
         }
         self.capabilities = {
-            "tools": {}
+            "tools": {
+                "listChanged": True
+            }
         }
 
     def generate_tool_schema(self, func_name: str, func: Callable) -> dict:
@@ -352,9 +361,88 @@ class MCPServer:
                     key, value = line.split(':', 1)
                     headers[key.strip().lower()] = value.strip()
 
+            # Decode chunked body if present
+            if headers.get('transfer-encoding') == 'chunked':
+                body = self._decode_chunked_body(body)
+
             return method, path, headers, body
         except Exception as e:
             raise ValueError(f"Failed to parse HTTP request: {e}")
+
+    def _decode_chunked_body(self, chunked_data: bytes) -> bytes:
+        """Decode HTTP chunked transfer encoding"""
+        body = b""
+        pos = 0
+
+        while pos < len(chunked_data):
+            # Find chunk size line
+            line_end = chunked_data.find(b'\r\n', pos)
+            if line_end == -1:
+                break
+
+            # Parse chunk size (hex)
+            chunk_size_str = chunked_data[pos:line_end].decode('ascii').strip()
+            # Ignore chunk extensions (;...)
+            if ';' in chunk_size_str:
+                chunk_size_str = chunk_size_str.split(';', 1)[0]
+
+            try:
+                chunk_size = int(chunk_size_str, 16)
+            except ValueError:
+                break
+
+            # Last chunk (size 0)
+            if chunk_size == 0:
+                break
+
+            # Read chunk data
+            chunk_start = line_end + 2
+            chunk_end = chunk_start + chunk_size
+            if chunk_end > len(chunked_data):
+                break
+
+            body += chunked_data[chunk_start:chunk_end]
+
+            # Move past chunk data and trailing \r\n
+            pos = chunk_end + 2
+
+        return body
+
+    def _is_chunked_body_complete(self, chunked_data: bytes) -> bool:
+        """Return True when we have received the full chunked body (including trailer)"""
+        pos = 0
+
+        while True:
+            line_end = chunked_data.find(b"\r\n", pos)
+            if line_end == -1:
+                return False
+
+            size_line = chunked_data[pos:line_end].strip()
+            if b";" in size_line:
+                size_line = size_line.split(b";", 1)[0]
+
+            if not size_line:
+                return False
+
+            try:
+                chunk_size = int(size_line, 16)
+            except ValueError:
+                return False
+
+            pos = line_end + 2
+            if len(chunked_data) < pos + chunk_size + 2:
+                return False
+
+            pos += chunk_size
+            if chunked_data[pos:pos + 2] != b"\r\n":
+                return False
+            pos += 2
+
+            if chunk_size == 0:
+                if len(chunked_data) == pos:
+                    return True
+                trailer_end = chunked_data.find(b"\r\n\r\n", pos)
+                return trailer_end != -1 and trailer_end + 4 <= len(chunked_data)
 
     def _send_http_response(self, sock: socket.socket, status: int, headers: dict, body: bytes = b""):
         """Send raw HTTP response"""
@@ -378,15 +466,14 @@ class MCPServer:
             # Extract or create session
             session_id = headers.get('mcp-session-id')
             if not session_id:
-                # First request - create new session
                 session_id = str(uuid.uuid4())
-                self.sessions[session_id] = SessionState(session_id)
-            elif session_id in self.sessions:
-                # Existing session
-                self.sessions[session_id].update_activity()
+
+            session_state = self.sessions.get(session_id)
+            if session_state is None:
+                session_state = SessionState(session_id)
+                self.sessions[session_id] = session_state
             else:
-                # Unknown session - create new one
-                self.sessions[session_id] = SessionState(session_id)
+                session_state.update_activity()
 
             # Parse JSON-RPC request
             request = json.loads(body.decode('utf-8'))
@@ -398,6 +485,24 @@ class MCPServer:
             method = request.get("method")
             params = request.get("params", {})
             request_id = request.get("id")
+            is_notification = request_id is None
+
+            def send_notification_ack(status: int = 204):
+                ack_headers = {
+                    "Mcp-Session-Id": session_id,
+                    "Access-Control-Allow-Origin": "*",
+                    "Content-Length": "0"
+                }
+                self._send_http_response(client_socket, status, ack_headers, b"")
+
+            if method == "notifications/initialized":
+                session_state.mark_initialized()
+                send_notification_ack()
+                return
+            if method and method.startswith("notifications/") and is_notification:
+                # Silently acknowledge other notifications to stay protocol-compliant
+                send_notification_ack()
+                return
 
             # Prepare response
             response = {
@@ -466,9 +571,25 @@ class MCPServer:
             }
             self._send_http_response(client_socket, 400, error_headers, response_body)
 
-    def _handle_sse_connection(self, client_socket: socket.socket, client_address):
+    def _handle_sse_connection(self, client_socket: socket.socket, client_address, headers: dict):
         """Handle SSE connection (GET /sse)"""
-        conn = SSEConnection(client_socket, client_address)
+        requested_session_id = headers.get("mcp-session-id")
+        if requested_session_id:
+            session_id = requested_session_id
+            # Ensure the session exists (created during streamable HTTP handshake)
+            session_state = self.sessions.get(session_id)
+            if session_state is None:
+                self._send_http_response(client_socket, 404, {
+                    "Content-Type": "text/plain"
+                }, b"Unknown MCP session (initialize first)")
+                client_socket.close()
+                return
+            session_state.update_activity()
+        else:
+            session_id = str(uuid.uuid4())
+            self.sessions[session_id] = SessionState(session_id)
+
+        conn = SSEConnection(client_socket, client_address, session_id)
         self.connections.append(conn)
 
         try:
@@ -482,8 +603,13 @@ class MCPServer:
             self._send_http_response(client_socket, 200, headers)
 
             # Send endpoint event with session ID for routing
-            # MCP clients will POST to this path with the session parameter
-            conn.send_event("endpoint", f"/sse?session={conn.session_id}")
+            # MCP clients can POST to /sse with the Mcp-Session-Id header or use this legacy URL
+            conn.send_event("endpoint", {
+                "url": f"/sse?session={conn.session_id}",
+                "headers": {
+                    "Mcp-Session-Id": conn.session_id
+                }
+            })
 
             # Keep connection alive with periodic pings
             last_ping = time.time()
@@ -500,13 +626,22 @@ class MCPServer:
             if conn in self.connections:
                 self.connections.remove(conn)
 
-    def _handle_message_post(self, client_socket: socket.socket, body: bytes, client_address, path: str):
+    def _handle_message_post(self, client_socket: socket.socket, body: bytes, client_address, path: str, headers: dict):
         """Handle POST /sse (MCP JSON-RPC request) - SSE mode"""
         try:
             # Extract session ID from query parameters
             parsed = urlparse(path)
             query_params = parse_qs(parsed.query)
             session_id = query_params.get('session', [None])[0]
+            if session_id is None:
+                session_id = headers.get("mcp-session-id")
+
+            if session_id is None:
+                self._send_http_response(client_socket, 400, {
+                    "Content-Type": "text/plain",
+                    "Access-Control-Allow-Origin": "*"
+                }, b"Missing Mcp-Session-Id for SSE POST")
+                return
 
             # Parse JSON-RPC request
             request = json.loads(body.decode('utf-8'))
@@ -518,6 +653,28 @@ class MCPServer:
             method = request.get("method")
             params = request.get("params", {})
             request_id = request.get("id")
+            is_notification = request_id is None
+
+            def send_notification_ack():
+                headers = {
+                    "Content-Type": "text/plain",
+                    "Access-Control-Allow-Origin": "*"
+                }
+                if session_id:
+                    headers["Mcp-Session-Id"] = session_id
+                self._send_http_response(client_socket, 202, headers, b"Accepted")
+
+            if method == "notifications/initialized":
+                if session_id:
+                    for conn in self.connections:
+                        if conn.session_id == session_id:
+                            conn.initialized = True
+                            break
+                send_notification_ack()
+                return
+            if method and method.startswith("notifications/") and is_notification:
+                send_notification_ack()
+                return
 
             # Prepare response
             response = {
@@ -695,6 +852,7 @@ class MCPServer:
             client_socket.settimeout(5.0)
             data = b""
             content_length = None
+            is_chunked = False
             header_end_pos = None
 
             while True:
@@ -711,18 +869,27 @@ class MCPServer:
                     if data.startswith(b'GET'):
                         break
 
-                    # For POST, parse Content-Length
-                    if b'Content-Length:' in data:
-                        headers_str = data[:header_end_pos].decode('utf-8', errors='replace')
-                        for line in headers_str.split('\r\n'):
-                            if line.lower().startswith('content-length:'):
-                                content_length = int(line.split(':', 1)[1].strip())
-                                break
+                    # Parse headers for Content-Length or Transfer-Encoding
+                    headers_str = data[:header_end_pos].decode('utf-8', errors='replace')
+                    for line in headers_str.split('\r\n'):
+                        line_lower = line.lower()
+                        if line_lower.startswith('content-length:'):
+                            content_length = int(line.split(':', 1)[1].strip())
+                        elif line_lower.startswith('transfer-encoding:') and 'chunked' in line_lower:
+                            is_chunked = True
 
-                # If we know content length, check if body is complete
-                if header_end_pos is not None and content_length is not None:
-                    body_received = len(data) - header_end_pos - 4
-                    if body_received >= content_length:
+                if header_end_pos is not None:
+                    body_offset = header_end_pos + 4
+                    body_view = data[body_offset:]
+
+                    if content_length is not None:
+                        if len(body_view) >= content_length:
+                            break
+                    elif is_chunked:
+                        if self._is_chunked_body_complete(body_view):
+                            break
+                    elif not data.startswith(b'GET'):
+                        # POST without Content-Length or chunked = no body (RFC 7230)
                         break
 
             if not data:
@@ -744,10 +911,10 @@ class MCPServer:
                 client_socket.close()
             elif method == "GET" and base_path == "/sse":
                 # SSE connection - keep alive
-                self._handle_sse_connection(client_socket, client_address)
+                self._handle_sse_connection(client_socket, client_address, headers)
             elif method == "POST" and base_path == "/sse":
                 # Handle MCP requests via SSE
-                self._handle_message_post(client_socket, body, client_address, path)
+                self._handle_message_post(client_socket, body, client_address, path, headers)
                 client_socket.close()
             elif method == "POST" and base_path == "/mcp":
                 # Default to Streamable HTTP (MCP protocol)
@@ -793,7 +960,7 @@ class MCPServer:
             self.server_socket.listen(5)
             self.server_socket.settimeout(1.0)  # Timeout for accept
 
-            print(f"[MCP] Server started:")
+            print("[MCP] Server started:")
             print(f"  Streamable HTTP: http://{self.HOST}:{self.port}/mcp")
             print(f"  SSE: http://{self.HOST}:{self.port}/sse")
 
@@ -1905,9 +2072,9 @@ def set_global_variable_type(
     ea = idaapi.get_name_ea(idaapi.BADADDR, variable_name)
     tif = get_type_by_name(new_type)
     if not tif:
-        raise IDAError(f"Parsed declaration is not a variable type")
+        raise IDAError("Parsed declaration is not a variable type")
     if not ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL):
-        raise IDAError(f"Failed to apply type")
+        raise IDAError("Failed to apply type")
 
 def patch_address_assemble(
     ea: int,
@@ -2024,9 +2191,9 @@ def set_function_prototype(
     try:
         tif = ida_typeinf.tinfo_t(prototype, None, ida_typeinf.PT_SIL)
         if not tif.is_func():
-            raise IDAError(f"Parsed declaration is not a function type")
+            raise IDAError("Parsed declaration is not a function type")
         if not ida_typeinf.apply_tinfo(func.start_ea, tif, ida_typeinf.PT_SIL):
-            raise IDAError(f"Failed to apply type")
+            raise IDAError("Failed to apply type")
         refresh_decompiler_ctext(func.start_ea)
     except Exception:
         raise IDAError(f"Failed to parse prototype string: {prototype}")

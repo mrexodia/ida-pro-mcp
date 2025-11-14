@@ -64,7 +64,7 @@ def check_connection() -> str:
     try:
         metadata = make_jsonrpc_request("get_metadata")
         return f"Successfully connected to IDA Pro (open file: {metadata['module']})"
-    except Exception as e:
+    except Exception:
         if sys.platform == "darwin":
             shortcut = "Ctrl+Option+M"
         else:
@@ -205,7 +205,7 @@ SAFE_FUNCTIONS = [f for f in MCP_FUNCTIONS if f not in UNSAFE_FUNCTIONS]
 
 def generate_readme():
     print("README:")
-    print(f"- `check_connection()`: Check if the IDA plugin is running.")
+    print("- `check_connection()`: Check if the IDA plugin is running.")
     def get_description(name: str):
         function = visitor.functions[name]
         signature = function.name + "("
@@ -448,7 +448,7 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
         ida_folder = os.path.join(os.path.expanduser("~"), ".idapro")
     free_licenses = glob(os.path.join(ida_folder, "idafree_*.hexlic"))
     if len(free_licenses) > 0:
-        print(f"IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead.")
+        print("IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead.")
         sys.exit(1)
     ida_plugin_folder = os.path.join(ida_folder, "plugins")
     plugin_destination = os.path.join(ida_plugin_folder, "mcp-plugin.py")
