@@ -211,7 +211,7 @@ def generate_readme():
                 signature += ", "
             signature += arg.arg
         signature += ")"
-        description = visitor.descriptions.get(function.name, "<no description>").strip().split("\n")[0]
+        description = visitor.descriptions.get(function.name, "<no description>").strip().split("\n")[0].strip()
         if description[-1] != ".":
             description += "."
         return f"- `{signature}`: {description}"
