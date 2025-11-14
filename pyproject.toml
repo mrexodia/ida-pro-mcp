@@ -16,6 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=1.16.0",
+    "tomli-w>=1.0.0",
 ]
 
 [project.urls]
