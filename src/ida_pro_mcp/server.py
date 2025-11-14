@@ -441,15 +441,16 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
         print("No MCP servers installed. For unsupported MCP clients, use the following config:\n")
         print_mcp_config()
 
-def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
+def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False, allow_ida_free: bool = False):
     if sys.platform == "win32":
         ida_folder = os.path.join(os.getenv("APPDATA"), "Hex-Rays", "IDA Pro")
     else:
         ida_folder = os.path.join(os.path.expanduser("~"), ".idapro")
-    free_licenses = glob(os.path.join(ida_folder, "idafree_*.hexlic"))
-    if len(free_licenses) > 0:
-        print("IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead.")
-        sys.exit(1)
+    if not allow_ida_free:
+        free_licenses = glob(os.path.join(ida_folder, "idafree_*.hexlic"))
+        if len(free_licenses) > 0:
+            print("IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead.")
+            sys.exit(1)
     ida_plugin_folder = os.path.join(ida_folder, "plugins")
     plugin_destination = os.path.join(ida_plugin_folder, "mcp-plugin.py")
     if uninstall:
@@ -488,6 +489,7 @@ def main():
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
     parser.add_argument("--install", action="store_true", help="Install the MCP Server and IDA plugin")
     parser.add_argument("--uninstall", action="store_true", help="Uninstall the MCP Server and IDA plugin")
+    parser.add_argument("--allow-ida-free", action="store_true", help="Allow installation despite IDA Free being installed")
     parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--transport", type=str, default="stdio", help="MCP transport protocol to use (stdio or http://127.0.0.1:8744)")
@@ -501,12 +503,12 @@ def main():
         return
 
     if args.install:
-        install_ida_plugin()
+        install_ida_plugin(allow_ida_free=args.allow_ida_free)
         install_mcp_servers()
         return
 
     if args.uninstall:
-        install_ida_plugin(uninstall=True)
+        install_ida_plugin(uninstall=True, allow_ida_free=args.allow_ida_free)
         install_mcp_servers(uninstall=True)
         return
 
@@ -517,7 +519,7 @@ def main():
 
     # NOTE: This is silent for automated Cline installations
     if args.install_plugin:
-        install_ida_plugin(quiet=True)
+        install_ida_plugin(quiet=True, allow_ida_free=args.allow_ida_free)
 
     if args.config:
         print_mcp_config()
