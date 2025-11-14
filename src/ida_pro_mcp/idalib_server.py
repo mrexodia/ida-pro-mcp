@@ -22,7 +22,7 @@ import ida_hexrays
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("github.com/mrexodia/ida-pro-mcp#idalib")
+mcp = FastMCP("idalib-mcp")
 
 def fixup_tool_argument_descriptions(mcp: FastMCP):
     # In our tool definitions within `mcp-plugin.py`, we use `typing.Annotated` on function parameters
