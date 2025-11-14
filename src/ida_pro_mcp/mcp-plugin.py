@@ -500,6 +500,82 @@ class SSEServer:
         }
         self._send_http_response(client_socket, 200, headers)
 
+    def _handle_jsonrpc_post(self, client_socket: socket.socket, body: bytes):
+        """Handle POST /mcp (legacy JSON-RPC)"""
+        try:
+            request = json.loads(body.decode('utf-8'))
+        except json.JSONDecodeError:
+            error_response = {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32700,
+                    "message": "Parse error: invalid JSON"
+                }
+            }
+            response_body = json.dumps(error_response).encode("utf-8")
+            self._send_http_response(client_socket, 200, {
+                "Content-Type": "application/json",
+                "Content-Length": str(len(response_body))
+            }, response_body)
+            return
+
+        # Prepare the response
+        response: dict[str, Any] = {
+            "jsonrpc": "2.0"
+        }
+        if request.get("id") is not None:
+            response["id"] = request.get("id")
+
+        try:
+            # Basic JSON-RPC validation
+            if not isinstance(request, dict):
+                raise JSONRPCError(-32600, "Invalid Request")
+            if request.get("jsonrpc") != "2.0":
+                raise JSONRPCError(-32600, "Invalid JSON-RPC version")
+            if "method" not in request:
+                raise JSONRPCError(-32600, "Method not specified")
+
+            # Dispatch the method
+            result = rpc_registry.dispatch(request["method"], request.get("params", []))
+            response["result"] = result
+
+        except JSONRPCError as e:
+            response["error"] = {
+                "code": e.code,
+                "message": e.message
+            }
+            if e.data is not None:
+                response["error"]["data"] = e.data
+        except IDAError as e:
+            response["error"] = {
+                "code": -32000,
+                "message": e.message,
+            }
+        except Exception as e:
+            traceback.print_exc()
+            response["error"] = {
+                "code": -32603,
+                "message": "Internal error (please report a bug)",
+                "data": traceback.format_exc(),
+            }
+
+        try:
+            response_body = json.dumps(response).encode("utf-8")
+        except Exception as e:
+            traceback.print_exc()
+            response_body = json.dumps({
+                "error": {
+                    "code": -32603,
+                    "message": "Internal error (please report a bug)",
+                    "data": traceback.format_exc(),
+                }
+            }).encode("utf-8")
+
+        self._send_http_response(client_socket, 200, {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(response_body))
+        }, response_body)
+
     def _handle_client(self, client_socket: socket.socket, client_address):
         """Handle a client connection"""
         try:
@@ -560,6 +636,10 @@ class SSEServer:
             elif method == "POST" and base_path == "/sse":
                 # Handle MCP requests via SSE
                 self._handle_message_post(client_socket, body, client_address, path)
+                client_socket.close()
+            elif method == "POST" and base_path == "/mcp":
+                # Handle legacy JSON-RPC requests
+                self._handle_jsonrpc_post(client_socket, body)
                 client_socket.close()
             else:
                 # 404 Not Found
