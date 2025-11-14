@@ -25,7 +25,7 @@ Available functionality:
 - `list_segments()`: List all segments in the binary.
 - `list_local_types()`: List all Local types in the database.
 - `decompile_function(address)`: Decompile a function at the given address.
-- `disassemble_function(start_address)`: Get assembly code for a function (API-compatible with older IDA builds).
+- `disassemble_function(start_address)`: Get assembly code for a function.
 - `get_xrefs_to(address)`: Get all cross references to the given address.
 - `get_xrefs_to_field(struct_name, field_name)`: Get all cross references to a named struct field (member).
 - `get_callees(function_address)`: Get all the functions called (callees) by the function at function_address.
@@ -67,7 +67,7 @@ Unsafe functions (`--unsafe` flag required):
 - `dbg_get_registers_general_for_thread(thread_id)`: Get general-purpose registers and their values for a specific thread.
 - `dbg_get_registers_general_for_thread_current()`: Get general-purpose registers for the thread currently paused in the debugger.
 - `dbg_get_registers_specific_for_thread(thread_id, register_names)`: Get specific registers and their values for a given thread.
-- `dbg_get_registers_specific_for_thread_current(register_names)`: Get specific registers for the thread currently paused in the debugger. 
+- `dbg_get_registers_specific_for_thread_current(register_names)`: Get specific registers for the thread currently paused in the debugger.
 - `dbg_get_call_stack()`: Get the current call stack.
 - `dbg_list_breakpoints()`: List all breakpoints in the program.
 - `dbg_start_process()`: Start the debugger, returns the current instruction pointer.
@@ -82,7 +82,7 @@ Unsafe functions (`--unsafe` flag required):
 
 ## Prerequisites
 
-- [Python](https://www.python.org/downloads/) (**3.11 or higher**) 
+- [Python](https://www.python.org/downloads/) (**3.11 or higher**)
   - Use `idapyswitch` to switch to the newest Python version
 - [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
 - Supported MCP Client (pick one you like)
@@ -188,7 +188,7 @@ To install the MCP server yourself, follow these steps:
 ```json
 {
   "mcpServers": {
-    "github.com/mrexodia/ida-pro-mcp": {
+    "ida-pro-mcp": {
       "command": "uv",
       "args": [
         "--directory",
@@ -249,6 +249,12 @@ To test the MCP server itself:
 
 ```sh
 uv run mcp dev src/ida_pro_mcp/server.py
+```
+
+Or directly with the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
+
+```sh
+npx -y @modelcontextprotocol/inspector
 ```
 
 This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.

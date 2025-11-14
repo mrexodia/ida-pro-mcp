@@ -227,7 +227,7 @@ def generate_readme():
     print("\nMCP Config:")
     mcp_config = {
         "mcpServers": {
-            "github.com/mrexodia/ida-pro-mcp": {
+            mcp.name: {
             "command": "uv",
             "args": [
                 "--directory",
