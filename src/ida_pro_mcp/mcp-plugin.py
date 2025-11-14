@@ -699,11 +699,44 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
     if not pattern:
         return data
 
-    # TODO: implement /regex/ matching
+    regex = None
+
+    # Parse /regex/ or /regex/flags syntax
+    if pattern.startswith("/") and pattern.count("/") >= 2:
+        last_slash = pattern.rfind("/")
+        body = pattern[1:last_slash]
+        flag_str = pattern[last_slash + 1 :]
+
+        flags = 0
+        for ch in flag_str:
+            if ch == "i":
+                flags |= re.IGNORECASE
+            elif ch == "m":
+                flags |= re.MULTILINE
+            elif ch == "s":
+                flags |= re.DOTALL
+            # ignore other flags for now
+
+        try:
+            regex = re.compile(body, flags or re.IGNORECASE)
+        except re.error:
+            regex = None
+
+    def get_value(item) -> str:
+        try:
+            v = item[key]
+        except Exception:
+            v = getattr(item, key, "")
+        return "" if v is None else str(v)
 
     def matches(item) -> bool:
-        return pattern.lower() in item[key].lower()
-    return list(filter(matches, data))
+        text = get_value(item)
+        if regex is not None:
+            return bool(regex.search(text))
+        # straigthforward mode: case-insensitive contains
+        return pattern.lower() in text.lower()
+
+    return [item for item in data if matches(item)]
 
 @jsonrpc
 @idaread
@@ -2221,4 +2254,5 @@ class MCP(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return MCP()
+
 
