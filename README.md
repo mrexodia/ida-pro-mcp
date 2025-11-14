@@ -79,6 +79,7 @@ Unsafe functions (`--unsafe` flag required):
 - `dbg_step_over()`: Step over the current instruction.
 - `dbg_delete_breakpoint(address)`: Delete a breakpoint at the specified address.
 - `dbg_enable_breakpoint(address, enable)`: Enable or disable a breakpoint at the specified address.
+- `eval_python(code)`: Execute arbitrary Python code in IDA Pro context. Returns string representation of the result.
 
 ## Prerequisites
 

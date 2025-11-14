@@ -3121,6 +3121,122 @@ def dbg_enable_breakpoint(
         return
     raise IDAError(f"Failed to {'' if enable else 'disable '}breakpoint at address {hex(ea)}")
 
+@jsonrpc
+@unsafe
+def eval_python(
+    code: Annotated[str, "Python code to execute in IDA context"],
+) -> str:
+    """
+    Execute arbitrary Python code in IDA Pro context. Returns string representation of the result.
+    Has access to all IDA API modules (ida_*, idaapi, idc, etc) and the current IDB state.
+    Use this for ad-hoc queries, custom analysis, or operations not covered by existing tools.
+    Supports Jupyter-style evaluation: last expression is automatically returned (no need for 'result = x').
+    """
+    try:
+        # Create execution context with IDA modules (lazy import to avoid errors)
+        def lazy_import(module_name):
+            try:
+                return __import__(module_name)
+            except:
+                return None
+
+        exec_globals = {
+            '__builtins__': __builtins__,
+            'idaapi': idaapi,
+            'idc': idc,
+            'idautils': lazy_import('idautils'),
+            'ida_allins': ida_allins,
+            'ida_auto': ida_auto,
+            'ida_bitrange': lazy_import('ida_bitrange'),
+            'ida_bytes': ida_bytes,
+            'ida_dbg': ida_dbg,
+            'ida_dirtree': lazy_import('ida_dirtree'),
+            'ida_diskio': ida_diskio,
+            'ida_entry': lazy_import('ida_entry'),
+            'ida_expr': lazy_import('ida_expr'),
+            'ida_fixup': ida_fixup,
+            'ida_fpro': lazy_import('ida_fpro'),
+            'ida_frame': ida_frame,
+            'ida_funcs': ida_funcs,
+            'ida_gdl': lazy_import('ida_gdl'),
+            'ida_graph': lazy_import('ida_graph'),
+            'ida_hexrays': ida_hexrays,
+            'ida_ida': ida_ida,
+            'ida_idd': lazy_import('ida_idd'),
+            'ida_idp': lazy_import('ida_idp'),
+            'ida_ieee': lazy_import('ida_ieee'),
+            'ida_kernwin': ida_kernwin,
+            'ida_libfuncs': lazy_import('ida_libfuncs'),
+            'ida_lines': ida_lines,
+            'ida_loader': ida_loader,
+            'ida_merge': lazy_import('ida_merge'),
+            'ida_mergemod': lazy_import('ida_mergemod'),
+            'ida_moves': lazy_import('ida_moves'),
+            'ida_nalt': ida_nalt,
+            'ida_name': ida_name,
+            'ida_netnode': ida_netnode,
+            'ida_offset': lazy_import('ida_offset'),
+            'ida_pro': lazy_import('ida_pro'),
+            'ida_problems': ida_problems,
+            'ida_range': lazy_import('ida_range'),
+            'ida_regfinder': lazy_import('ida_regfinder'),
+            'ida_registry': lazy_import('ida_registry'),
+            'ida_search': ida_search,
+            'ida_segment': ida_segment,
+            'ida_segregs': ida_segregs,
+            'ida_srclang': lazy_import('ida_srclang'),
+            'ida_strlist': lazy_import('ida_strlist'),
+            'ida_struct': ida_struct,
+            'ida_tryblks': lazy_import('ida_tryblks'),
+            'ida_typeinf': ida_typeinf,
+            'ida_ua': ida_ua,
+            'ida_undo': lazy_import('ida_undo'),
+            'ida_xref': ida_xref,
+            'ida_enum': ida_enum,
+            'parse_address': parse_address,
+            'get_function': get_function,
+            'get_decompiled_function': get_decompiled_function,
+        }
+
+        # Try evaluation first (for simple expressions)
+        try:
+            result = eval(code, exec_globals)
+            return str(result)
+        except:
+            pass
+
+        # Execute as statements
+        exec_locals = {}
+        exec(code, exec_globals, exec_locals)
+
+        # Merge locals into globals for multi-statement blocks
+        exec_globals.update(exec_locals)
+
+        # Try to eval the last line as an expression (Jupyter-style)
+        lines = code.strip().split('\n')
+        if lines:
+            last_line = lines[-1].strip()
+            if last_line and not last_line.startswith(('#', 'import ', 'from ', 'def ', 'class ', 'if ', 'for ', 'while ', 'with ', 'try:')):
+                try:
+                    result = eval(last_line, exec_globals)
+                    return str(result)
+                except:
+                    pass
+
+        # Return 'result' variable if explicitly set
+        if 'result' in exec_locals:
+            return str(exec_locals['result'])
+
+        # Return last assigned variable
+        if exec_locals:
+            last_key = list(exec_locals.keys())[-1]
+            return str(exec_locals[last_key])
+
+        return "Code executed successfully (no return value)"
+    except Exception as e:
+        import traceback
+        return f"Error executing Python code:\n{traceback.format_exc()}"
+
 class MCP(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
     comment = "MCP Plugin"
