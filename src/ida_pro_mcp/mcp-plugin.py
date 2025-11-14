@@ -115,6 +115,54 @@ class SessionState:
         """Update last activity timestamp"""
         self.last_activity = time.time()
 
+# ============================================================================
+# MCP Server-Sent Events (SSE) Implementation
+# ============================================================================
+
+class SSEConnection:
+    """Manages a single SSE client connection"""
+    def __init__(self, client_socket, client_address):
+        self.socket = client_socket
+        self.address = client_address
+        self.session_id = str(uuid.uuid4())  # Unique session identifier
+        self.alive = True
+
+    def send_event(self, event_type: str, data):
+        """Send an SSE event to the client
+
+        Args:
+            event_type: Type of event (e.g., 'endpoint', 'message', 'ping')
+            data: Event data - can be string (sent as-is) or dict (JSON-encoded)
+        """
+        if not self.alive:
+            return False
+
+        try:
+            # SSE format: "event: type\ndata: content\n\n"
+            event_str = f"event: {event_type}\n"
+            if isinstance(data, str):
+                data_str = f"data: {data}\n\n"
+            else:
+                data_str = f"data: {json.dumps(data)}\n\n"
+            message = (event_str + data_str).encode('utf-8')
+            self.socket.sendall(message)
+            return True
+        except (BrokenPipeError, OSError):
+            self.alive = False
+            return False
+
+    def send_message(self, message: dict):
+        """Send an MCP JSON-RPC message"""
+        return self.send_event("message", message)
+
+    def close(self):
+        """Close the connection"""
+        self.alive = False
+        try:
+            self.socket.close()
+        except:
+            pass
+
 class MCPProtocolHandler:
     """Handles MCP protocol messages and generates tool schemas"""
 
@@ -236,6 +284,7 @@ class MCPServer:
         self.running = False
         self.port = None  # Will be set when server starts
         self.sessions: dict[str, SessionState] = {}
+        self.connections: list[SSEConnection] = []
         self.mcp_handler = MCPProtocolHandler(rpc_registry)
 
     def start(self):
@@ -249,13 +298,13 @@ class MCPServer:
         self.server_thread.start()
 
     def stop(self):
-        """Stop the SSE server"""
+        """Stop the MCP server"""
         if not self.running:
             return
 
         self.running = False
 
-        # Close all connections
+        # Close all SSE connections
         for conn in self.connections[:]:
             conn.close()
         self.connections.clear()
@@ -271,7 +320,7 @@ class MCPServer:
         if self.server_thread:
             self.server_thread.join(timeout=2)
 
-        print("[MCP SSE] Server stopped")
+        print("[MCP] Server stopped")
 
     def _parse_http_request(self, data: bytes) -> tuple[str, str, dict, bytes]:
         """Parse raw HTTP request. Returns (method, path, headers, body)"""
@@ -417,6 +466,142 @@ class MCPServer:
             }
             self._send_http_response(client_socket, 400, error_headers, response_body)
 
+    def _handle_sse_connection(self, client_socket: socket.socket, client_address):
+        """Handle SSE connection (GET /sse)"""
+        conn = SSEConnection(client_socket, client_address)
+        self.connections.append(conn)
+
+        try:
+            # Send SSE headers
+            headers = {
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*"
+            }
+            self._send_http_response(client_socket, 200, headers)
+
+            # Send endpoint event with session ID for routing
+            # MCP clients will POST to this path with the session parameter
+            conn.send_event("endpoint", f"/sse?session={conn.session_id}")
+
+            # Keep connection alive with periodic pings
+            last_ping = time.time()
+            while conn.alive and self.running:
+                now = time.time()
+                if now - last_ping > 30:  # Ping every 30 seconds
+                    if not conn.send_event("ping", {}):
+                        break
+                    last_ping = now
+                time.sleep(1)
+
+        finally:
+            conn.close()
+            if conn in self.connections:
+                self.connections.remove(conn)
+
+    def _handle_message_post(self, client_socket: socket.socket, body: bytes, client_address, path: str):
+        """Handle POST /sse (MCP JSON-RPC request) - SSE mode"""
+        try:
+            # Extract session ID from query parameters
+            parsed = urlparse(path)
+            query_params = parse_qs(parsed.query)
+            session_id = query_params.get('session', [None])[0]
+
+            # Parse JSON-RPC request
+            request = json.loads(body.decode('utf-8'))
+
+            # Validate JSON-RPC 2.0
+            if request.get("jsonrpc") != "2.0":
+                raise JSONRPCError(-32600, "Invalid JSON-RPC version")
+
+            method = request.get("method")
+            params = request.get("params", {})
+            request_id = request.get("id")
+
+            # Prepare response
+            response = {
+                "jsonrpc": "2.0",
+                "id": request_id
+            }
+
+            try:
+                # Handle MCP protocol methods
+                if method == "initialize":
+                    result = self.mcp_handler.handle_initialize(params)
+                elif method == "tools/list":
+                    result = self.mcp_handler.handle_tools_list(params)
+                elif method == "tools/call":
+                    result = self.mcp_handler.handle_tools_call(params)
+                else:
+                    raise JSONRPCError(-32601, f"Method not found: {method}")
+
+                response["result"] = result
+
+            except JSONRPCError as e:
+                response["error"] = {
+                    "code": e.code,
+                    "message": e.message
+                }
+                if e.data:
+                    response["error"]["data"] = e.data
+            except IDAError as e:
+                response["error"] = {
+                    "code": -32000,
+                    "message": e.message
+                }
+            except Exception as e:
+                traceback.print_exc()
+                response["error"] = {
+                    "code": -32603,
+                    "message": "Internal error",
+                    "data": str(e)
+                }
+
+            # Find active SSE connection for this client (match by session ID)
+            sse_conn = None
+            if session_id:
+                for conn in self.connections:
+                    if conn.session_id == session_id and conn.alive:
+                        sse_conn = conn
+                        break
+
+            if not sse_conn:
+                # No SSE connection found
+                error_msg = f"No active SSE connection found for session {session_id}"
+                print(f"[MCP SSE ERROR] {error_msg}")
+                self._send_http_response(client_socket, 400, {
+                    "Content-Type": "text/plain"
+                }, error_msg.encode('utf-8'))
+                return
+
+            # Send response via SSE event stream
+            sse_conn.send_event("message", response)
+
+            # Return 202 Accepted to acknowledge POST
+            self._send_http_response(client_socket, 202, {
+                "Content-Type": "text/plain",
+                "Access-Control-Allow-Origin": "*"
+            }, b"Accepted")
+
+        except Exception as e:
+            traceback.print_exc()
+            error_response = {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32700,
+                    "message": "Parse error",
+                    "data": str(e)
+                },
+                "id": None
+            }
+            response_body = json.dumps(error_response).encode('utf-8')
+            headers = {
+                "Content-Type": "application/json",
+                "Content-Length": str(len(response_body))
+            }
+            self._send_http_response(client_socket, 400, headers, response_body)
+
     def _handle_options_request(self, client_socket: socket.socket):
         """Handle OPTIONS request for CORS"""
         headers = {
@@ -557,6 +742,13 @@ class MCPServer:
             if method == "OPTIONS":
                 self._handle_options_request(client_socket)
                 client_socket.close()
+            elif method == "GET" and base_path == "/sse":
+                # SSE connection - keep alive
+                self._handle_sse_connection(client_socket, client_address)
+            elif method == "POST" and base_path == "/sse":
+                # Handle MCP requests via SSE
+                self._handle_message_post(client_socket, body, client_address, path)
+                client_socket.close()
             elif method == "POST" and base_path == "/mcp":
                 # Default to Streamable HTTP (MCP protocol)
                 # The first request won't have a session header yet
@@ -601,7 +793,9 @@ class MCPServer:
             self.server_socket.listen(5)
             self.server_socket.settimeout(1.0)  # Timeout for accept
 
-            print(f"[MCP] Server started at http://{self.HOST}:{self.port}/mcp")
+            print(f"[MCP] Server started:")
+            print(f"  Streamable HTTP: http://{self.HOST}:{self.port}/mcp")
+            print(f"  SSE: http://{self.HOST}:{self.port}/sse")
 
             while self.running:
                 try:
@@ -617,16 +811,16 @@ class MCPServer:
                     continue
                 except Exception as e:
                     if self.running:
-                        print(f"[MCP SSE] Error accepting connection: {e}")
+                        print(f"[MCP] Error accepting connection: {e}")
 
         except OSError as e:
             if e.errno == 98 or e.errno == 10048:  # Port already in use
-                print(f"[MCP SSE] Error: Port {self.PORT} is already in use")
+                print(f"[MCP] Error: Port {self.port} is already in use")
             else:
-                print(f"[MCP SSE] Server error: {e}")
+                print(f"[MCP] Server error: {e}")
             self.running = False
         except Exception as e:
-            print(f"[MCP SSE] Server error: {e}")
+            print(f"[MCP] Server error: {e}")
             traceback.print_exc()
         finally:
             self.running = False

@@ -114,21 +114,36 @@ This installs:
 
 1. Start IDA Pro and load a binary
 2. Run **Edit → Plugins → MCP** (Ctrl+Alt+M or Ctrl+Option+M on Mac)
-3. The plugin will start the MCP server at `http://127.0.0.1:13337/mcp`
+3. The plugin will start the MCP server with two transports:
+   - **Streamable HTTP**: `http://127.0.0.1:13337/mcp` (default)
+   - **SSE**: `http://127.0.0.1:13337/sse`
 4. Your MCP client will automatically connect
 
 https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
 
 ### Manual Configuration
 
-If your MCP client isn't auto-configured, add this to your client's config file:
+If your MCP client isn't auto-configured, add this to your client's config file.
 
+**Streamable HTTP (recommended):**
 ```json
 {
   "mcpServers": {
     "ida-pro-mcp": {
       "type": "http",
       "url": "http://127.0.0.1:13337/mcp"
+    }
+  }
+}
+```
+
+**SSE (alternative):**
+```json
+{
+  "mcpServers": {
+    "ida-pro-mcp": {
+      "type": "sse",
+      "url": "http://127.0.0.1:13337/sse"
     }
   }
 }
