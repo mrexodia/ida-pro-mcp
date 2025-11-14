@@ -98,17 +98,41 @@ pip uninstall ida-pro-mcp
 pip install https://github.com/mrexodia/ida-pro-mcp/archive/refs/heads/main.zip
 ```
 
-Configure the MCP servers and install the IDA Plugin:
+Install the IDA plugin and configure your MCP clients:
 
-```
+```sh
 ida-pro-mcp --install
 ```
 
-**Important**: Make sure you completely restart IDA/Visual Studio Code/Claude for the installation to take effect. Claude runs in the background and you need to quit it from the tray icon.
+This installs:
+- IDA plugin to `~/.idapro/plugins/`
+- SSE configuration for your MCP clients
+
+**Important**: Restart your MCP client (Claude Code, Cline, etc.) after installation.
+
+### Usage
+
+1. Start IDA Pro and load a binary
+2. Run **Edit → Plugins → MCP** (Ctrl+Alt+M or Ctrl+Option+M on Mac)
+3. The plugin will start the SSE server at `http://127.0.0.1:13337/sse`
+4. Your MCP client will automatically connect
 
 https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
 
-_Note_: You need to load a binary in IDA before the plugin menu will show up.
+### Manual Configuration
+
+If your MCP client isn't auto-configured, add this to your client's config file:
+
+```json
+{
+  "mcpServers": {
+    "ida-pro-mcp": {
+      "type": "sse",
+      "url": "http://127.0.0.1:13337/sse"
+    }
+  }
+}
+```
 
 ## Prompt Engineering
 
@@ -145,15 +169,11 @@ Another thing to keep in mind is that LLMs will not perform well on obfuscated c
 
 You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
 
-## SSE Transport & Headless MCP
+## Headless Mode
 
-You can run an SSE server to connect to the user interface like this:
+### idalib (Headless Analysis)
 
-```sh
-uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
-```
-
-After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can also run a headless SSE server:
+After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can run a headless SSE server without the IDA UI:
 
 ```sh
 uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
@@ -248,7 +268,7 @@ uv run mcp dev src/ida_pro_mcp/server.py
 
 This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.
 
-For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC request directly to `http://localhost:13337/mcp`. After [enabling symbolic links](https://learn.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development) you can run the following command:
+For testing I create a symbolic link to the IDA plugin and use the SSE endpoint at `http://localhost:13337/sse`. After [enabling symbolic links](https://learn.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development) you can run the following command:
 
 ```sh
 uv run ida-pro-mcp --install

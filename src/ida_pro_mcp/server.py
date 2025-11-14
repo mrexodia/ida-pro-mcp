@@ -310,7 +310,8 @@ def print_mcp_config():
         }, indent=2)
     )
 
-def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
+def install_mcp_servers(*, uninstall=False, quiet=False, host="127.0.0.1", port=13337):
+    """Install MCP client configs"""
     if sys.platform == "win32":
         configs = {
             "Cline": (os.path.join(os.getenv("APPDATA", ""), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
@@ -348,7 +349,9 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
         print(f"Unsupported platform: {sys.platform}")
         return
 
+    sse_url = f"http://{host}:{port}/sse"
     installed = 0
+
     for name, (config_dir, config_file) in configs.items():
         config_path = os.path.join(config_dir, config_file)
         if not os.path.exists(config_dir):
@@ -373,45 +376,50 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
         if "mcpServers" not in config:
             config["mcpServers"] = {}
         mcp_servers = config["mcpServers"]
+
+        server_name = "ida-pro-mcp"
+
         # Migrate old name
         old_name = "github.com/mrexodia/ida-pro-mcp"
         if old_name in mcp_servers:
-            mcp_servers[mcp.name] = mcp_servers[old_name]
+            mcp_servers[server_name] = mcp_servers[old_name]
             del mcp_servers[old_name]
+
         if uninstall:
-            if mcp.name not in mcp_servers:
+            if server_name not in mcp_servers:
                 if not quiet:
                     print(f"Skipping {name} uninstall\n  Config: {config_path} (not installed)")
                 continue
-            del mcp_servers[mcp.name]
+            del mcp_servers[server_name]
         else:
-            # Copy environment variables from the existing server if present
-            if mcp.name in mcp_servers:
-                for key, value in mcp_servers[mcp.name].get("env", {}).items():
-                    env[key] = value
-            if copy_python_env(env):
-                print(f"[WARNING] Custom Python environment variables detected")
-            mcp_servers[mcp.name] = {
-                "command": get_python_executable(),
-                "args": [
-                    __file__,
-                ],
-                "timeout": 1800,
-                "disabled": False,
-                "autoApprove": SAFE_FUNCTIONS,
-                "alwaysAllow": SAFE_FUNCTIONS,
+            # Install SSE config
+            mcp_servers[server_name] = {
+                "type": "sse",
+                "url": sse_url
             }
-            if env:
-                mcp_servers[mcp.name]["env"] = env
+
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
         if not quiet:
             action = "Uninstalled" if uninstall else "Installed"
-            print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}")
+            print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}\n  URL: {sse_url}")
         installed += 1
+
     if not uninstall and installed == 0:
-        print("No MCP servers installed. For unsupported MCP clients, use the following config:\n")
-        print_mcp_config()
+        print(f"No MCP servers installed. For unsupported MCP clients, use:\n")
+        print(json.dumps({
+            "ida-pro-mcp": {
+                "type": "sse",
+                "url": sse_url
+            }
+        }, indent=2))
+
+    if not uninstall and not quiet:
+        print("\nUsage:")
+        print("1. Start IDA Pro and load a binary")
+        print("2. Run Edit -> Plugins -> MCP (Ctrl+Alt+M)")
+        print(f"3. The SSE endpoint will be available at {sse_url}")
+
 
 def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
     if sys.platform == "win32":
@@ -458,7 +466,7 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
 def main():
     global ida_host, ida_port
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
-    parser.add_argument("--install", action="store_true", help="Install the MCP Server and IDA plugin")
+    parser.add_argument("--install", action="store_true", help="Install the IDA plugin and configure MCP clients for direct SSE mode")
     parser.add_argument("--uninstall", action="store_true", help="Uninstall the MCP Server and IDA plugin")
     parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
@@ -475,6 +483,15 @@ def main():
     if args.install:
         install_ida_plugin()
         install_mcp_servers()
+        print("\n" + "="*60)
+        print("IDA Pro MCP installed!")
+        print("="*60)
+        print("\nThe IDA plugin serves MCP via SSE - no separate server process needed.")
+        print("\nNext steps:")
+        print("1. Restart your MCP client (Cline, Claude, etc.)")
+        print("2. Start IDA Pro and load a binary")
+        print("3. Run Edit -> Plugins -> MCP (Ctrl+Alt+M)")
+        print("4. The SSE endpoint will be available at http://localhost:13337/sse")
         return
 
     if args.uninstall:
