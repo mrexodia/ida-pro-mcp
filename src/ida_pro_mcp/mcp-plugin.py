@@ -2918,7 +2918,7 @@ def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
 @idawrite
 def declare_stack(
     items: Annotated[
-        list[dict] | dict, "[{addr, offset, name, type}, ...] or {addr, offset, name, type}"
+        list[dict] | dict, "[{addr, offset, name, ty}, ...] or {addr, offset, name, ty}"
     ],
 ):
     """Create stack vars"""
@@ -2928,7 +2928,7 @@ def declare_stack(
         fn_addr = item.get("addr", "")
         offset = item.get("offset", "")
         var_name = item.get("name", "")
-        type_name = item.get("type", "")
+        type_name = item.get("ty", "")
 
         try:
             func = idaapi.get_func(parse_address(fn_addr))
@@ -4515,16 +4515,44 @@ def find_paths(
 def apply_types(
     applications: Annotated[
         list[dict] | dict,
-        "[{kind, addr, type, ...}, ...] or {kind, addr, type, ...}. kind: function|global|local|stack",
+        "[{kind, addr, ty, ...}, ...] or {kind, addr, ty, ...}. kind: function|global|local|stack (auto-detected if omitted)",
     ],
 ) -> list[dict]:
     """Apply types (function/global/local/stack)"""
-    applications = normalize_dict_list(applications)
+
+    def parse_addr_type(s: str) -> dict:
+        # Support "addr:typename" format (auto-detects kind)
+        if ":" in s:
+            parts = s.split(":", 1)
+            return {"addr": parts[0].strip(), "ty": parts[1].strip()}
+        # Just typename without address (invalid)
+        return {"ty": s.strip()}
+
+    applications = normalize_dict_list(applications, parse_addr_type)
     results = []
 
     for app in applications:
         try:
-            kind = app["kind"]
+            # Auto-detect kind if not provided
+            kind = app.get("kind")
+            if not kind:
+                if "signature" in app:
+                    kind = "function"
+                elif "variable" in app:
+                    kind = "local"
+                elif "addr" in app:
+                    # Check if address points to a function
+                    try:
+                        addr = parse_address(app["addr"])
+                        func = idaapi.get_func(addr)
+                        if func and "name" in app and "ty" in app:
+                            kind = "stack"
+                        else:
+                            kind = "global"
+                    except:
+                        kind = "global"
+                else:
+                    kind = "global"
 
             if kind == "function":
                 func = idaapi.get_func(parse_address(app["addr"]))
@@ -4553,7 +4581,7 @@ def apply_types(
                 if ea == idaapi.BADADDR:
                     ea = parse_address(app["addr"])
 
-                tif = get_type_by_name(app["type"])
+                tif = get_type_by_name(app["ty"])
                 success = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL)
                 results.append(
                     {
@@ -4569,7 +4597,7 @@ def apply_types(
                     results.append({"edit": app, "error": "Function not found"})
                     continue
 
-                new_tif = ida_typeinf.tinfo_t(app["type"], None, ida_typeinf.PT_SIL)
+                new_tif = ida_typeinf.tinfo_t(app["ty"], None, ida_typeinf.PT_SIL)
                 modifier = my_modifier_t(app["variable"], new_tif)
                 success = ida_hexrays.modify_user_lvars(func.start_ea, modifier)
                 results.append(
@@ -4601,7 +4629,7 @@ def apply_types(
                 frame_tif.get_udm_by_tid(udm, tid)
                 offset = udm.offset // 8
 
-                tif = get_type_by_name(app["type"])
+                tif = get_type_by_name(app["ty"])
                 success = ida_frame.set_frame_member_type(func, offset, tif)
                 results.append(
                     {
@@ -4706,22 +4734,32 @@ def infer_types(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
 @jsonrpc
 @idaread
 def search(
-    queries: Annotated[list[dict] | dict, "[{type, ...}, ...] or {type, ...}"],
+    queries: Annotated[
+        list[dict] | dict,
+        "{ ty: 'immediate', q: int, start?: addr } | { ty: 'string', q: str } | { ty: 'data_ref', q: addr } | { ty: 'code_ref', q: addr }",
+    ],
 ) -> list[dict]:
-    """Search (type: 'immediate'|'string'|'data_ref'|'code_ref')"""
+    """Search (ty: 'immediate'|'string'|'data_ref'|'code_ref', q: value/pattern/target depending on ty)"""
     queries = normalize_dict_list(
-        queries, lambda s: {"type": "string", "pattern": s}
+        queries, lambda s: {"ty": "string", "q": s}
     )
     results = []
 
     for query in queries:
         try:
-            query_type = query.get("type")
+            query_type = query.get("ty")
             matches = []
 
             if query_type == "immediate":
                 # Search for immediate values
-                value = query.get("value", 0)
+                # q: the immediate value to search for (int)
+                value = query.get("q", 0)
+                if isinstance(value, str):
+                    # Try to parse as hex or decimal
+                    try:
+                        value = int(value, 0)
+                    except ValueError:
+                        value = 0
                 start_ea = parse_address(
                     query.get("start", hex(ida_ida.inf_get_min_ea()))
                 )
@@ -4735,14 +4773,16 @@ def search(
 
             elif query_type == "string":
                 # Search for strings containing pattern
-                pattern = query.get("pattern", "")
+                # q: the pattern to search for in strings (str)
+                pattern = query.get("q", "")
                 for s in idautils.Strings():
                     if pattern.lower() in str(s).lower():
                         matches.append(hex(s.ea))
 
             elif query_type == "data_ref":
                 # Find all data references to a target
-                target_str = query.get("target")
+                # q: the target address to find references to (addr str)
+                target_str = query.get("q")
                 if target_str is None:
                     continue
                 target = parse_address(target_str)
@@ -4751,7 +4791,8 @@ def search(
 
             elif query_type == "code_ref":
                 # Find all code references to a target
-                target_str = query.get("target")
+                # q: the target address to find references to (addr str)
+                target_str = query.get("q")
                 if target_str is None:
                     continue
                 target = parse_address(target_str)
@@ -4921,7 +4962,7 @@ def callgraph(
 def rename_all(
     renamings: Annotated[
         list[dict] | dict,
-        "[{type, addr, old, new}, ...] or {type, addr, old, new}. type: function|global|local|stack",
+        "[{ty, addr, src, dst}, ...] or {ty, addr, src, dst}. ty: function|global|local|stack",
     ],
 ) -> list[dict]:
     """Rename anything (function/global/local/stack)"""
@@ -4930,27 +4971,27 @@ def rename_all(
 
     for item in renamings:
         try:
-            item_type = item["type"]
+            item_type = item["ty"]
             success = False
 
             if item_type == "function":
                 ea = parse_address(item["addr"])
-                success = idaapi.set_name(ea, item["new"], idaapi.SN_CHECK)
+                success = idaapi.set_name(ea, item["dst"], idaapi.SN_CHECK)
                 if success:
                     func = idaapi.get_func(ea)
                     if func:
                         refresh_decompiler_ctext(func.start_ea)
 
             elif item_type == "global":
-                ea = idaapi.get_name_ea(idaapi.BADADDR, item["old"])
+                ea = idaapi.get_name_ea(idaapi.BADADDR, item["src"])
                 if ea != idaapi.BADADDR:
-                    success = idaapi.set_name(ea, item["new"], idaapi.SN_CHECK)
+                    success = idaapi.set_name(ea, item["dst"], idaapi.SN_CHECK)
 
             elif item_type == "local":
                 func = idaapi.get_func(parse_address(item["addr"]))
                 if func:
                     success = ida_hexrays.rename_lvar(
-                        func.start_ea, item["old"], item["new"]
+                        func.start_ea, item["src"], item["dst"]
                     )
                     if success:
                         refresh_decompiler_ctext(func.start_ea)
@@ -4966,9 +5007,9 @@ def rename_all(
                     results.append({"item": item, "error": "No frame"})
                     continue
 
-                idx, udm = frame_tif.get_udm(item["old"])
+                idx, udm = frame_tif.get_udm(item["src"])
                 if not udm:
-                    results.append({"item": item, "error": f"{item['old']} not found"})
+                    results.append({"item": item, "error": f"{item['src']} not found"})
                     continue
 
                 tid = frame_tif.get_udm_tid(idx)
@@ -4984,7 +5025,7 @@ def rename_all(
                     continue
 
                 sval = ida_frame.soff_to_fpoff(func, offset)
-                success = ida_frame.define_stkvar(func, item["new"], sval, udm.type)
+                success = ida_frame.define_stkvar(func, item["dst"], sval, udm.type)
 
             results.append(
                 {
