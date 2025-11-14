@@ -7,9 +7,9 @@ if sys.version_info < (3, 11):
 import json
 import struct
 import threading
-import http.server
 import socket
 import time
+import uuid
 from urllib.parse import urlparse, parse_qs
 from typing import (
     Any,
@@ -108,8 +108,8 @@ class SSEConnection:
     def __init__(self, client_socket, client_address):
         self.socket = client_socket
         self.address = client_address
+        self.session_id = str(uuid.uuid4())  # Unique session identifier
         self.alive = True
-        self.message_queue = queue.Queue()
 
     def send_event(self, event_type: str, data):
         """Send an SSE event to the client
@@ -269,8 +269,6 @@ class SSEServer:
         self.port = None  # Will be set when server starts
         self.connections: list[SSEConnection] = []
         self.mcp_handler = MCPProtocolHandler(rpc_registry)
-        self.pending_requests = {}  # request_id -> SSEConnection mapping
-        self.request_id_counter = 1
 
     def start(self):
         """Start the SSE server"""
@@ -372,9 +370,9 @@ class SSEServer:
             }
             self._send_http_response(client_socket, 200, headers)
 
-            # Send endpoint event with RELATIVE path (not full URL)
-            # MCP clients will POST to this path
-            conn.send_event("endpoint", "/sse")
+            # Send endpoint event with session ID for routing
+            # MCP clients will POST to this path with the session parameter
+            conn.send_event("endpoint", f"/sse?session={conn.session_id}")
 
             # Keep connection alive with periodic pings
             last_ping = time.time()
@@ -391,9 +389,13 @@ class SSEServer:
             if conn in self.connections:
                 self.connections.remove(conn)
 
-    def _handle_message_post(self, client_socket: socket.socket, body: bytes, client_address):
+    def _handle_message_post(self, client_socket: socket.socket, body: bytes, client_address, path: str):
         """Handle POST /sse (MCP JSON-RPC request) - SSE mode"""
         try:
+            # Extract session ID from query parameters
+            parsed = urlparse(path)
+            query_params = parse_qs(parsed.query)
+            session_id = query_params.get('session', [None])[0]
             # Parse JSON-RPC request
             request = json.loads(body.decode('utf-8'))
 
@@ -444,18 +446,19 @@ class SSEServer:
                     "data": str(e)
                 }
 
-            # Find active SSE connection for this client (match by IP)
-            client_ip = client_address[0]
+            # Find active SSE connection for this client (match by session ID)
             sse_conn = None
-            for conn in self.connections:
-                if conn.address[0] == client_ip and conn.alive:
-                    sse_conn = conn
-                    break
+            if session_id:
+                for conn in self.connections:
+                    if conn.session_id == session_id and conn.alive:
+                        sse_conn = conn
+                        break
 
             if not sse_conn:
-                # No SSE connection - this shouldn't happen
-                error_msg = "No active SSE connection found for this client"
+                # No SSE connection found
+                error_msg = f"No active SSE connection found for session {session_id}"
                 print(f"[MCP SSE ERROR] {error_msg}")
+                print(f"[MCP SSE DEBUG] Active connections: {[c.session_id for c in self.connections if c.alive]}")
                 self._send_http_response(client_socket, 400, {
                     "Content-Type": "text/plain"
                 }, error_msg.encode('utf-8'))
@@ -545,15 +548,18 @@ class SSEServer:
             print(f"[MCP SSE DEBUG] {method} {path} from {client_address}")
 
             # Route request
+            # Extract base path (before query params)
+            base_path = path.split('?')[0]
+
             if method == "OPTIONS":
                 self._handle_options_request(client_socket)
                 client_socket.close()
-            elif method == "GET" and path == "/sse":
+            elif method == "GET" and base_path == "/sse":
                 # SSE connection - keep alive
                 self._handle_sse_connection(client_socket, client_address)
-            elif method == "POST" and path == "/sse":
+            elif method == "POST" and base_path == "/sse":
                 # Handle MCP requests via SSE
-                self._handle_message_post(client_socket, body, client_address)
+                self._handle_message_post(client_socket, body, client_address, path)
                 client_socket.close()
             else:
                 # 404 Not Found
