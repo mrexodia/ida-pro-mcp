@@ -5,7 +5,6 @@ import json
 import shutil
 import argparse
 import http.client
-import socket
 from urllib.parse import urlparse
 from glob import glob
 
@@ -18,167 +17,43 @@ jsonrpc_request_id = 1
 ida_host = "127.0.0.1"
 ida_port = 13337
 
-class SSEClientSession:
-    """Minimal SSE client for talking to the IDA plugin."""
-
-    def __init__(self, host: str, port: int, timeout: float = 10.0):
-        self.host = host
-        self.port = port
-        self.timeout = timeout
-        self.endpoint = "/sse"
-        self._connection = None
-        self._response = None
-
-    def __enter__(self) -> "SSEClientSession":
-        self._connection = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
-        try:
-            self._connection.request("GET", "/sse", headers={"Accept": "text/event-stream"})
-            self._response = self._connection.getresponse()
-            if self._response.status != 200:
-                raise RuntimeError(f"Failed to open SSE stream (status {self._response.status})")
-            self._wait_for_endpoint()
-        except Exception:
-            self.close()
-            raise
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.close()
-
-    def close(self):
-        if self._response is not None:
-            try:
-                self._response.close()
-            except Exception:
-                pass
-            self._response = None
-        if self._connection is not None:
-            try:
-                self._connection.close()
-            except Exception:
-                pass
-            self._connection = None
-
-    def send_request(self, request: dict) -> dict:
-        if self._response is None:
-            raise RuntimeError("SSE connection not initialized")
-
-        post_conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
-        try:
-            post_conn.request(
-                "POST",
-                self.endpoint,
-                json.dumps(request),
-                {"Content-Type": "application/json"},
-            )
-            post_response = post_conn.getresponse()
-            if post_response.status not in (200, 202):
-                raise RuntimeError(f"SSE POST failed with status {post_response.status}")
-            post_response.read()
-        finally:
-            post_conn.close()
-
-        while True:
-            event_type, payload = self._read_event()
-            if event_type != "message" or not payload:
-                continue
-            try:
-                message = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            if message.get("id") == request["id"]:
-                return message
-
-    def _wait_for_endpoint(self):
-        while True:
-            event_type, payload = self._read_event()
-            if event_type == "endpoint":
-                endpoint = payload.strip()
-                if endpoint:
-                    self.endpoint = endpoint
-                return
-
-    def _read_event(self) -> tuple[str, str]:
-        if self._response is None or self._response.fp is None:
-            raise RuntimeError("SSE stream closed")
-
-        event_type = None
-        data_lines: list[str] = []
-
-        while True:
-            try:
-                line = self._response.fp.readline()
-            except socket.timeout as exc:
-                raise TimeoutError("Timed out waiting for SSE data") from exc
-
-            if not line:
-                raise RuntimeError("SSE connection closed")
-
-            text = line.decode("utf-8", errors="replace").rstrip("\r\n")
-
-            if not text:
-                if event_type is None:
-                    continue
-                payload = "\n".join(data_lines)
-                return event_type, payload
-
-            if text.startswith(":"):
-                continue
-
-            if text.startswith("event:"):
-                event_type = text[len("event:"):].strip() or "message"
-            elif text.startswith("data:"):
-                if event_type is None:
-                    event_type = "message"
-                data_lines.append(text[len("data:"):].strip())
-
 def make_jsonrpc_request(method: str, *params):
-    """Call an MCP tool on the IDA plugin via its SSE transport."""
-
+    """Make a JSON-RPC request to the IDA plugin"""
     global jsonrpc_request_id, ida_host, ida_port
-
-    request_id = jsonrpc_request_id
-    jsonrpc_request_id += 1
-
+    conn = http.client.HTTPConnection(ida_host, ida_port)
     request = {
         "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": method,
-            "arguments": list(params),
-        },
-        "id": request_id,
+        "method": method,
+        "params": list(params),
+        "id": jsonrpc_request_id,
     }
+    jsonrpc_request_id += 1
 
-    with SSEClientSession(ida_host, ida_port) as session:
-        response = session.send_request(request)
+    try:
+        conn.request("POST", "/mcp", json.dumps(request), {
+            "Content-Type": "application/json"
+        })
+        response = conn.getresponse()
+        data = json.loads(response.read().decode())
 
-    if "error" in response:
-        error = response["error"]
-        code = error.get("code", -32603)
-        message = error.get("message", "Unknown error")
-        pretty = f"JSON-RPC error {code}: {message}"
-        if "data" in error:
-            pretty += "\n" + str(error["data"])
-        raise Exception(pretty)
+        if "error" in data:
+            error = data["error"]
+            code = error["code"]
+            message = error["message"]
+            pretty = f"JSON-RPC error {code}: {message}"
+            if "data" in error:
+                pretty += "\n" + error["data"]
+            raise Exception(pretty)
 
-    result = response.get("result")
-    if isinstance(result, dict) and "content" in result:
-        content = result.get("content") or []
-        if content and isinstance(content[0], dict):
-            text = content[0].get("text", "")
-            if text:
-                try:
-                    result = json.loads(text)
-                except json.JSONDecodeError:
-                    result = text
-            else:
-                result = None
-
-    # NOTE: LLMs do not respond well to empty responses
-    if result is None:
-        result = "success"
-    return result
+        result = data["result"]
+        # NOTE: LLMs do not respond well to empty responses
+        if result is None:
+            result = "success"
+        return result
+    except Exception:
+        raise
+    finally:
+        conn.close()
 
 @mcp.tool()
 def check_connection() -> str:
@@ -416,27 +291,15 @@ def copy_python_env(env: dict[str, str]):
     return result
 
 def print_mcp_config():
-    mcp_config = {
-        "command": get_python_executable(),
-        "args": [
-            __file__,
-        ],
-        "timeout": 1800,
-        "disabled": False,
-    }
-    env = {}
-    if copy_python_env(env):
-        print(f"[WARNING] Custom Python environment variables detected")
-        mcp_config["env"] = env
+    mcp_url = f"http://{ida_host}:{ida_port}/mcp"
     print(json.dumps({
-            "mcpServers": {
-                mcp.name: mcp_config
-            }
-        }, indent=2)
-    )
+        "ida-pro-mcp": {
+            "type": "http",
+            "url": mcp_url
+        }
+    }, indent=2))
 
-def install_mcp_servers(*, uninstall=False, quiet=False, host="127.0.0.1", port=13337):
-    """Install MCP client configs"""
+def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
     if sys.platform == "win32":
         configs = {
             "Cline": (os.path.join(os.getenv("APPDATA", ""), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
@@ -474,9 +337,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, host="127.0.0.1", port=
         print(f"Unsupported platform: {sys.platform}")
         return
 
-    mcp_url = f"http://{host}:{port}/mcp"
     installed = 0
-
     for name, (config_dir, config_file) in configs.items():
         config_path = os.path.join(config_dir, config_file)
         if not os.path.exists(config_dir):
@@ -501,50 +362,45 @@ def install_mcp_servers(*, uninstall=False, quiet=False, host="127.0.0.1", port=
         if "mcpServers" not in config:
             config["mcpServers"] = {}
         mcp_servers = config["mcpServers"]
-
-        server_name = "ida-pro-mcp"
-
         # Migrate old name
         old_name = "github.com/mrexodia/ida-pro-mcp"
         if old_name in mcp_servers:
-            mcp_servers[server_name] = mcp_servers[old_name]
+            mcp_servers[mcp.name] = mcp_servers[old_name]
             del mcp_servers[old_name]
-
         if uninstall:
-            if server_name not in mcp_servers:
+            if mcp.name not in mcp_servers:
                 if not quiet:
                     print(f"Skipping {name} uninstall\n  Config: {config_path} (not installed)")
                 continue
-            del mcp_servers[server_name]
+            del mcp_servers[mcp.name]
         else:
-            # Install Streamable HTTP config
-            mcp_servers[server_name] = {
-                "type": "http",
-                "url": mcp_url
+            # Copy environment variables from the existing server if present
+            if mcp.name in mcp_servers:
+                for key, value in mcp_servers[mcp.name].get("env", {}).items():
+                    env[key] = value
+            if copy_python_env(env):
+                print(f"[WARNING] Custom Python environment variables detected")
+            mcp_servers[mcp.name] = {
+                "command": get_python_executable(),
+                "args": [
+                    __file__,
+                ],
+                "timeout": 1800,
+                "disabled": False,
+                "autoApprove": SAFE_FUNCTIONS,
+                "alwaysAllow": SAFE_FUNCTIONS,
             }
-
+            if env:
+                mcp_servers[mcp.name]["env"] = env
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
         if not quiet:
             action = "Uninstalled" if uninstall else "Installed"
-            print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}\n  URL: {mcp_url}")
+            print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}")
         installed += 1
-
     if not uninstall and installed == 0:
-        print(f"No MCP servers installed. For unsupported MCP clients, use:\n")
-        print(json.dumps({
-            "ida-pro-mcp": {
-                "type": "http",
-                "url": mcp_url
-            }
-        }, indent=2))
-
-    if not uninstall and not quiet:
-        print("\nUsage:")
-        print("1. Start IDA Pro and load a binary")
-        print("2. Run Edit -> Plugins -> MCP (Ctrl+Alt+M)")
-        print(f"3. The MCP endpoint will be available at {mcp_url}")
-
+        print("No MCP servers installed. For unsupported MCP clients, use the following config:\n")
+        print_mcp_config()
 
 def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
     if sys.platform == "win32":
@@ -591,7 +447,7 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
 def main():
     global ida_host, ida_port
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
-    parser.add_argument("--install", action="store_true", help="Install the IDA plugin and configure MCP clients for direct SSE mode")
+    parser.add_argument("--install", action="store_true", help="Install the MCP Server and IDA plugin")
     parser.add_argument("--uninstall", action="store_true", help="Uninstall the MCP Server and IDA plugin")
     parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
@@ -608,15 +464,6 @@ def main():
     if args.install:
         install_ida_plugin()
         install_mcp_servers()
-        print("\n" + "="*60)
-        print("IDA Pro MCP installed!")
-        print("="*60)
-        print("\nThe IDA plugin serves MCP via Streamable HTTP - no separate server process needed.")
-        print("\nNext steps:")
-        print("1. Restart your MCP client (Cline, Claude, etc.)")
-        print("2. Start IDA Pro and load a binary")
-        print("3. Run Edit -> Plugins -> MCP (Ctrl+Alt+M)")
-        print("4. The MCP endpoint will be available at http://localhost:13337/mcp")
         return
 
     if args.uninstall:
