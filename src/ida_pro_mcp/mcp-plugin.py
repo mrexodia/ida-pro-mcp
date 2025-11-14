@@ -100,52 +100,20 @@ def unsafe(func: Callable) -> Callable:
     return rpc_registry.mark_unsafe(func)
 
 # ============================================================================
-# MCP Server-Sent Events (SSE) Implementation
+# MCP Streamable HTTP Implementation
 # ============================================================================
 
-class SSEConnection:
-    """Manages a single SSE client connection"""
-    def __init__(self, client_socket, client_address):
-        self.socket = client_socket
-        self.address = client_address
-        self.session_id = str(uuid.uuid4())  # Unique session identifier
-        self.alive = True
+class SessionState:
+    """Manages state for a Streamable HTTP session"""
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.created_at = time.time()
+        self.last_activity = time.time()
+        # Can store session-specific state here if needed
 
-    def send_event(self, event_type: str, data):
-        """Send an SSE event to the client
-
-        Args:
-            event_type: Type of event (e.g., 'endpoint', 'message', 'ping')
-            data: Event data - can be string (sent as-is) or dict (JSON-encoded)
-        """
-        if not self.alive:
-            return False
-
-        try:
-            # SSE format: "event: type\ndata: content\n\n"
-            event_str = f"event: {event_type}\n"
-            if isinstance(data, str):
-                data_str = f"data: {data}\n\n"
-            else:
-                data_str = f"data: {json.dumps(data)}\n\n"
-            message = (event_str + data_str).encode('utf-8')
-            self.socket.sendall(message)
-            return True
-        except (BrokenPipeError, OSError):
-            self.alive = False
-            return False
-
-    def send_message(self, message: dict):
-        """Send an MCP JSON-RPC message"""
-        return self.send_event("message", message)
-
-    def close(self):
-        """Close the connection"""
-        self.alive = False
-        try:
-            self.socket.close()
-        except:
-            pass
+    def update_activity(self):
+        """Update last activity timestamp"""
+        self.last_activity = time.time()
 
 class MCPProtocolHandler:
     """Handles MCP protocol messages and generates tool schemas"""
@@ -255,8 +223,8 @@ class MCPProtocolHandler:
             ]
         }
 
-class SSEServer:
-    """MCP server using Server-Sent Events (SSE) transport"""
+class MCPServer:
+    """MCP server using Streamable HTTP transport"""
 
     HOST = "127.0.0.1"
     BASE_PORT = 13337
@@ -267,13 +235,13 @@ class SSEServer:
         self.server_thread = None
         self.running = False
         self.port = None  # Will be set when server starts
-        self.connections: list[SSEConnection] = []
+        self.sessions: dict[str, SessionState] = {}
         self.mcp_handler = MCPProtocolHandler(rpc_registry)
 
     def start(self):
-        """Start the SSE server"""
+        """Start the MCP server"""
         if self.running:
-            print("[MCP SSE] Server is already running")
+            print("[MCP] Server is already running")
             return
 
         self.server_thread = threading.Thread(target=self._run_server, daemon=True)
@@ -355,47 +323,22 @@ class SSEServer:
 
         sock.sendall(response.encode('utf-8') + body)
 
-    def _handle_sse_connection(self, client_socket: socket.socket, client_address):
-        """Handle SSE connection (GET /sse)"""
-        conn = SSEConnection(client_socket, client_address)
-        self.connections.append(conn)
-
+    def _handle_streamable_post(self, client_socket: socket.socket, body: bytes, headers: dict):
+        """Handle POST /mcp (Streamable HTTP with Mcp-Session-Id header)"""
         try:
-            # Send SSE headers
-            headers = {
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Access-Control-Allow-Origin": "*"
-            }
-            self._send_http_response(client_socket, 200, headers)
+            # Extract or create session
+            session_id = headers.get('mcp-session-id')
+            if not session_id:
+                # First request - create new session
+                session_id = str(uuid.uuid4())
+                self.sessions[session_id] = SessionState(session_id)
+            elif session_id in self.sessions:
+                # Existing session
+                self.sessions[session_id].update_activity()
+            else:
+                # Unknown session - create new one
+                self.sessions[session_id] = SessionState(session_id)
 
-            # Send endpoint event with session ID for routing
-            # MCP clients will POST to this path with the session parameter
-            conn.send_event("endpoint", f"/sse?session={conn.session_id}")
-
-            # Keep connection alive with periodic pings
-            last_ping = time.time()
-            while conn.alive and self.running:
-                now = time.time()
-                if now - last_ping > 30:  # Ping every 30 seconds
-                    if not conn.send_event("ping", {}):
-                        break
-                    last_ping = now
-                time.sleep(1)
-
-        finally:
-            conn.close()
-            if conn in self.connections:
-                self.connections.remove(conn)
-
-    def _handle_message_post(self, client_socket: socket.socket, body: bytes, client_address, path: str):
-        """Handle POST /sse (MCP JSON-RPC request) - SSE mode"""
-        try:
-            # Extract session ID from query parameters
-            parsed = urlparse(path)
-            query_params = parse_qs(parsed.query)
-            session_id = query_params.get('session', [None])[0]
             # Parse JSON-RPC request
             request = json.loads(body.decode('utf-8'))
 
@@ -446,31 +389,15 @@ class SSEServer:
                     "data": str(e)
                 }
 
-            # Find active SSE connection for this client (match by session ID)
-            sse_conn = None
-            if session_id:
-                for conn in self.connections:
-                    if conn.session_id == session_id and conn.alive:
-                        sse_conn = conn
-                        break
-
-            if not sse_conn:
-                # No SSE connection found
-                error_msg = f"No active SSE connection found for session {session_id}"
-                print(f"[MCP SSE ERROR] {error_msg}")
-                # print(f"[MCP SSE DEBUG] Active connections: {[c.session_id for c in self.connections if c.alive]}")
-                self._send_http_response(client_socket, 400, {
-                    "Content-Type": "text/plain"
-                }, error_msg.encode('utf-8'))
-                return
-
-            # Send response via SSE event stream
-            sse_conn.send_event("message", response)
-            # Return 202 Accepted to acknowledge POST
-            self._send_http_response(client_socket, 202, {
-                "Content-Type": "text/plain",
+            # Send immediate JSON response (Streamable HTTP - non-streaming mode)
+            response_body = json.dumps(response).encode('utf-8')
+            response_headers = {
+                "Content-Type": "application/json",
+                "Content-Length": str(len(response_body)),
+                "Mcp-Session-Id": session_id,
                 "Access-Control-Allow-Origin": "*"
-            }, b"Accepted")
+            }
+            self._send_http_response(client_socket, 200, response_headers, response_body)
 
         except Exception as e:
             traceback.print_exc()
@@ -484,11 +411,11 @@ class SSEServer:
                 "id": None
             }
             response_body = json.dumps(error_response).encode('utf-8')
-            headers = {
+            error_headers = {
                 "Content-Type": "application/json",
                 "Content-Length": str(len(response_body))
             }
-            self._send_http_response(client_socket, 400, headers, response_body)
+            self._send_http_response(client_socket, 400, error_headers, response_body)
 
     def _handle_options_request(self, client_socket: socket.socket):
         """Handle OPTIONS request for CORS"""
@@ -630,16 +557,10 @@ class SSEServer:
             if method == "OPTIONS":
                 self._handle_options_request(client_socket)
                 client_socket.close()
-            elif method == "GET" and base_path == "/sse":
-                # SSE connection - keep alive
-                self._handle_sse_connection(client_socket, client_address)
-            elif method == "POST" and base_path == "/sse":
-                # Handle MCP requests via SSE
-                self._handle_message_post(client_socket, body, client_address, path)
-                client_socket.close()
             elif method == "POST" and base_path == "/mcp":
-                # Handle legacy JSON-RPC requests
-                self._handle_jsonrpc_post(client_socket, body)
+                # Default to Streamable HTTP (MCP protocol)
+                # The first request won't have a session header yet
+                self._handle_streamable_post(client_socket, body, headers)
                 client_socket.close()
             else:
                 # 404 Not Found
@@ -680,7 +601,7 @@ class SSEServer:
             self.server_socket.listen(5)
             self.server_socket.settimeout(1.0)  # Timeout for accept
 
-            print(f"[MCP SSE] Server started at http://{self.HOST}:{self.port}/sse")
+            print(f"[MCP] Server started at http://{self.HOST}:{self.port}/mcp")
 
             while self.running:
                 try:
@@ -2673,7 +2594,7 @@ class MCP(idaapi.plugin_t):
     wanted_hotkey = "Ctrl-Alt-M"
 
     def init(self):
-        self.sse_server = SSEServer()
+        self.mcp_server = MCPServer()
         hotkey = MCP.wanted_hotkey.replace("-", "+")
         if sys.platform == "darwin":
             hotkey = hotkey.replace("Alt", "Option")
@@ -2681,10 +2602,10 @@ class MCP(idaapi.plugin_t):
         return idaapi.PLUGIN_KEEP
 
     def run(self, arg):
-        self.sse_server.start()
+        self.mcp_server.start()
 
     def term(self):
-        self.sse_server.stop()
+        self.mcp_server.stop()
 
 def PLUGIN_ENTRY():
     return MCP()

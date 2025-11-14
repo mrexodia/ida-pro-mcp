@@ -474,7 +474,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, host="127.0.0.1", port=
         print(f"Unsupported platform: {sys.platform}")
         return
 
-    sse_url = f"http://{host}:{port}/sse"
+    mcp_url = f"http://{host}:{port}/mcp"
     installed = 0
 
     for name, (config_dir, config_file) in configs.items():
@@ -517,25 +517,25 @@ def install_mcp_servers(*, uninstall=False, quiet=False, host="127.0.0.1", port=
                 continue
             del mcp_servers[server_name]
         else:
-            # Install SSE config
+            # Install Streamable HTTP config
             mcp_servers[server_name] = {
-                "type": "sse",
-                "url": sse_url
+                "type": "http",
+                "url": mcp_url
             }
 
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
         if not quiet:
             action = "Uninstalled" if uninstall else "Installed"
-            print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}\n  URL: {sse_url}")
+            print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}\n  URL: {mcp_url}")
         installed += 1
 
     if not uninstall and installed == 0:
         print(f"No MCP servers installed. For unsupported MCP clients, use:\n")
         print(json.dumps({
             "ida-pro-mcp": {
-                "type": "sse",
-                "url": sse_url
+                "type": "http",
+                "url": mcp_url
             }
         }, indent=2))
 
@@ -543,7 +543,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, host="127.0.0.1", port=
         print("\nUsage:")
         print("1. Start IDA Pro and load a binary")
         print("2. Run Edit -> Plugins -> MCP (Ctrl+Alt+M)")
-        print(f"3. The SSE endpoint will be available at {sse_url}")
+        print(f"3. The MCP endpoint will be available at {mcp_url}")
 
 
 def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
@@ -611,12 +611,12 @@ def main():
         print("\n" + "="*60)
         print("IDA Pro MCP installed!")
         print("="*60)
-        print("\nThe IDA plugin serves MCP via SSE - no separate server process needed.")
+        print("\nThe IDA plugin serves MCP via Streamable HTTP - no separate server process needed.")
         print("\nNext steps:")
         print("1. Restart your MCP client (Cline, Claude, etc.)")
         print("2. Start IDA Pro and load a binary")
         print("3. Run Edit -> Plugins -> MCP (Ctrl+Alt+M)")
-        print("4. The SSE endpoint will be available at http://localhost:13337/sse")
+        print("4. The MCP endpoint will be available at http://localhost:13337/mcp")
         return
 
     if args.uninstall:
