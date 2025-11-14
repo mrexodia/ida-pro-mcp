@@ -9,7 +9,7 @@ import tempfile
 import tomllib
 import tomli_w
 from urllib.parse import urlparse
-from glob import glob
+import glob
 
 from mcp.server.fastmcp import FastMCP
 
@@ -125,11 +125,14 @@ class MCPVisitor(ast.NodeVisitor):
                     call_args = [ast.Constant(value=node.name)]
                     for arg in node.args.args:
                         call_args.append(ast.Name(id=arg.arg, ctx=ast.Load()))
-                    new_body.append(ast.Return(
-                        value=ast.Call(
-                            func=ast.Name(id="make_jsonrpc_request", ctx=ast.Load()),
-                            args=call_args,
-                            keywords=[])))
+
+                    # Generate the RPC call
+                    rpc_call = ast.Call(
+                        func=ast.Name(id="make_jsonrpc_request", ctx=ast.Load()),
+                        args=call_args,
+                        keywords=[])
+
+                    new_body.append(ast.Return(value=rpc_call))
                     decorator_list = [
                         ast.Call(
                             func=ast.Attribute(
@@ -154,17 +157,36 @@ class MCPVisitor(ast.NodeVisitor):
 
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-IDA_PLUGIN_PY = os.path.join(SCRIPT_DIR, "mcp-plugin.py")
+IDA_PLUGIN_PKG = os.path.join(SCRIPT_DIR, "ida_mcp")
+IDA_PLUGIN_LOADER = os.path.join(SCRIPT_DIR, "ida_mcp.py")
 GENERATED_PY = os.path.join(SCRIPT_DIR, "server_generated.py")
 
 # NOTE: This is in the global scope on purpose
-if not os.path.exists(IDA_PLUGIN_PY):
-    raise RuntimeError(f"IDA plugin not found at {IDA_PLUGIN_PY} (did you move it?)")
-with open(IDA_PLUGIN_PY, "r", encoding="utf-8") as f:
-    code = f.read()
-module = ast.parse(code, IDA_PLUGIN_PY)
+if not os.path.exists(IDA_PLUGIN_PKG):
+    raise RuntimeError(f"IDA plugin package not found at {IDA_PLUGIN_PKG} (did you move it?)")
+if not os.path.exists(IDA_PLUGIN_LOADER):
+    raise RuntimeError(f"IDA plugin loader not found at {IDA_PLUGIN_LOADER} (did you move it?)")
+
+# Parse plugin code for type generation
 visitor = MCPVisitor()
-visitor.visit(module)
+
+# Parse all api_*.py files in package
+api_files = glob.glob(os.path.join(IDA_PLUGIN_PKG, "api_*.py"))
+utils_file = os.path.join(IDA_PLUGIN_PKG, "utils.py")
+
+# Parse utils.py first for TypedDict definitions
+if os.path.exists(utils_file):
+    with open(utils_file, "r", encoding="utf-8") as f:
+        code = f.read()
+    module = ast.parse(code, utils_file)
+    visitor.visit(module)
+
+# Parse all api files for @jsonrpc functions
+for api_file in sorted(api_files):
+    with open(api_file, "r", encoding="utf-8") as f:
+        code = f.read()
+    module = ast.parse(code, api_file)
+    visitor.visit(module)
 code = """# NOTE: This file has been automatically generated, do not modify!
 # Architecture based on https://github.com/mrexodia/ida-pro-mcp (MIT License)
 import sys
@@ -447,42 +469,92 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False, allow_id
     else:
         ida_folder = os.path.join(os.path.expanduser("~"), ".idapro")
     if not allow_ida_free:
-        free_licenses = glob(os.path.join(ida_folder, "idafree_*.hexlic"))
+        free_licenses = glob.glob(os.path.join(ida_folder, "idafree_*.hexlic"))
         if len(free_licenses) > 0:
             print("IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead.")
             sys.exit(1)
     ida_plugin_folder = os.path.join(ida_folder, "plugins")
-    plugin_destination = os.path.join(ida_plugin_folder, "mcp-plugin.py")
+
+    # Install both the loader file and package directory
+    loader_source = IDA_PLUGIN_LOADER
+    loader_destination = os.path.join(ida_plugin_folder, "ida_mcp.py")
+
+    pkg_source = IDA_PLUGIN_PKG
+    pkg_destination = os.path.join(ida_plugin_folder, "ida_mcp")
+
+    # Clean up old plugin if it exists
+    old_plugin = os.path.join(ida_plugin_folder, "mcp-plugin.py")
+
     if uninstall:
-        if not os.path.exists(plugin_destination):
-            print(f"Skipping IDA plugin uninstall\n  Path: {plugin_destination} (not found)")
-            return
-        os.remove(plugin_destination)
-        if not quiet:
-            print(f"Uninstalled IDA plugin\n  Path: {plugin_destination}")
+        # Remove loader
+        if os.path.lexists(loader_destination):
+            os.remove(loader_destination)
+            if not quiet:
+                print(f"Uninstalled IDA plugin loader\n  Path: {loader_destination}")
+
+        # Remove package
+        if os.path.exists(pkg_destination):
+            if os.path.isdir(pkg_destination) and not os.path.islink(pkg_destination):
+                shutil.rmtree(pkg_destination)
+            else:
+                os.remove(pkg_destination)
+            if not quiet:
+                print(f"Uninstalled IDA plugin package\n  Path: {pkg_destination}")
+
+        # Remove old plugin if it exists
+        if os.path.lexists(old_plugin):
+            os.remove(old_plugin)
+            if not quiet:
+                print(f"Removed old plugin\n  Path: {old_plugin}")
     else:
         # Create IDA plugins folder
         if not os.path.exists(ida_plugin_folder):
             os.makedirs(ida_plugin_folder)
 
-        # Skip if symlink already up to date
-        realpath = os.path.realpath(plugin_destination)
-        if realpath == IDA_PLUGIN_PY:
+        # Remove old plugin if it exists
+        if os.path.lexists(old_plugin):
+            os.remove(old_plugin)
             if not quiet:
-                print(f"Skipping IDA plugin installation (symlink up to date)\n  Plugin: {realpath}")
-        else:
-            # Remove existing plugin
-            if os.path.lexists(plugin_destination):
-                os.remove(plugin_destination)
+                print(f"Removed old plugin file\n  Path: {old_plugin}")
 
-            # Symlink or copy the plugin
+        installed_items = []
+
+        # Install loader file
+        loader_realpath = os.path.realpath(loader_destination) if os.path.lexists(loader_destination) else None
+        if loader_realpath != loader_source:
+            if os.path.lexists(loader_destination):
+                os.remove(loader_destination)
+
             try:
-                os.symlink(IDA_PLUGIN_PY, plugin_destination)
+                os.symlink(loader_source, loader_destination)
+                installed_items.append(f"loader: {loader_destination}")
             except OSError:
-                shutil.copy(IDA_PLUGIN_PY, plugin_destination)
+                shutil.copy(loader_source, loader_destination)
+                installed_items.append(f"loader: {loader_destination}")
 
-            if not quiet:
-                print(f"Installed IDA Pro plugin (IDA restart required)\n  Plugin: {plugin_destination}")
+        # Install package directory
+        pkg_realpath = os.path.realpath(pkg_destination) if os.path.lexists(pkg_destination) else None
+        if pkg_realpath != pkg_source:
+            if os.path.lexists(pkg_destination):
+                if os.path.isdir(pkg_destination) and not os.path.islink(pkg_destination):
+                    shutil.rmtree(pkg_destination)
+                else:
+                    os.remove(pkg_destination)
+
+            try:
+                os.symlink(pkg_source, pkg_destination)
+                installed_items.append(f"package: {pkg_destination}")
+            except OSError:
+                shutil.copytree(pkg_source, pkg_destination)
+                installed_items.append(f"package: {pkg_destination}")
+
+        if not quiet:
+            if installed_items:
+                print(f"Installed IDA Pro plugin (IDA restart required)")
+                for item in installed_items:
+                    print(f"  {item}")
+            else:
+                print(f"Skipping IDA plugin installation (already up to date)")
 
 def main():
     global ida_host, ida_port
