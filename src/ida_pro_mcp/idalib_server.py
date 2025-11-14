@@ -1,6 +1,5 @@
 import sys
 import signal
-import atexit
 import inspect
 import logging
 import argparse

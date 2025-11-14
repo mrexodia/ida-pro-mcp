@@ -5,6 +5,9 @@ import json
 import shutil
 import argparse
 import http.client
+import tempfile
+import tomllib
+import tomli_w
 from urllib.parse import urlparse
 from glob import glob
 
@@ -61,7 +64,7 @@ def check_connection() -> str:
     try:
         metadata = make_jsonrpc_request("get_metadata")
         return f"Successfully connected to IDA Pro (open file: {metadata['module']})"
-    except Exception as e:
+    except Exception:
         if sys.platform == "darwin":
             shortcut = "Ctrl+Option+M"
         else:
@@ -202,7 +205,7 @@ SAFE_FUNCTIONS = [f for f in MCP_FUNCTIONS if f not in UNSAFE_FUNCTIONS]
 
 def generate_readme():
     print("README:")
-    print(f"- `check_connection()`: Check if the IDA plugin is running.")
+    print("- `check_connection()`: Check if the IDA plugin is running.")
     def get_description(name: str):
         function = visitor.functions[name]
         signature = function.name + "("
@@ -291,21 +294,13 @@ def copy_python_env(env: dict[str, str]):
     return result
 
 def print_mcp_config():
-    mcp_config = {
-        "command": get_python_executable(),
-        "args": [
-            __file__,
-        ],
-        "timeout": 1800,
-        "disabled": False,
-    }
-    env = {}
-    if copy_python_env(env):
-        print(f"[WARNING] Custom Python environment variables detected")
-        mcp_config["env"] = env
+    mcp_url = f"http://{ida_host}:{ida_port}/mcp"
     print(json.dumps({
             "mcpServers": {
-                mcp.name: mcp_config
+                mcp.name: {
+                    "type": "http",
+                    "url": mcp_url
+                }
             }
         }, indent=2)
     )
@@ -321,6 +316,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
             "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
+            "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
         }
     elif sys.platform == "darwin":
         configs = {
@@ -332,6 +328,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
             "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
+            "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
         }
     elif sys.platform == "linux":
         configs = {
@@ -343,6 +340,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
             "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
             "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
+            "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
         }
     else:
         print(f"Unsupported platform: {sys.platform}")
@@ -351,33 +349,58 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
     installed = 0
     for name, (config_dir, config_file) in configs.items():
         config_path = os.path.join(config_dir, config_file)
+        is_toml = config_file.endswith(".toml")
+
         if not os.path.exists(config_dir):
             action = "uninstall" if uninstall else "installation"
             if not quiet:
                 print(f"Skipping {name} {action}\n  Config: {config_path} (not found)")
             continue
+
+        # Read existing config
         if not os.path.exists(config_path):
             config = {}
         else:
-            with open(config_path, "r", encoding="utf-8") as f:
-                data = f.read().strip()
-                if len(data) == 0:
-                    config = {}
+            with open(config_path, "rb" if is_toml else "r", encoding=None if is_toml else "utf-8") as f:
+                if is_toml:
+                    data = f.read()
+                    if len(data) == 0:
+                        config = {}
+                    else:
+                        try:
+                            config = tomllib.loads(data.decode("utf-8"))
+                        except tomllib.TOMLDecodeError:
+                            if not quiet:
+                                print(f"Skipping {name} uninstall\n  Config: {config_path} (invalid TOML)")
+                            continue
                 else:
-                    try:
-                        config = json.loads(data)
-                    except json.decoder.JSONDecodeError:
-                        if not quiet:
-                            print(f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)")
-                        continue
-        if "mcpServers" not in config:
-            config["mcpServers"] = {}
-        mcp_servers = config["mcpServers"]
+                    data = f.read().strip()
+                    if len(data) == 0:
+                        config = {}
+                    else:
+                        try:
+                            config = json.loads(data)
+                        except json.decoder.JSONDecodeError:
+                            if not quiet:
+                                print(f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)")
+                            continue
+
+        # Handle TOML vs JSON structure
+        if is_toml:
+            if "mcp_servers" not in config:
+                config["mcp_servers"] = {}
+            mcp_servers = config["mcp_servers"]
+        else:
+            if "mcpServers" not in config:
+                config["mcpServers"] = {}
+            mcp_servers = config["mcpServers"]
+
         # Migrate old name
         old_name = "github.com/mrexodia/ida-pro-mcp"
         if old_name in mcp_servers:
             mcp_servers[mcp.name] = mcp_servers[old_name]
             del mcp_servers[old_name]
+
         if uninstall:
             if mcp.name not in mcp_servers:
                 if not quiet:
@@ -385,26 +408,31 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                 continue
             del mcp_servers[mcp.name]
         else:
-            # Copy environment variables from the existing server if present
-            if mcp.name in mcp_servers:
-                for key, value in mcp_servers[mcp.name].get("env", {}).items():
-                    env[key] = value
-            if copy_python_env(env):
-                print(f"[WARNING] Custom Python environment variables detected")
+            mcp_url = f"http://{ida_host}:{ida_port}/mcp"
             mcp_servers[mcp.name] = {
-                "command": get_python_executable(),
-                "args": [
-                    __file__,
-                ],
-                "timeout": 1800,
-                "disabled": False,
-                "autoApprove": SAFE_FUNCTIONS,
-                "alwaysAllow": SAFE_FUNCTIONS,
+                "type": "http",
+                "url": mcp_url,
             }
-            if env:
-                mcp_servers[mcp.name]["env"] = env
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
+
+            # JSON clients support autoApprove/alwaysAllow
+            if not is_toml:
+                mcp_servers[mcp.name]["autoApprove"] = SAFE_FUNCTIONS
+                mcp_servers[mcp.name]["alwaysAllow"] = SAFE_FUNCTIONS
+
+        # Atomic write: temp file + rename
+        suffix = ".toml" if is_toml else ".json"
+        fd, temp_path = tempfile.mkstemp(dir=config_dir, prefix=".tmp_", suffix=suffix, text=True)
+        try:
+            with os.fdopen(fd, "wb" if is_toml else "w", encoding=None if is_toml else "utf-8") as f:
+                if is_toml:
+                    f.write(tomli_w.dumps(config).encode("utf-8"))
+                else:
+                    json.dump(config, f, indent=2)
+            os.replace(temp_path, config_path)
+        except:
+            os.unlink(temp_path)
+            raise
+
         if not quiet:
             action = "Uninstalled" if uninstall else "Installed"
             print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}")
@@ -420,7 +448,7 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False):
         ida_folder = os.path.join(os.path.expanduser("~"), ".idapro")
     free_licenses = glob(os.path.join(ida_folder, "idafree_*.hexlic"))
     if len(free_licenses) > 0:
-        print(f"IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead.")
+        print("IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead.")
         sys.exit(1)
     ida_plugin_folder = os.path.join(ida_folder, "plugins")
     plugin_destination = os.path.join(ida_plugin_folder, "mcp-plugin.py")
