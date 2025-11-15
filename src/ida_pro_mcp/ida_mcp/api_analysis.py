@@ -118,25 +118,15 @@ def disasm(
 
             func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
 
-            lines: list[DisassemblyLine] = []
+            # Get segment from first instruction
+            first_seg = idaapi.getseg(func.start_ea)
+            segment_name = idaapi.get_segm_name(first_seg) if first_seg else "UNKNOWN"
+
+            # Build disassembly string
+            lines_str = f"{func_name} ({segment_name} @ {hex(func.start_ea)}):"
             for ea in idautils.FuncItems(func.start_ea):
                 if ea == idaapi.BADADDR:
                     continue
-
-                seg = idaapi.getseg(ea)
-                segment: str | None = idaapi.get_segm_name(seg) if seg else None
-
-                label: str | None = idc.get_name(ea, 0)
-                if not label or (label == func_name and ea == func.start_ea):
-                    label = None
-
-                comments: list[str] = []
-                c: str | None = idaapi.get_cmt(ea, False)
-                if c:
-                    comments.append(c)
-                c = idaapi.get_cmt(ea, True)
-                if c:
-                    comments.append(c)
 
                 mnem: str = idc.print_insn_mnem(ea) or ""
                 ops: list[str] = []
@@ -146,14 +136,8 @@ def disasm(
                     ops.append(idc.print_operand(ea, n) or "")
                 instruction = f"{mnem} {', '.join(ops)}".rstrip()
 
-                line: DisassemblyLine = {"addr": hex(ea), "instruction": instruction}
-                if segment:
-                    line["segment"] = segment
-                if label:
-                    line["label"] = label
-                if comments:
-                    line["comments"] = comments
-                lines.append(line)
+                # Format: addr_without_0x  instruction
+                lines_str += f"\n{ea:x}  {instruction}"
 
             rettype = None
             args: Optional[list[Argument]] = None
@@ -171,7 +155,7 @@ def disasm(
                 "name": func_name,
                 "start_ea": hex(func.start_ea),
                 "stack_frame": get_stack_frame_variables_internal(func.start_ea, False),
-                "lines": lines,
+                "lines": lines_str,
             }
             if rettype:
                 out["return_type"] = rettype
