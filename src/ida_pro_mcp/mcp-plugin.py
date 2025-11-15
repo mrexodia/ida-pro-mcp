@@ -1139,7 +1139,9 @@ def is_window_active():
     """Returns whether IDA is currently active"""
     try:
         from PyQt5.QtWidgets import QApplication
-    except ImportError:
+    # When running in headless mode, PyQt5 is not available, 
+    # the NotImplementedError is raised.
+    except (ImportError, NotImplementedError):
         return False
 
     app = QApplication.instance()
