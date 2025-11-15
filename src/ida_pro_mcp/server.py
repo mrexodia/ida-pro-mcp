@@ -79,6 +79,85 @@ class MCPVisitor(ast.NodeVisitor):
         self.descriptions: dict[str, str] = {}
         self.unsafe: list[str] = []
 
+    def _generate_oneof_schema(self, desc_text: str, annot_type: ast.expr) -> ast.expr | None:
+        """Generate oneOf schema for batch-first patterns"""
+        # Detect "Array defaults to X, or {ty, qs}" pattern
+        if "Array defaults to" in desc_text and ", or {" in desc_text:
+            # Extract the default type from description
+            if "string search" in desc_text:
+                default_item_type = "string"
+            elif "function renames" in desc_text:
+                default_item_type = "string"  # "addr:name" format
+            else:
+                default_item_type = "object"
+
+            # Generate oneOf schema
+            return ast.Dict(
+                keys=[ast.Constant(value="oneOf")],
+                values=[ast.List(
+                    elts=[
+                        # Option 1: Array of strings/primitives
+                        ast.Dict(
+                            keys=[
+                                ast.Constant(value="type"),
+                                ast.Constant(value="items"),
+                                ast.Constant(value="description")
+                            ],
+                            values=[
+                                ast.Constant(value="array"),
+                                ast.Dict(
+                                    keys=[ast.Constant(value="type")],
+                                    values=[ast.Constant(value=default_item_type)],
+                                    ctx=ast.Load()
+                                ),
+                                ast.Constant(value=f"Array of {default_item_type}s (default format)")
+                            ],
+                            ctx=ast.Load()
+                        ),
+                        # Option 2: Batch format {ty, qs}
+                        ast.Dict(
+                            keys=[
+                                ast.Constant(value="type"),
+                                ast.Constant(value="properties"),
+                                ast.Constant(value="required"),
+                                ast.Constant(value="description")
+                            ],
+                            values=[
+                                ast.Constant(value="object"),
+                                ast.Dict(
+                                    keys=[
+                                        ast.Constant(value="ty"),
+                                        ast.Constant(value="qs")
+                                    ],
+                                    values=[
+                                        ast.Dict(
+                                            keys=[ast.Constant(value="type")],
+                                            values=[ast.Constant(value="string")],
+                                            ctx=ast.Load()
+                                        ),
+                                        ast.Dict(
+                                            keys=[ast.Constant(value="type")],
+                                            values=[ast.Constant(value="array")],
+                                            ctx=ast.Load()
+                                        )
+                                    ],
+                                    ctx=ast.Load()
+                                ),
+                                ast.List(
+                                    elts=[ast.Constant(value="ty"), ast.Constant(value="qs")],
+                                    ctx=ast.Load()
+                                ),
+                                ast.Constant(value="Batch format with explicit type")
+                            ],
+                            ctx=ast.Load()
+                        )
+                    ],
+                    ctx=ast.Load()
+                )],
+                ctx=ast.Load()
+            )
+        return None
+
     def visit_FunctionDef(self, node):
         for decorator in node.decorator_list:
             if isinstance(decorator, ast.Name):
@@ -96,6 +175,26 @@ class MCPVisitor(ast.NodeVisitor):
                             annot_type = arg_type.slice.elts[0]
                             annot_description = arg_type.slice.elts[1]
                             assert isinstance(annot_description, ast.Constant)
+
+                            # Build Field keywords
+                            field_keywords = [
+                                ast.keyword(
+                                    arg="description",
+                                    value=annot_description
+                                )
+                            ]
+
+                            # Add oneOf schema for batch-first patterns
+                            desc_text = annot_description.value
+                            oneof_schema = self._generate_oneof_schema(desc_text, annot_type)
+                            if oneof_schema:
+                                field_keywords.append(
+                                    ast.keyword(
+                                        arg="json_schema_extra",
+                                        value=oneof_schema
+                                    )
+                                )
+
                             node.args.args[i].annotation = ast.Subscript(
                                 value=ast.Name(id="Annotated", ctx=ast.Load()),
                                 slice=ast.Tuple(
@@ -104,10 +203,7 @@ class MCPVisitor(ast.NodeVisitor):
                                     ast.Call(
                                         func=ast.Name(id="Field", ctx=ast.Load()),
                                         args=[],
-                                        keywords=[
-                                        ast.keyword(
-                                            arg="description",
-                                            value=annot_description)])],
+                                        keywords=field_keywords)],
                                     ctx=ast.Load()),
                                 ctx=ast.Load())
                         elif isinstance(arg_type, ast.Name):
