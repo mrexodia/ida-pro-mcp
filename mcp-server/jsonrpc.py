@@ -81,8 +81,7 @@ class JsonRpcRegistry:
     def map_exception(self, e: Exception) -> JsonRpcError:
         return {
             "code": -32603,
-            "message": "Internal error",
-            "data": "\n".join(traceback.format_exception(e))
+            "message": "\n".join(traceback.format_exception(e)).strip() + "\n\nPlease report a bug!",
         }
 
     def _call(self, method: str, params: Any) -> Any:

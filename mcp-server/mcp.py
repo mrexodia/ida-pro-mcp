@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, get_type_hints, Annotated
 from urllib.parse import urlparse, parse_qs
 
-from jsonrpc import JsonRpcException, JsonRpcRegistry, JsonRpcError
+from jsonrpc import JsonRpcRegistry, JsonRpcError
 
 class McpToolError(Exception):
     def __init__(self, message: str):
@@ -23,31 +23,9 @@ class McpToolRegistry(JsonRpcRegistry):
         if isinstance(e, McpToolError):
             return {
                 "code": -32000,
-                "message": str(e),
-                "data": traceback.format_exc()
+                "message": e.args[0] or "MCP Tool Error",
             }
         return super().map_exception(e)
-
-# ============================================================================
-# MCP Streamable HTTP Implementation
-# ============================================================================
-
-class SessionState:
-    """Manages state for a Streamable HTTP session"""
-    def __init__(self, session_id: str):
-        self.session_id = session_id
-        self.created_at = time.time()
-        self.last_activity = time.time()
-        self.initialized = False
-
-    def update_activity(self):
-        """Update last activity timestamp"""
-        self.last_activity = time.time()
-
-    def mark_initialized(self):
-        """Mark the session as initialized"""
-        self.initialized = True
-        self.update_activity()
 
 # ============================================================================
 # MCP Server-Sent Events (SSE) Implementation
@@ -74,12 +52,11 @@ class SSEConnection:
 
         try:
             # SSE format: "event: type\ndata: content\n\n"
-            event_str = f"event: {event_type}\n"
             if isinstance(data, str):
                 data_str = f"data: {data}\n\n"
             else:
                 data_str = f"data: {json.dumps(data)}\n\n"
-            message = (event_str + data_str).encode("utf-8")
+            message = f"event: {event_type}\n{data_str}".encode("utf-8")
             self.wfile.write(message)
             self.wfile.flush()  # Ensure data is sent immediately
             return True
@@ -87,20 +64,17 @@ class SSEConnection:
             self.alive = False
             return False
 
-    def send_message(self, message: dict):
-        """Send an MCP JSON-RPC message"""
-        return self.send_event("message", message)
-
-    def close(self):
-        """Close the connection"""
-        self.alive = False
-        # Note: wfile will be closed by the request handler
-
 class MCPProtocolHandler:
     """Handles MCP protocol messages and generates tool schemas"""
 
-    def __init__(self, registry: JsonRpcRegistry):
-        self.registry = registry
+    def __init__(self, tool_registry: McpToolRegistry):
+        self.tool_registry = tool_registry
+        self.mcp_registry = JsonRpcRegistry()
+
+        # Register MCP protocol methods with correct names
+        self.mcp_registry.methods["initialize"] = self._mcp_initialize
+        self.mcp_registry.methods["tools/list"] = self._mcp_tools_list
+        self.mcp_registry.methods["tools/call"] = self._mcp_tools_call
 
     def _type_to_json_schema(self, py_type: Any) -> dict:
         """Convert Python type hint to JSON schema object"""
@@ -253,20 +227,12 @@ class MCPProtocolHandler:
 
         return schema
 
-    def get_tools_list(self) -> list[dict]:
-        """Generate list of all available tools"""
-        tools = []
-        for func_name, func in self.registry.methods.items():
-            tool_schema = self.generate_tool_schema(func_name, func)
-            tools.append(tool_schema)
-        return tools
-
-    def handle_initialize(self, params: dict, protocol_version) -> dict:
-        """Handle MCP initialize request"""
+    def _mcp_initialize(self, protocolVersion: str, capabilities: dict, clientInfo: dict, _meta: dict | None = None) -> dict:
+        """MCP initialize method"""
         return {
-            "protocolVersion": protocol_version,
+            "protocolVersion": protocolVersion,
             "capabilities": {
-            "tools": {}
+                "tools": {}
             },
             "serverInfo": {
                 "name": "ida-pro-mcp",
@@ -274,67 +240,39 @@ class MCPProtocolHandler:
             },
         }
 
-    def handle_tools_list(self, params: dict) -> dict:
-        """Handle tools/list request"""
+    def _mcp_tools_list(self, _meta: dict | None = None) -> dict:
+        """MCP tools/list method"""
         return {
-            "tools": self.get_tools_list()
+            "tools": [
+                self.generate_tool_schema(func_name, func)
+                for func_name, func in self.tool_registry.methods.items()
+            ]
         }
 
-    def handle_tools_call(self, params: dict) -> dict:
-        """Handle tools/call request"""
-        tool_name = params.get("name")
-        arguments = params.get("arguments", {})
-
-        if not tool_name:
-            raise JsonRpcException(-32602, "Missing tool name")
-
+    def _mcp_tools_call(self, name: str, arguments: dict | None = None, _meta: dict | None = None) -> dict:
+        """MCP tools/call method"""
         # Wrap tool call in JSON-RPC request
-        inner_request = {
+        tool_response = self.tool_registry.dispatch({
             "jsonrpc": "2.0",
-            "method": tool_name,
+            "method": name,
             "params": arguments,
-            "id": None  # Notification
-        }
-
-        inner_response = self.registry.dispatch(inner_request)
+            "id": None,
+        })
 
         # Check for error response
-        if inner_response and "error" in inner_response:
-            error = inner_response["error"]
-            # Format error: message + optional data
-            error_text = error.get("message", "")
-            if "data" in error:
-                error_text += f"\n{str(error['data'])}"
+        if tool_response and "error" in tool_response:
+            error = tool_response["error"]
             return {
-                "content": [{"type": "text", "text": error_text}],
+                "content": [{"type": "text", "text": error.get("message", "Unknown error")}],
                 "isError": True
             }
 
-        # Success case
-        result = inner_response.get("result") if inner_response else None
-
-        # Check if tool has outputSchema
-        func = self.registry.methods.get(tool_name)
-        has_output_schema = False
-        if func:
-            tool_schema = self.generate_tool_schema(tool_name, func)
-            has_output_schema = "outputSchema" in tool_schema
-
-        # Build response with both content and structuredContent
-        response: dict[str, Any] = {
+        result = tool_response.get("result") if tool_response else None
+        return {
             "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
+            "structuredContent": result if isinstance(result, dict) else {"value": result},
             "isError": False
         }
-
-        # If tool has outputSchema, also add structuredContent
-        if has_output_schema:
-            # Check if result needs wrapping (primitive types)
-            structured_result = result
-            if not isinstance(result, dict):
-                structured_result = {"value": result}
-            response["structuredContent"] = structured_result
-
-        return response
 
 class MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     """HTTP request handler for MCP server using stdlib http.server"""
@@ -344,7 +282,6 @@ class MCPHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         """Override to suppress default logging or customize"""
-        # Suppress default logging for now
         pass
 
     def handle(self):
@@ -354,46 +291,31 @@ class MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
             # Client disconnected - normal, suppress traceback
             pass
-        finally:
-            # Cleanup session on disconnect
-            session_id = self.headers.get("Mcp-Session-Id") if hasattr(self, "headers") else None
-            if session_id and session_id in self.mcp_server.sessions:
-                del self.mcp_server.sessions[session_id]
 
     def do_GET(self):
-        """Handle GET requests"""
-        parsed_path = urlparse(self.path)
-        base_path = parsed_path.path
-
-        if base_path == "/mcp":
-            # /mcp only supports POST - return 405 Method Not Allowed
-            self.send_error(405, "Method Not Allowed")
-        elif base_path == "/sse":
-            # SSE connection - handle long-lived connection
-            self._handle_sse_connection()
-        else:
-            self.send_error(404, "Not Found")
+        match urlparse(self.path).path:
+            case "/mcp":
+                self.send_error(405, "Method Not Allowed")
+            case "/sse":
+                self._handle_sse_get()
+            case _:
+                self.send_error(404, "Not Found")
 
     def do_POST(self):
-        """Handle POST requests"""
-        # Read request body
+        # Read request body (TODO: do we need to handle chunked encoding and what about no Content-Length?)
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length > 0 else b""
 
-        parsed_path = urlparse(self.path)
-        base_path = parsed_path.path
-
-        if base_path == "/mcp":
-            # Streamable HTTP transport
-            self._handle_streamable_post(body)
-        elif base_path == "/sse":
-            # SSE message post
-            self._handle_sse_post(body)
-        else:
-            self.send_error(404, "Not Found")
+        match urlparse(self.path).path:
+            case "/mcp":
+                self._handle_mcp_post(body)
+            case "/sse":
+                self._handle_sse_post(body)
+            case _:
+                self.send_error(404, "Not Found")
 
     def do_OPTIONS(self):
-        """Handle OPTIONS requests (CORS)"""
+        """Handle CORS preflight requests"""
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
@@ -401,113 +323,35 @@ class MCPHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Max-Age", "86400")
         self.end_headers()
 
-    def _send_json_response(self, data: dict, status=200, extra_headers=None):
-        """Helper to send JSON response"""
-        body = json.dumps(data).encode("utf-8")
+    def _handle_mcp_post(self, body: bytes):
+        # Dispatch to MCP registry
+        response = self.mcp_server.mcp_handler.mcp_registry.dispatch(body)
 
-        self.send_response(status)
+        # Check if notification (returns None)
+        if response is None:
+            # Return 202 Accepted for notifications
+            self.send_response(202)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", "8")
+            self.end_headers()
+            self.wfile.write(b"Accepted")
+            return
+
+        # Send JSON-RPC response
+        self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version")
-
-        if extra_headers:
-            for key, value in extra_headers.items():
-                self.send_header(key, value)
-
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(json.dumps(response).encode("utf-8"))
 
-    def _handle_streamable_post(self, body: bytes):
-        """Handle Streamable HTTP POST request (POST /mcp)"""
-        try:
-            # Parse JSON-RPC request
-            request = json.loads(body.decode("utf-8"))
-
-            # Validate JSON-RPC 2.0
-            if request.get("jsonrpc") != "2.0":
-                raise JsonRpcException(-32600, "Invalid JSON-RPC version")
-
-            method = request.get("method")
-            params = request.get("params", {})
-            request_id = request.get("id")
-
-            # Check if this is a notification (no id field)
-            if request_id is None:
-                # Return 202 Accepted to acknowledge POST
-                self.send_response(202)
-                self.send_header("Content-Type", "text/plain")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Content-Length", "8")
-                self.end_headers()
-                self.wfile.write(b"Accepted")
-                return
-
-            # Regular request - prepare response
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_id
-            }
-
-            try:
-                # Handle MCP protocol methods
-                if method == "initialize":
-                    result = self.mcp_server.mcp_handler.handle_initialize(params, "2025-06-18")
-                elif method == "tools/list":
-                    result = self.mcp_server.mcp_handler.handle_tools_list(params)
-                elif method == "tools/call":
-                    result = self.mcp_server.mcp_handler.handle_tools_call(params)
-                else:
-                    raise JsonRpcException(-32601, f"Method not found: {method}")
-
-                response["result"] = result
-
-            except JsonRpcException as e:
-                response["error"] = {
-                    "code": e.code,
-                    "message": e.message
-                }
-                if e.data:
-                    response["error"]["data"] = e.data
-            except McpToolError as e:
-                response["error"] = {
-                    "code": -32000,
-                    "message": e.message
-                }
-            except Exception as e:
-                traceback.print_exc()
-                response["error"] = {
-                    "code": -32603,
-                    "message": "Internal error",
-                    "data": str(e)
-                }
-
-            # Send response
-            self._send_json_response(response)
-
-        except Exception as e:
-            traceback.print_exc()
-            error_response = {
-                "jsonrpc": "2.0",
-                "error": {
-                    "code": -32700,
-                    "message": "Parse error",
-                    "data": str(e)
-                },
-                "id": None
-            }
-            self._send_json_response(error_response, status=400)
-
-    def _handle_sse_connection(self):
-        """Handle SSE GET connection"""
-        # Extract session ID from headers
-        session_id = str(uuid.uuid4())
-        self.mcp_server.sessions[session_id] = SessionState(session_id)
-
-        # Create SSE connection wrapper (now using wfile)
-        conn = SSEConnection(self.wfile, self.client_address, session_id)
-        self.mcp_server.connections.append(conn)
+    def _handle_sse_get(self):
+        # Create SSE connection wrapper
+        conn = SSEConnection(self.wfile, self.client_address, str(uuid.uuid4()))
+        self.mcp_server.sse_connections[conn.session_id] = conn
 
         try:
             # Send SSE headers
@@ -532,120 +376,50 @@ class MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 time.sleep(1)
 
         finally:
-            conn.close()
-            if conn in self.mcp_server.connections:
-                self.mcp_server.connections.remove(conn)
+            conn.alive = False
+            if conn.session_id in self.mcp_server.sse_connections:
+                del self.mcp_server.sse_connections[conn.session_id]
 
     def _handle_sse_post(self, body: bytes):
-        """Handle POST /sse (MCP JSON-RPC request) - SSE mode"""
-        try:
-            # Extract session ID from query parameters
-            parsed = urlparse(self.path)
-            query_params = parse_qs(parsed.query)
-            session_id = query_params.get("session", [None])[0]
-            if session_id is None:
-                self.send_error(400, "Missing ?session for SSE POST")
-                return
+        query_params = parse_qs(urlparse(self.path).query)
+        session_id = query_params.get("session", [None])[0]
+        if session_id is None:
+            self.send_error(400, "Missing ?session for SSE POST")
+            return
 
-            # Parse JSON-RPC request
-            request = json.loads(body.decode("utf-8"))
+        # Dispatch to MCP registry
+        response = self.mcp_server.mcp_handler.mcp_registry.dispatch(body)
 
-            # Validate JSON-RPC 2.0
-            if request.get("jsonrpc") != "2.0":
-                raise JsonRpcException(-32600, "Invalid JSON-RPC version")
-
-            method = request.get("method")
-            params = request.get("params", {})
-            request_id = request.get("id")
-
-            # Check if this is a notification (no id field)
-            if request_id is None:
-                # Return 202 Accepted to acknowledge POST (no SSE event sent)
-                self.send_response(202)
-                self.send_header("Content-Type", "text/plain")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Content-Length", "8")
-                self.end_headers()
-                self.wfile.write(b"Accepted")
-                return
-
-            # Regular request - prepare response
-            response = {
-                "jsonrpc": "2.0",
-                "id": request_id
-            }
-
-            try:
-                # Handle MCP protocol methods
-                if method == "initialize":
-                    result = self.mcp_server.mcp_handler.handle_initialize(params, protocol_version="2024-11-05")
-                elif method == "tools/list":
-                    result = self.mcp_server.mcp_handler.handle_tools_list(params)
-                elif method == "tools/call":
-                    result = self.mcp_server.mcp_handler.handle_tools_call(params)
-                else:
-                    raise JsonRpcException(-32601, f"Method not found: {method}")
-
-                response["result"] = result
-
-            except JsonRpcException as e:
-                response["error"] = {
-                    "code": e.code,
-                    "message": e.message
-                }
-                if e.data:
-                    response["error"]["data"] = e.data
-            except McpToolError as e:
-                response["error"] = {
-                    "code": -32000,
-                    "message": e.message
-                }
-            except Exception as e:
-                traceback.print_exc()
-                response["error"] = {
-                    "code": -32603,
-                    "message": "Internal error",
-                    "data": str(e)
-                }
-
-            # Find active SSE connection for this client (match by session ID)
-            sse_conn = None
-            if session_id:
-                for conn in self.mcp_server.connections:
-                    if conn.session_id == session_id and conn.alive:
-                        sse_conn = conn
-                        break
-
-            if not sse_conn:
-                # No SSE connection found
-                error_msg = f"No active SSE connection found for session {session_id}"
-                print(f"[MCP SSE ERROR] {error_msg}")
-                self.send_error(400, error_msg)
-                return
-
-            # Send response via SSE event stream
-            sse_conn.send_event("message", response)
-
-            # Return 202 Accepted to acknowledge POST
+        # Check if notification (returns None)
+        if response is None:
+            # Return 202 Accepted for notifications (no SSE event sent)
             self.send_response(202)
             self.send_header("Content-Type", "text/plain")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", "8")
             self.end_headers()
             self.wfile.write(b"Accepted")
+            return
 
-        except Exception as e:
-            traceback.print_exc()
-            error_response = {
-                "jsonrpc": "2.0",
-                "error": {
-                    "code": -32700,
-                    "message": "Parse error",
-                    "data": str(e)
-                },
-                "id": None
-            }
-            self._send_json_response(error_response, status=400)
+        # Find active SSE connection for this client
+        sse_conn = self.mcp_server.sse_connections.get(session_id)
+        if sse_conn is None or not sse_conn.alive:
+            # No SSE connection found
+            error_msg = f"No active SSE connection found for session {session_id}"
+            print(f"[MCP SSE ERROR] {error_msg}")
+            self.send_error(400, error_msg)
+            return
+
+        # Send response via SSE event stream
+        sse_conn.send_event("message", response)
+
+        # Return 202 Accepted to acknowledge POST
+        self.send_response(202)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", "8")
+        self.end_headers()
+        self.wfile.write(b"Accepted")
 
 class MCPServer:
     """MCP server using stdlib http.server with ThreadingHTTPServer"""
@@ -654,17 +428,15 @@ class MCPServer:
     BASE_PORT = 13337
     MAX_PORT_TRIES = 10
 
-    def __init__(self, tool_registry: JsonRpcRegistry):
+    def __init__(self, tool_registry: McpToolRegistry):
         self.http_server = None
         self.server_thread = None
         self.running = False
         self.port = None  # Will be set when server starts
-        self.sessions: dict[str, SessionState] = {}
-        self.connections: list[SSEConnection] = []
+        self.sse_connections: dict[str, SSEConnection] = {}
         self.mcp_handler = MCPProtocolHandler(tool_registry)
 
     def start(self):
-        """Start the MCP server"""
         if self.running:
             print("[MCP] Server is already running")
             return
@@ -681,16 +453,15 @@ class MCPServer:
             time.sleep(0.01)
 
     def stop(self):
-        """Stop the MCP server"""
         if not self.running:
             return
 
         self.running = False
 
         # Close all SSE connections
-        for conn in self.connections[:]:
-            conn.close()
-        self.connections.clear()
+        for conn in self.sse_connections.values():
+            conn.alive = False
+        self.sse_connections.clear()
 
         # Shutdown the HTTP server
         if self.http_server:
