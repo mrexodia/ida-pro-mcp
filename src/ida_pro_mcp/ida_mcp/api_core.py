@@ -36,6 +36,41 @@ from .sync import IDAError
 
 
 # ============================================================================
+# String Cache
+# ============================================================================
+
+# Cache for idautils.Strings() to avoid rebuilding on every call
+_strings_cache: Optional[list[String]] = None
+_strings_cache_md5: Optional[str] = None
+
+
+def _get_cached_strings() -> list[String]:
+    """Get cached strings, rebuilding if IDB changed"""
+    global _strings_cache, _strings_cache_md5
+
+    # Get current IDB modification hash
+    current_md5 = ida_nalt.retrieve_input_file_md5()
+
+    # Rebuild cache if needed
+    if _strings_cache is None or _strings_cache_md5 != current_md5:
+        _strings_cache = []
+        for item in idautils.Strings():
+            if item is None:
+                continue
+            try:
+                string = str(item)
+                if string:
+                    _strings_cache.append(
+                        String(addr=hex(item.ea), length=item.length, string=string)
+                    )
+            except Exception:
+                continue
+        _strings_cache_md5 = current_md5
+
+    return _strings_cache
+
+
+# ============================================================================
 # Core API Functions
 # ============================================================================
 
@@ -289,18 +324,8 @@ def strings(
     queries = normalize_dict_list(
         queries, lambda s: {"offset": 0, "count": 50, "filter": s}
     )
-    all_strings: list[String] = []
-    for item in idautils.Strings():
-        if item is None:
-            continue
-        try:
-            string = str(item)
-            if string:
-                all_strings.append(
-                    String(addr=hex(item.ea), length=item.length, string=string)
-                )
-        except Exception:
-            continue
+    # Use cached strings instead of rebuilding every time
+    all_strings = _get_cached_strings()
 
     results = []
     for query in queries:

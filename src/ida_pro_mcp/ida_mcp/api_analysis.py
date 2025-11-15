@@ -46,6 +46,42 @@ from .utils import (
 )
 
 # ============================================================================
+# String Cache
+# ============================================================================
+
+# Cache for idautils.Strings() to avoid rebuilding on every call
+_strings_cache: Optional[list[dict]] = None
+_strings_cache_md5: Optional[str] = None
+
+
+def _get_cached_strings_dict() -> list[dict]:
+    """Get cached strings as dicts, rebuilding if IDB changed"""
+    global _strings_cache, _strings_cache_md5
+
+    # Get current IDB modification hash
+    current_md5 = ida_nalt.retrieve_input_file_md5()
+
+    # Rebuild cache if needed
+    if _strings_cache is None or _strings_cache_md5 != current_md5:
+        _strings_cache = []
+        for s in idautils.Strings():
+            try:
+                _strings_cache.append(
+                    {
+                        "addr": hex(s.ea),
+                        "length": s.length,
+                        "string": str(s),
+                        "type": s.strtype,
+                    }
+                )
+            except Exception:
+                pass
+        _strings_cache_md5 = current_md5
+
+    return _strings_cache
+
+
+# ============================================================================
 # Code Analysis & Decompilation
 # ============================================================================
 
@@ -804,9 +840,10 @@ def _search_single(query: dict) -> dict:
         elif query_type == "string":
             # Search for strings containing pattern
             pattern = query.get("q", "")
-            for s in idautils.Strings():
-                if pattern.lower() in str(s).lower():
-                    matches.append(hex(s.ea))
+            # Use cached strings to avoid rebuilding on every call
+            for s in _get_cached_strings_dict():
+                if pattern.lower() in s["string"].lower():
+                    matches.append(s["addr"])
 
         elif query_type == "data_ref":
             # Find all data references to a target
@@ -1144,21 +1181,8 @@ def analyze_strings(
 ) -> list[dict]:
     """Analyze strings"""
     filters = normalize_dict_list(filters)
-    all_strings = []
-
-    # Collect all strings once
-    for s in idautils.Strings():
-        try:
-            all_strings.append(
-                {
-                    "addr": hex(s.ea),
-                    "length": s.length,
-                    "string": str(s),
-                    "type": s.strtype,
-                }
-            )
-        except Exception:
-            pass
+    # Use cached strings to avoid rebuilding on every call
+    all_strings = _get_cached_strings_dict()
 
     results = []
     for filt in filters:
