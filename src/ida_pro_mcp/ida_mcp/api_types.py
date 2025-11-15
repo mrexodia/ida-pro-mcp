@@ -195,7 +195,7 @@ def struct_info(
 
 @jsonrpc
 @idaread
-def struct_at(
+def read_struct(
     queries: Annotated[
         list[dict] | dict,
         "Read structure fields at memory addresses",
@@ -333,70 +333,6 @@ def struct_at(
                     "error": str(e),
                 }
             )
-
-    return results
-
-
-@jsonrpc
-@idaread
-def struct_get(
-    names: Annotated[
-        list[str] | str,
-        "Structure names to retrieve",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "string", "description": "Structure name"},
-                    "description": "Array of structure names"
-                },
-                {
-                    "type": "string",
-                    "description": "Comma-separated structure names"
-                }
-            ]
-        })
-    ]
-) -> list[dict]:
-    """Get struct info"""
-    names = normalize_list_input(names)
-    results = []
-
-    for name in names:
-        try:
-            tif = ida_typeinf.tinfo_t()
-            if not tif.get_named_type(None, name):
-                results.append({"name": name, "error": f"Struct '{name}' not found"})
-                continue
-
-            info = {
-                "name": name,
-                "type": tif._print(),
-                "size": tif.get_size(),
-                "is_udt": tif.is_udt(),
-            }
-
-            if tif.is_udt():
-                udt_data = ida_typeinf.udt_type_data_t()
-                if tif.get_udt_details(udt_data):
-                    info["cardinality"] = udt_data.size()
-                    info["is_union"] = udt_data.is_union
-
-                    members = []
-                    for member in udt_data:
-                        members.append(
-                            {
-                                "name": member.name,
-                                "type": member.type._print(),
-                                "offset": member.begin() // 8,
-                                "size": member.type.get_size(),
-                            }
-                        )
-                    info["members"] = members
-
-            results.append({"name": name, "info": info})
-        except Exception as e:
-            results.append({"name": name, "error": str(e)})
 
     return results
 

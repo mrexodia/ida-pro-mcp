@@ -14,9 +14,9 @@ Available functionality:
 - `lookup_funcs(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).
 - `cursor_addr()`: Get current cursor address.
 - `cursor_func()`: Get current function at cursor.
-- `conv_num(inputs)`: Convert numbers to different formats (decimal, hex, bytes, ASCII, binary).
+- `int_convert(inputs)`: Convert numbers to different formats (decimal, hex, bytes, ASCII, binary).
 - `list_funcs(queries)`: List functions (paginated, filtered).
-- `gvars(queries)`: List global variables (paginated, filtered).
+- `list_globals(queries)`: List global variables (paginated, filtered).
 - `imports(offset, count)`: List all imported symbols with module names (paginated).
 - `strings(queries)`: List strings in the database (paginated, filtered).
 - `segments()`: List all memory segments with permissions.
@@ -31,7 +31,7 @@ Available functionality:
 
 ## Modification Operations
 
-- `set_cmt(items)`: Set comments at address(es) in both disassembly and decompiler views.
+- `set_comments(items)`: Set comments at address(es) in both disassembly and decompiler views.
 - `patch_asm(items)`: Patch assembly instructions at address(es).
 - `declare_type(decls)`: Declare C type(s) in the local type library.
 
@@ -43,7 +43,7 @@ Available functionality:
 - `get_u32(addrs)`: Read 32-bit unsigned integer(s).
 - `get_u64(addrs)`: Read 64-bit unsigned integer(s).
 - `get_string(addrs)`: Read null-terminated string(s).
-- `gvar_value(queries)`: Read global variable value(s) by address or name (auto-detects, compile-time values).
+- `get_global_value(queries)`: Read global variable value(s) by address or name (auto-detects, compile-time values).
 
 ## Stack Frame Operations
 
@@ -55,8 +55,7 @@ Available functionality:
 
 - `structs()`: List all defined structures with members.
 - `struct_info(names)`: Get detailed information about structure(s).
-- `struct_at(queries)`: Read structure field values at specific address(es).
-- `struct_get(names)`: Get structure information and member details.
+- `read_struct(queries)`: Read structure field values at specific address(es).
 - `search_structs(filter)`: Search structures by name pattern.
 
 ## Debugger Operations (Unsafe)
@@ -65,20 +64,20 @@ Available functionality:
 - `dbg_regs_thread(tids)`: Get all registers for specific thread(s).
 - `dbg_regs_cur()`: Get all registers for current thread.
 - `dbg_gpregs_thread(tids)`: Get general-purpose registers for thread(s).
-- `dbg_gpregs_cur()`: Get general-purpose registers for current thread.
+- `dbg_current_gpregs()`: Get general-purpose registers for current thread.
 - `dbg_regs_for_thread(thread_id, register_names)`: Get specific registers for a thread.
-- `dbg_regs_for_cur(register_names)`: Get specific registers for current thread.
+- `dbg_current_regs(register_names)`: Get specific registers for current thread.
 - `dbg_callstack()`: Get call stack with module and symbol information.
-- `dbg_breakpoints()`: List all breakpoints with their status.
+- `dbg_list_bps()`: List all breakpoints with their status.
 - `dbg_start()`: Start debugger process.
 - `dbg_exit()`: Exit debugger process.
 - `dbg_continue()`: Continue debugger execution.
 - `dbg_run_to(addr)`: Run debugger to specific address.
-- `dbg_bp_add(addrs)`: Add breakpoint(s) at address(es).
-- `dbg_stepi()`: Step into instruction.
-- `dbg_step()`: Step over instruction.
-- `dbg_bp_del(addrs)`: Delete breakpoint(s) at address(es).
-- `dbg_bp_enable(items)`: Enable or disable breakpoint(s).
+- `dbg_add_bp(addrs)`: Add breakpoint(s) at address(es).
+- `dbg_step_into()`: Step into instruction.
+- `dbg_step_over()`: Step over instruction.
+- `dbg_delete_bp(addrs)`: Delete breakpoint(s) at address(es).
+- `dbg_enable_bp(items)`: Enable or disable breakpoint(s).
 - `dbg_read_mem(regions)`: Read memory from debugged process.
 - `dbg_write_mem(regions)`: Write memory to debugged process.
 
@@ -180,7 +179,7 @@ LLMs are prone to hallucinations and you need to be specific with your prompting
 > - Change the variable and argument types if necessary (especially pointer and array types)
 > - Change function names to be more descriptive
 > - If more details are necessary, disassemble the function and add comments with your findings
-> - NEVER convert number bases yourself. Use the `conv_num` MCP tool if needed!
+> - NEVER convert number bases yourself. Use the `int_convert` MCP tool if needed!
 > - Do not attempt brute forcing, derive any solutions purely from the disassembly and simple python scripts
 > - Create a report.md with your findings and steps taken at the end
 > - When you find a solution, prompt to user for feedback with the password you found
@@ -193,7 +192,7 @@ Live stream discussing prompting and showing some real-world malware analysis:
 
 ## Tips for Enhancing LLM Accuracy
 
-Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts). Make sure to tell the LLM to use the `conv_num` MCP tool and you might also need [math-mcp](https://github.com/EthanHenrickson/math-mcp) for certain operations.
+Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts). Make sure to tell the LLM to use the `int_convert` MCP tool and you might also need [math-mcp](https://github.com/EthanHenrickson/math-mcp) for certain operations.
 
 Another thing to keep in mind is that LLMs will not perform well on obfuscated code. Before trying to use an LLM to solve the problem, take a look around the binary and spend some time (automatically) removing the following things:
 

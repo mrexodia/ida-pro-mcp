@@ -217,7 +217,7 @@ def dbg_run_to(
 @jsonrpc
 @idaread
 @unsafe
-def dbg_stepi():
+def dbg_step_into():
     """Step into"""
     dbg_ensure_running()
     if idaapi.step_into():
@@ -230,7 +230,7 @@ def dbg_stepi():
 @jsonrpc
 @idaread
 @unsafe
-def dbg_step():
+def dbg_step_over():
     """Step over"""
     dbg_ensure_running()
     if idaapi.step_over():
@@ -248,7 +248,7 @@ def dbg_step():
 @jsonrpc
 @idaread
 @unsafe
-def dbg_breakpoints():
+def dbg_list_bps():
     """List breakpoints"""
     return list_breakpoints()
 
@@ -256,7 +256,7 @@ def dbg_breakpoints():
 @jsonrpc
 @idaread
 @unsafe
-def dbg_bp_add(
+def dbg_add_bp(
     addrs: Annotated[
         list[str] | str,
         "Address(es) to add breakpoints at",
@@ -301,7 +301,7 @@ def dbg_bp_add(
 @jsonrpc
 @idaread
 @unsafe
-def dbg_bp_del(
+def dbg_delete_bp(
     addrs: Annotated[
         list[str] | str,
         "Address(es) to delete breakpoints from",
@@ -340,7 +340,7 @@ def dbg_bp_del(
 @jsonrpc
 @idaread
 @unsafe
-def dbg_bp_enable(
+def dbg_enable_bp(
     items: Annotated[
         list[dict] | dict,
         "Breakpoint enable/disable operations",
@@ -530,7 +530,7 @@ def dbg_gpregs_thread(
 @jsonrpc
 @idaread
 @unsafe
-def dbg_gpregs_cur() -> ThreadRegisters:
+def dbg_current_gpregs() -> ThreadRegisters:
     """Get current thread GP registers"""
     dbg = dbg_ensure_running()
     tid = ida_dbg.get_current_thread()
@@ -564,7 +564,7 @@ def dbg_regs_for_thread(
 @jsonrpc
 @idaread
 @unsafe
-def dbg_regs_for_cur(
+def dbg_current_regs(
     register_names: Annotated[
         str,
         "Register names (comma-separated)",

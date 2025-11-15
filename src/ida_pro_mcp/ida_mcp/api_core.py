@@ -160,7 +160,7 @@ def cursor_func() -> Optional[Function]:
 
 
 @jsonrpc
-def conv_num(
+def int_convert(
     inputs: Annotated[
         list[dict] | dict,
         "Convert numbers to various formats (hex, decimal, binary, ascii)",
@@ -314,7 +314,7 @@ def list_funcs(
 
 @jsonrpc
 @idaread
-def gvars(
+def list_globals(
     queries: Annotated[
         list[dict] | dict,
         "List global variables with optional filtering and pagination",

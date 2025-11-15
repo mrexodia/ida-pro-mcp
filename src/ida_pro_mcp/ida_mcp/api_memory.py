@@ -294,7 +294,7 @@ def get_global_variable_value_internal(ea: int) -> str:
 
 @jsonrpc
 @idaread
-def gvar_value(
+def get_global_value(
     queries: Annotated[
         list[str] | str,
         "Read global variable values by address or name",

@@ -29,7 +29,7 @@ from .utils import (
 
 @jsonrpc
 @idawrite
-def set_cmt(
+def set_comments(
     items: Annotated[
         list[dict] | dict,
         "Set comments at addresses",
