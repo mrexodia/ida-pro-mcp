@@ -7,6 +7,11 @@ import importlib
 from pathlib import Path
 import typing_inspection.introspection as intro
 
+# Reference: https://errors.pydantic.dev/2.11/u/typed-dict-version
+if sys.version_info < (3, 12):
+    import typing, typing_extensions
+    typing.TypedDict = typing_extensions.TypedDict
+
 from mcp.server.fastmcp import FastMCP
 
 # idapro must go first to initialize idalib
@@ -17,7 +22,7 @@ import ida_hexrays
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("github.com/mrexodia/ida-pro-mcp#idalib")
+mcp = FastMCP("idalib-mcp")
 
 def fixup_tool_argument_descriptions(mcp: FastMCP):
     # In our tool definitions within `mcp-plugin.py`, we use `typing.Annotated` on function parameters
@@ -172,7 +177,7 @@ def main():
     signal.signal(signal.SIGINT, cleanup_and_exit)
     signal.signal(signal.SIGTERM, cleanup_and_exit)
 
-    # NOTE: npx @modelcontextprotocol/inspector for debugging
+    # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     logger.info("MCP Server availabile at: http://%s:%d/sse", mcp.settings.host, mcp.settings.port)
     mcp.run(transport="sse")
 
