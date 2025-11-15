@@ -517,7 +517,9 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
         return data
 
     regex = None
+    use_glob = False
 
+    # Regex pattern: /pattern/flags
     if pattern.startswith("/") and pattern.count("/") >= 2:
         last_slash = pattern.rfind("/")
         body = pattern[1:last_slash]
@@ -536,6 +538,9 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
             regex = re.compile(body, flags or re.IGNORECASE)
         except re.error:
             regex = None
+    # Glob pattern: contains * or ?
+    elif "*" in pattern or "?" in pattern:
+        use_glob = True
 
     def get_value(item) -> str:
         try:
@@ -548,6 +553,8 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
         text = get_value(item)
         if regex is not None:
             return bool(regex.search(text))
+        if use_glob:
+            return fnmatch.fnmatch(text.lower(), pattern.lower())
         return pattern.lower() in text.lower()
 
     return [item for item in data if matches(item)]
