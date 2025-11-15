@@ -19,6 +19,7 @@ from .utils import (
     my_modifier_t,
     StructureMember,
     StructureDefinition,
+    JsonSchema,
 )
 
 
@@ -29,7 +30,25 @@ from .utils import (
 
 @jsonrpc
 @idawrite
-def declare_type(decls: Annotated[list[str] | str, "C decl(s)"]) -> list[dict]:
+def declare_type(
+    decls: Annotated[
+        list[str] | str,
+        "C type declarations",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string", "description": "C type declaration"},
+                    "description": "Array of C type declarations"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated C type declarations"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
     """Declare types"""
     decls = normalize_list_input(decls)
     results = []
@@ -91,7 +110,25 @@ def structs() -> list[StructureDefinition]:
 
 @jsonrpc
 @idaread
-def struct_info(names: Annotated[list[str] | str, "Struct name(s)"]) -> list[dict]:
+def struct_info(
+    names: Annotated[
+        list[str] | str,
+        "Structure names to query",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string", "description": "Structure name"},
+                    "description": "Array of structure names"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated structure names"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
     """Get struct info"""
     names = normalize_list_input(names)
     results = []
@@ -159,7 +196,35 @@ def struct_info(names: Annotated[list[str] | str, "Struct name(s)"]) -> list[dic
 @jsonrpc
 @idaread
 def struct_at(
-    queries: Annotated[list[dict] | dict, "[{addr, struct}, ...] or {addr, struct}"],
+    queries: Annotated[
+        list[dict] | dict,
+        "Read structure fields at memory addresses",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "addr": {"type": "string", "description": "Memory address (hex or decimal)"},
+                            "struct": {"type": "string", "description": "Structure name"}
+                        },
+                        "required": ["addr", "struct"]
+                    },
+                    "description": "Array of {addr, struct} objects"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "addr": {"type": "string", "description": "Memory address (hex or decimal)"},
+                        "struct": {"type": "string", "description": "Structure name"}
+                    },
+                    "required": ["addr", "struct"],
+                    "description": "Single {addr, struct} object"
+                }
+            ]
+        })
+    ]
 ) -> list[dict]:
     """Read struct fields"""
 
@@ -274,7 +339,25 @@ def struct_at(
 
 @jsonrpc
 @idaread
-def struct_get(names: Annotated[list[str] | str, "Struct name(s)"]) -> list[dict]:
+def struct_get(
+    names: Annotated[
+        list[str] | str,
+        "Structure names to retrieve",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string", "description": "Structure name"},
+                    "description": "Array of structure names"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated structure names"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
     """Get struct info"""
     names = normalize_list_input(names)
     results = []
@@ -320,7 +403,16 @@ def struct_get(names: Annotated[list[str] | str, "Struct name(s)"]) -> list[dict
 
 @jsonrpc
 @idaread
-def search_structs(filter: Annotated[str, "Filter pattern"]) -> list[dict]:
+def search_structs(
+    filter: Annotated[
+        str,
+        "Filter pattern for structure name search",
+        JsonSchema({
+            "type": "string",
+            "description": "Case-insensitive substring to search for in structure names"
+        })
+    ]
+) -> list[dict]:
     """Search structs"""
     results = []
     limit = ida_typeinf.get_ordinal_limit()
@@ -361,8 +453,39 @@ def search_structs(filter: Annotated[str, "Filter pattern"]) -> list[dict]:
 def apply_types(
     applications: Annotated[
         list[dict] | dict,
-        "[{kind, addr, ty, ...}, ...] or {kind, addr, ty, ...}. kind: function|global|local|stack (auto-detected if omitted)",
-    ],
+        "Apply types to functions, globals, locals, or stack variables",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["function", "global", "local", "stack"], "description": "Type of entity (auto-detected if omitted)"},
+                            "addr": {"type": "string", "description": "Memory address"},
+                            "ty": {"type": "string", "description": "Type name or declaration"},
+                            "signature": {"type": "string", "description": "Function signature (for kind=function)"},
+                            "name": {"type": "string", "description": "Variable/function name"},
+                            "variable": {"type": "string", "description": "Local variable name (for kind=local)"}
+                        }
+                    },
+                    "description": "Array of type application objects"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["function", "global", "local", "stack"], "description": "Type of entity (auto-detected if omitted)"},
+                        "addr": {"type": "string", "description": "Memory address"},
+                        "ty": {"type": "string", "description": "Type name or declaration"},
+                        "signature": {"type": "string", "description": "Function signature (for kind=function)"},
+                        "name": {"type": "string", "description": "Variable/function name"},
+                        "variable": {"type": "string", "description": "Local variable name (for kind=local)"}
+                    },
+                    "description": "Single type application object"
+                }
+            ]
+        })
+    ]
 ) -> list[dict]:
     """Apply types (function/global/local/stack)"""
 
@@ -496,8 +619,27 @@ def apply_types(
 
 @jsonrpc
 @idaread
-def infer_types(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
+def infer_types(
+    addrs: Annotated[
+        list[str] | str,
+        "Addresses to infer types for",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string", "description": "Memory address (hex or decimal)"},
+                    "description": "Array of addresses"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
     """Infer types"""
+    addrs = normalize_list_input(addrs)
     results = []
 
     for addr in addrs:

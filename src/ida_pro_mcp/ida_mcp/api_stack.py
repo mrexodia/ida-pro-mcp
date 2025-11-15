@@ -18,6 +18,7 @@ from .utils import (
     get_type_by_name,
     StackFrameVariable,
     get_stack_frame_variables_internal,
+    JsonSchema,
 )
 
 
@@ -28,7 +29,25 @@ from .utils import (
 
 @jsonrpc
 @idaread
-def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
+def stack_frame(
+    addrs: Annotated[
+        list[str] | str,
+        "Address(es)",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string", "description": "Function address"},
+                    "description": "Array of function addresses"
+                },
+                {
+                    "type": "string",
+                    "description": "Single address or comma-separated addresses"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
     """Get stack vars"""
     addrs = normalize_list_input(addrs)
     results = []
@@ -48,7 +67,37 @@ def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
 @idawrite
 def declare_stack(
     items: Annotated[
-        list[dict] | dict, "[{addr, offset, name, ty}, ...] or {addr, offset, name, ty}"
+        list[dict] | dict,
+        "[{addr, offset, name, ty}, ...] or {addr, offset, name, ty}",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "addr": {"type": "string", "description": "Function address"},
+                            "offset": {"type": "string", "description": "Stack offset"},
+                            "name": {"type": "string", "description": "Variable name"},
+                            "ty": {"type": "string", "description": "Type name"}
+                        },
+                        "required": ["addr", "offset", "name", "ty"]
+                    },
+                    "description": "Array of stack variable declarations"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "addr": {"type": "string", "description": "Function address"},
+                        "offset": {"type": "string", "description": "Stack offset"},
+                        "name": {"type": "string", "description": "Variable name"},
+                        "ty": {"type": "string", "description": "Type name"}
+                    },
+                    "required": ["addr", "offset", "name", "ty"],
+                    "description": "Single stack variable declaration"
+                }
+            ]
+        })
     ],
 ):
     """Create stack vars"""
@@ -94,7 +143,39 @@ def declare_stack(
 @jsonrpc
 @idawrite
 def delete_stack(
-    items: Annotated[list[dict] | dict, "[{addr, name}, ...] or {addr, name}"],
+    items: Annotated[
+        list[dict] | dict | str,
+        "[{addr, name}, ...] or {addr, name} or 'addr:name'",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "addr": {"type": "string", "description": "Function address"},
+                            "name": {"type": "string", "description": "Variable name"}
+                        },
+                        "required": ["addr", "name"]
+                    },
+                    "description": "Array of stack variable deletions"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "addr": {"type": "string", "description": "Function address"},
+                        "name": {"type": "string", "description": "Variable name"}
+                    },
+                    "required": ["addr", "name"],
+                    "description": "Single stack variable deletion"
+                },
+                {
+                    "type": "string",
+                    "description": "addr:varname format or comma-separated list"
+                }
+            ]
+        })
+    ],
 ):
     """Delete stack vars"""
 

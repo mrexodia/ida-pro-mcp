@@ -29,6 +29,35 @@ import idc
 from .sync import IDAError
 
 # ============================================================================
+# JSON Schema Annotation Helper
+# ============================================================================
+
+
+class JsonSchema:
+    """Embed JSON schema in type annotations for MCP tool generation
+
+    Usage:
+        def my_func(
+            param: Annotated[
+                list | dict,
+                "Human-readable description",
+                JsonSchema({
+                    "oneOf": [
+                        {"type": "array", "items": {"type": "string"}},
+                        {"type": "object", "properties": {...}}
+                    ]
+                })
+            ]
+        ):
+    """
+    def __init__(self, schema: dict):
+        self.schema = schema
+
+    def __repr__(self):
+        return f"JsonSchema({self.schema!r})"
+
+
+# ============================================================================
 # TypedDict Definitions
 # ============================================================================
 

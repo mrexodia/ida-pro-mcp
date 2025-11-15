@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 
 from .rpc import rpc_registry, JSONRPCError
 from .sync import IDAError
-from .utils import handle_large_output
+from .utils import handle_large_output, JsonSchema
 
 
 # ============================================================================
@@ -110,25 +110,38 @@ class MCPProtocolHandler:
         for param_name, param_type in hints.items():
             description = ""
             actual_type = param_type
+            json_schema_obj = None
 
             if hasattr(param_type, "__origin__"):
                 if param_type.__origin__ is Annotated:
                     args = param_type.__metadata__
                     if args:
-                        description = args[0]
+                        description = args[0] if isinstance(args[0], str) else ""
+                        # Look for JsonSchema object in metadata
+                        for arg in args:
+                            if isinstance(arg, JsonSchema):
+                                json_schema_obj = arg
+                                break
                     actual_type = param_type.__args__[0]
 
-            json_type = "string"
-            if actual_type is int:
-                json_type = "integer"
-            elif actual_type is float:
-                json_type = "number"
-            elif actual_type is bool:
-                json_type = "boolean"
-            elif actual_type is str:
+            # Use JsonSchema if available, otherwise infer from type
+            if json_schema_obj:
+                properties[param_name] = json_schema_obj.schema.copy()
+                if description and "description" not in properties[param_name]:
+                    properties[param_name]["description"] = description
+            else:
                 json_type = "string"
+                if actual_type is int:
+                    json_type = "integer"
+                elif actual_type is float:
+                    json_type = "number"
+                elif actual_type is bool:
+                    json_type = "boolean"
+                elif actual_type is str:
+                    json_type = "string"
 
-            properties[param_name] = {"type": json_type, "description": description}
+                properties[param_name] = {"type": json_type, "description": description}
+
             required.append(param_name)
 
         description = func.__doc__ or f"Call {func_name}"

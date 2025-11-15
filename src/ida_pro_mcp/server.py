@@ -79,84 +79,21 @@ class MCPVisitor(ast.NodeVisitor):
         self.descriptions: dict[str, str] = {}
         self.unsafe: list[str] = []
 
-    def _generate_oneof_schema(self, desc_text: str, annot_type: ast.expr) -> ast.expr | None:
-        """Generate oneOf schema for batch-first patterns"""
-        # Detect "Array defaults to X, or {ty, qs}" pattern
-        if "Array defaults to" in desc_text and ", or {" in desc_text:
-            # Extract the default type from description
-            if "string search" in desc_text:
-                default_item_type = "string"
-            elif "function renames" in desc_text:
-                default_item_type = "string"  # "addr:name" format
-            else:
-                default_item_type = "object"
-
-            # Generate oneOf schema
+    def _dict_to_ast(self, obj: Any) -> ast.expr:
+        """Convert Python dict/list to AST representation"""
+        if isinstance(obj, dict):
             return ast.Dict(
-                keys=[ast.Constant(value="oneOf")],
-                values=[ast.List(
-                    elts=[
-                        # Option 1: Array of strings/primitives
-                        ast.Dict(
-                            keys=[
-                                ast.Constant(value="type"),
-                                ast.Constant(value="items"),
-                                ast.Constant(value="description")
-                            ],
-                            values=[
-                                ast.Constant(value="array"),
-                                ast.Dict(
-                                    keys=[ast.Constant(value="type")],
-                                    values=[ast.Constant(value=default_item_type)],
-                                    ctx=ast.Load()
-                                ),
-                                ast.Constant(value=f"Array of {default_item_type}s (default format)")
-                            ],
-                            ctx=ast.Load()
-                        ),
-                        # Option 2: Batch format {ty, qs}
-                        ast.Dict(
-                            keys=[
-                                ast.Constant(value="type"),
-                                ast.Constant(value="properties"),
-                                ast.Constant(value="required"),
-                                ast.Constant(value="description")
-                            ],
-                            values=[
-                                ast.Constant(value="object"),
-                                ast.Dict(
-                                    keys=[
-                                        ast.Constant(value="ty"),
-                                        ast.Constant(value="qs")
-                                    ],
-                                    values=[
-                                        ast.Dict(
-                                            keys=[ast.Constant(value="type")],
-                                            values=[ast.Constant(value="string")],
-                                            ctx=ast.Load()
-                                        ),
-                                        ast.Dict(
-                                            keys=[ast.Constant(value="type")],
-                                            values=[ast.Constant(value="array")],
-                                            ctx=ast.Load()
-                                        )
-                                    ],
-                                    ctx=ast.Load()
-                                ),
-                                ast.List(
-                                    elts=[ast.Constant(value="ty"), ast.Constant(value="qs")],
-                                    ctx=ast.Load()
-                                ),
-                                ast.Constant(value="Batch format with explicit type")
-                            ],
-                            ctx=ast.Load()
-                        )
-                    ],
-                    ctx=ast.Load()
-                )],
+                keys=[ast.Constant(value=k) for k in obj.keys()],
+                values=[self._dict_to_ast(v) for v in obj.values()],
                 ctx=ast.Load()
             )
-        return None
+        elif isinstance(obj, list):
+            return ast.List(
+                elts=[self._dict_to_ast(item) for item in obj],
+                ctx=ast.Load()
+            )
+        else:
+            return ast.Constant(value=obj)
 
     def visit_FunctionDef(self, node):
         for decorator in node.decorator_list:
@@ -171,10 +108,20 @@ class MCPVisitor(ast.NodeVisitor):
                             assert isinstance(arg_type.value, ast.Name)
                             assert arg_type.value.id == "Annotated"
                             assert isinstance(arg_type.slice, ast.Tuple)
-                            assert len(arg_type.slice.elts) == 2
+                            assert len(arg_type.slice.elts) >= 2
                             annot_type = arg_type.slice.elts[0]
                             annot_description = arg_type.slice.elts[1]
                             assert isinstance(annot_description, ast.Constant)
+
+                            # Check for JsonSchema annotation (3rd element in Annotated tuple)
+                            json_schema = None
+                            if len(arg_type.slice.elts) >= 3:
+                                schema_elem = arg_type.slice.elts[2]
+                                # Check if it's a JsonSchema(...) call
+                                if isinstance(schema_elem, ast.Call) and isinstance(schema_elem.func, ast.Name) and schema_elem.func.id == "JsonSchema":
+                                    # Extract the schema dict from JsonSchema(...)
+                                    if len(schema_elem.args) > 0:
+                                        json_schema = schema_elem.args[0]
 
                             # Build Field keywords
                             field_keywords = [
@@ -184,14 +131,12 @@ class MCPVisitor(ast.NodeVisitor):
                                 )
                             ]
 
-                            # Add oneOf schema for batch-first patterns
-                            desc_text = annot_description.value
-                            oneof_schema = self._generate_oneof_schema(desc_text, annot_type)
-                            if oneof_schema:
+                            # Add json_schema_extra if JsonSchema annotation found
+                            if json_schema:
                                 field_keywords.append(
                                     ast.keyword(
                                         arg="json_schema_extra",
-                                        value=oneof_schema
+                                        value=json_schema
                                     )
                                 )
 

@@ -18,6 +18,7 @@ from .utils import (
     looks_like_address,
     decompile_checked,
     refresh_decompiler_ctext,
+    JsonSchema,
 )
 
 
@@ -29,7 +30,35 @@ from .utils import (
 @jsonrpc
 @idawrite
 def set_cmt(
-    items: Annotated[list[dict] | dict, "[{addr, comment}, ...] or {addr, comment}"],
+    items: Annotated[
+        list[dict] | dict,
+        "Set comments at addresses",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "addr": {"type": "string", "description": "Address (hex or decimal)"},
+                            "comment": {"type": "string", "description": "Comment text"}
+                        },
+                        "required": ["addr", "comment"]
+                    },
+                    "description": "Array of comment operations"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "addr": {"type": "string", "description": "Address (hex or decimal)"},
+                        "comment": {"type": "string", "description": "Comment text"}
+                    },
+                    "required": ["addr", "comment"],
+                    "description": "Single comment operation"
+                }
+            ]
+        })
+    ],
 ):
     """Set comments"""
 
@@ -121,7 +150,35 @@ def set_cmt(
 @jsonrpc
 @idawrite
 def patch_asm(
-    items: Annotated[list[dict] | dict, "[{addr, asm}, ...] or {addr, asm}"],
+    items: Annotated[
+        list[dict] | dict,
+        "Patch assembly instructions",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "addr": {"type": "string", "description": "Address (hex or decimal)"},
+                            "asm": {"type": "string", "description": "Assembly instruction(s), semicolon-separated"}
+                        },
+                        "required": ["addr", "asm"]
+                    },
+                    "description": "Array of assembly patch operations"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "addr": {"type": "string", "description": "Address (hex or decimal)"},
+                        "asm": {"type": "string", "description": "Assembly instruction(s), semicolon-separated"}
+                    },
+                    "required": ["addr", "asm"],
+                    "description": "Single assembly patch operation"
+                }
+            ]
+        })
+    ],
 ) -> list[dict]:
     """Patch assembly"""
 
@@ -172,7 +229,33 @@ def patch_asm(
 def rename_all(
     renamings: Annotated[
         list | dict,
-        "Array defaults to function renames, or {ty: 'function'|'global'|'local'|'stack', qs: [...]} for batch",
+        "Batch rename functions, globals, locals, or stack variables",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string", "pattern": "^0x[0-9a-fA-F]+:.+$"},
+                    "description": "Array of 'addr:name' strings for function renames (default)"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "ty": {
+                            "type": "string",
+                            "enum": ["function", "global", "local", "stack"],
+                            "description": "Type of entity to rename"
+                        },
+                        "qs": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Batch of rename operations (format depends on type)"
+                        }
+                    },
+                    "required": ["ty", "qs"],
+                    "description": "Batch renames with explicit type"
+                }
+            ]
+        })
     ],
 ) -> list[dict]:
     """Rename anything (batch-first API)

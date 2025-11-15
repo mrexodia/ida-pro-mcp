@@ -43,6 +43,7 @@ from .utils import (
     FunctionAnalysis,
     PatternMatch,
     BasicBlock,
+    JsonSchema,
 )
 
 # ============================================================================
@@ -89,7 +90,23 @@ def _get_cached_strings_dict() -> list[dict]:
 @jsonrpc
 @idaread
 def decompile(
-    addrs: Annotated[list[str] | str, "Address(es)"],
+    addrs: Annotated[
+        list | str,
+        "Address(es) to decompile",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of addresses (hex or decimal)"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses"
+                }
+            ]
+        })
+    ],
 ) -> list[dict]:
     """Decompile functions"""
     addrs = normalize_list_input(addrs)
@@ -134,7 +151,23 @@ def decompile(
 @jsonrpc
 @idaread
 def disasm(
-    addrs: Annotated[list[str] | str, "Address(es)"],
+    addrs: Annotated[
+        list | str,
+        "Address(es) to disassemble",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of addresses (hex or decimal)"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses"
+                }
+            ]
+        })
+    ],
 ) -> list[dict]:
     """Disassemble functions"""
     addrs = normalize_list_input(addrs)
@@ -213,7 +246,23 @@ def disasm(
 @jsonrpc
 @idaread
 def xrefs_to(
-    addrs: Annotated[list[str] | str, "Address(es)"],
+    addrs: Annotated[
+        list | str,
+        "Address(es) to get xrefs to",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of addresses (hex or decimal)"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses"
+                }
+            ]
+        })
+    ],
 ) -> list[dict]:
     """Get xrefs to addresses"""
     addrs = normalize_list_input(addrs)
@@ -241,7 +290,40 @@ def xrefs_to(
 @jsonrpc
 @idaread
 def xrefs_to_field(
-    queries: Annotated[list[dict] | dict, "[{struct, field}, ...] or {struct, field}"],
+    queries: Annotated[
+        list | dict,
+        "Struct field queries to get xrefs to",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "struct": {"type": "string", "description": "Struct name"},
+                            "field": {"type": "string", "description": "Field name"}
+                        },
+                        "required": ["struct", "field"]
+                    },
+                    "description": "Array of {struct, field} queries"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "struct": {"type": "string", "description": "Struct name"},
+                        "field": {"type": "string", "description": "Field name"}
+                    },
+                    "required": ["struct", "field"],
+                    "description": "Single {struct, field} query"
+                },
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of 'StructName.field' or 'StructName::field' strings"
+                }
+            ]
+        })
+    ],
 ) -> list[dict]:
     """Get xrefs to struct fields"""
 
@@ -346,7 +428,23 @@ def xrefs_to_field(
 @jsonrpc
 @idaread
 def callees(
-    addrs: Annotated[list[str] | str, "Address(es)"],
+    addrs: Annotated[
+        list | str,
+        "Address(es) to get callees for",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of addresses (hex or decimal)"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses"
+                }
+            ]
+        })
+    ],
 ) -> list[dict]:
     """Get function callees"""
     addrs = normalize_list_input(addrs)
@@ -399,7 +497,23 @@ def callees(
 @jsonrpc
 @idaread
 def callers(
-    addrs: Annotated[list[str] | str, "Address(es)"],
+    addrs: Annotated[
+        list | str,
+        "Address(es) to get callers for",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of addresses (hex or decimal)"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses"
+                }
+            ]
+        })
+    ],
 ) -> list[dict]:
     """Get function callers"""
     addrs = normalize_list_input(addrs)
@@ -450,8 +564,27 @@ def entrypoints() -> list[Function]:
 
 @jsonrpc
 @idaread
-def analyze_funcs(addrs: Annotated[list[str], "Address(es)"]) -> list[FunctionAnalysis]:
+def analyze_funcs(
+    addrs: Annotated[
+        list | str,
+        "Address(es) to analyze",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of addresses (hex or decimal)"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses"
+                }
+            ]
+        })
+    ],
+) -> list[FunctionAnalysis]:
     """Analyze functions: decomp, xrefs, callees, strings"""
+    addrs = normalize_list_input(addrs)
     results = []
     for addr in addrs:
         try:
@@ -539,9 +672,26 @@ def analyze_funcs(addrs: Annotated[list[str], "Address(es)"]) -> list[FunctionAn
 @jsonrpc
 @idaread
 def find_bytes(
-    patterns: Annotated[list[str], "Byte patterns (e.g. '48 8B ?? ??')"],
+    patterns: Annotated[
+        list | str,
+        "Byte patterns to search for (e.g. '48 8B ?? ??')",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of byte patterns"
+                },
+                {
+                    "type": "string",
+                    "description": "Single byte pattern or comma-separated patterns"
+                }
+            ]
+        })
+    ],
 ) -> list[PatternMatch]:
     """Find byte patterns"""
+    patterns = normalize_list_input(patterns)
     results = []
     for pattern in patterns:
         matches = []
@@ -576,9 +726,34 @@ def find_bytes(
 @jsonrpc
 @idaread
 def find_insns(
-    sequences: Annotated[list[list[str]], "Instruction sequences"],
+    sequences: Annotated[
+        list,
+        "Instruction sequences to search for",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Sequence of instruction mnemonics"
+                    },
+                    "description": "Array of instruction sequences"
+                },
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Single instruction sequence"
+                }
+            ]
+        })
+    ],
 ) -> list[dict]:
     """Find instruction sequences"""
+    # Handle single sequence vs array of sequences
+    if sequences and isinstance(sequences[0], str):
+        sequences = [sequences]
+
     results = []
 
     for sequence in sequences:
@@ -636,8 +811,27 @@ def find_insns(
 
 @jsonrpc
 @idaread
-def basic_blocks(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
+def basic_blocks(
+    addrs: Annotated[
+        list | str,
+        "Address(es) to get basic blocks for",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of addresses (hex or decimal)"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses"
+                }
+            ]
+        })
+    ],
+) -> list[dict]:
     """Get basic blocks"""
+    addrs = normalize_list_input(addrs)
     results = []
     for fn_addr in addrs:
         try:
@@ -675,7 +869,33 @@ def basic_blocks(addrs: Annotated[list[str], "Address(es)"]) -> list[dict]:
 @idaread
 def find_paths(
     queries: Annotated[
-        list[dict] | dict, "Source/target pairs or single {source, target}"
+        list | dict,
+        "Source/target pairs to find execution paths between",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string", "description": "Source address"},
+                            "target": {"type": "string", "description": "Target address"}
+                        },
+                        "required": ["source", "target"]
+                    },
+                    "description": "Array of {source, target} queries"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string", "description": "Source address"},
+                        "target": {"type": "string", "description": "Target address"}
+                    },
+                    "required": ["source", "target"],
+                    "description": "Single {source, target} query"
+                }
+            ]
+        })
     ],
 ) -> list[dict]:
     """Find execution paths"""
@@ -763,7 +983,32 @@ def find_paths(
 def search(
     queries: Annotated[
         list | dict,
-        "Array defaults to string search, or {ty: 'immediate'|'string'|'data_ref'|'code_ref', qs: [...]} for batch, or legacy {ty, q} format",
+        "Search for patterns in the binary (strings, immediate values, references)",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of string patterns to search for (default)"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "ty": {
+                            "type": "string",
+                            "enum": ["immediate", "string", "data_ref", "code_ref"],
+                            "description": "Type of search to perform"
+                        },
+                        "qs": {
+                            "type": "array",
+                            "description": "Batch of queries to search for"
+                        }
+                    },
+                    "required": ["ty", "qs"],
+                    "description": "Batch search with explicit type"
+                }
+            ]
+        })
     ],
 ) -> list[dict]:
     """Search (batch-first API)
@@ -877,7 +1122,43 @@ def _search_single(query: dict) -> dict:
 def find_insn_operands(
     patterns: Annotated[
         list | dict,
-        "Array of patterns, or {mnem: 'sub', operands: [0x60, ...], op_pos?: 0|1|2}",
+        "Find instructions with specific mnemonic and operand values",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "mnem": {"type": "string", "description": "Instruction mnemonic"},
+                            "op0": {"type": "integer", "description": "First operand value"},
+                            "op1": {"type": "integer", "description": "Second operand value"},
+                            "op2": {"type": "integer", "description": "Third operand value"},
+                            "op_any": {"type": "integer", "description": "Value in any operand"}
+                        }
+                    },
+                    "description": "Array of instruction patterns to search for"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "mnem": {"type": "string", "description": "Instruction mnemonic"},
+                        "operands": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "Batch of operand values to search for"
+                        },
+                        "op_pos": {
+                            "type": "integer",
+                            "enum": [0, 1, 2],
+                            "description": "Which operand position (omit for any)"
+                        }
+                    },
+                    "required": ["mnem", "operands"],
+                    "description": "Batch search for one mnemonic with multiple operand values"
+                }
+            ]
+        })
     ],
 ) -> list[dict]:
     """Find instructions with specific operand values
@@ -999,10 +1280,27 @@ def _find_insn_pattern(pattern: dict) -> list[str]:
 @jsonrpc
 @idaread
 def export_funcs(
-    addrs: Annotated[list[str], "Address(es)"],
+    addrs: Annotated[
+        list | str,
+        "Address(es) to export",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of addresses (hex or decimal)"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses"
+                }
+            ]
+        })
+    ],
     format: Annotated[str, "Format: json|c_header|prototypes"] = "json",
 ) -> dict:
     """Export functions"""
+    addrs = normalize_list_input(addrs)
     results = []
 
     for addr in addrs:
@@ -1060,10 +1358,27 @@ def export_funcs(
 @jsonrpc
 @idaread
 def callgraph(
-    roots: Annotated[list[str], "Root addresses"],
+    roots: Annotated[
+        list | str,
+        "Root address(es) to start call graph from",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of root addresses (hex or decimal)"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated root addresses"
+                }
+            ]
+        })
+    ],
     max_depth: Annotated[int, "Max depth"] = 5,
 ) -> list[dict]:
     """Get call graph"""
+    roots = normalize_list_input(roots)
     results = []
 
     for root in roots:
@@ -1136,8 +1451,27 @@ def callgraph(
 
 @jsonrpc
 @idaread
-def xref_matrix(entities: Annotated[list[str], "Address(es)"]) -> dict:
+def xref_matrix(
+    entities: Annotated[
+        list | str,
+        "Address(es) to build xref matrix for",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of addresses (hex or decimal)"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses"
+                }
+            ]
+        })
+    ],
+) -> dict:
     """Build xref matrix"""
+    entities = normalize_list_input(entities)
     matrix = {}
 
     for source in entities:
@@ -1175,8 +1509,31 @@ def xref_matrix(entities: Annotated[list[str], "Address(es)"]) -> dict:
 @idaread
 def analyze_strings(
     filters: Annotated[
-        list[dict] | dict,
-        "[{pattern, min_length, ...}, ...] or {pattern, min_length, ...}",
+        list | dict,
+        "String filter(s) to analyze strings",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {"type": "string", "description": "Pattern to match in strings"},
+                            "min_length": {"type": "integer", "description": "Minimum string length"}
+                        }
+                    },
+                    "description": "Array of filter objects"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Pattern to match in strings"},
+                        "min_length": {"type": "integer", "description": "Minimum string length"}
+                    },
+                    "description": "Single filter object"
+                }
+            ]
+        })
     ],
 ) -> list[dict]:
     """Analyze strings"""

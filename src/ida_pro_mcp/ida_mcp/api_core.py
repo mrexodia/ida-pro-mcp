@@ -30,6 +30,7 @@ from .utils import (
     create_demangled_to_ea_map,
     paginate,
     pattern_filter,
+    JsonSchema,
     DEMANGLED_TO_EA,
 )
 from .sync import IDAError
@@ -160,7 +161,35 @@ def cursor_func() -> Optional[Function]:
 
 @jsonrpc
 def conv_num(
-    inputs: Annotated[list[dict] | dict, "[{text, size}, ...] or {text, size}"],
+    inputs: Annotated[
+        list[dict] | dict,
+        "Convert numbers to various formats (hex, decimal, binary, ascii)",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string", "description": "Number string to convert"},
+                            "size": {"type": "integer", "description": "Byte size for conversion (omit for auto)"}
+                        },
+                        "required": ["text"]
+                    },
+                    "description": "Array of number conversion requests"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "Number string to convert"},
+                        "size": {"type": "integer", "description": "Byte size for conversion (omit for auto)"}
+                    },
+                    "required": ["text"],
+                    "description": "Single number conversion request"
+                }
+            ]
+        })
+    ],
 ) -> list[dict]:
     """Convert numbers to different formats"""
     inputs = normalize_dict_list(inputs, lambda s: {"text": s, "size": 64})
@@ -228,7 +257,37 @@ def conv_num(
 @idaread
 def list_funcs(
     queries: Annotated[
-        list[dict] | dict, "[{offset, count, filter}, ...] or {offset, count, filter}"
+        list[dict] | dict,
+        "List functions with optional filtering and pagination",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "offset": {"type": "integer", "description": "Starting index"},
+                            "count": {"type": "integer", "description": "Number of results"},
+                            "filter": {"type": "string", "description": "Name pattern filter"}
+                        }
+                    },
+                    "description": "Array of function listing requests"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "offset": {"type": "integer", "description": "Starting index"},
+                        "count": {"type": "integer", "description": "Number of results"},
+                        "filter": {"type": "string", "description": "Name pattern filter"}
+                    },
+                    "description": "Single function listing request"
+                },
+                {
+                    "type": "string",
+                    "description": "Filter pattern as string (defaults to offset=0, count=50)"
+                }
+            ]
+        })
     ],
 ) -> list[Page[Function]]:
     """List functions"""
@@ -257,7 +316,37 @@ def list_funcs(
 @idaread
 def gvars(
     queries: Annotated[
-        list[dict] | dict, "[{offset, count, filter}, ...] or {offset, count, filter}"
+        list[dict] | dict,
+        "List global variables with optional filtering and pagination",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "offset": {"type": "integer", "description": "Starting index"},
+                            "count": {"type": "integer", "description": "Number of results"},
+                            "filter": {"type": "string", "description": "Name pattern filter"}
+                        }
+                    },
+                    "description": "Array of global variable listing requests"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "offset": {"type": "integer", "description": "Starting index"},
+                        "count": {"type": "integer", "description": "Number of results"},
+                        "filter": {"type": "string", "description": "Name pattern filter"}
+                    },
+                    "description": "Single global variable listing request"
+                },
+                {
+                    "type": "string",
+                    "description": "Filter pattern as string (defaults to offset=0, count=50)"
+                }
+            ]
+        })
     ],
 ) -> list[Page[Global]]:
     """List globals"""
@@ -317,7 +406,37 @@ def imports(
 @idaread
 def strings(
     queries: Annotated[
-        list[dict] | dict, "[{offset, count, filter}, ...] or {offset, count, filter}"
+        list[dict] | dict,
+        "List strings with optional filtering and pagination",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "offset": {"type": "integer", "description": "Starting index"},
+                            "count": {"type": "integer", "description": "Number of results"},
+                            "filter": {"type": "string", "description": "String pattern filter"}
+                        }
+                    },
+                    "description": "Array of string listing requests"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "offset": {"type": "integer", "description": "Starting index"},
+                        "count": {"type": "integer", "description": "Number of results"},
+                        "filter": {"type": "string", "description": "String pattern filter"}
+                    },
+                    "description": "Single string listing request"
+                },
+                {
+                    "type": "string",
+                    "description": "Filter pattern as string (defaults to offset=0, count=50)"
+                }
+            ]
+        })
     ],
 ) -> list[Page[String]]:
     """List strings"""
