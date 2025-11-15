@@ -1,10 +1,14 @@
 [project]
 name = "ida-pro-mcp"
-version = "1.5.0"
+version = "2.0.0"
 description = "Vibe reversing with IDA Pro"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "mrexodia" }]
+authors = [
+    { name = "mrexodia" },
+    { name = "can1357" },
+    { name = "IDA Pro MCP Contributors" },
+]
 keywords = ["ida", "mcp", "llm", "plugin"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",

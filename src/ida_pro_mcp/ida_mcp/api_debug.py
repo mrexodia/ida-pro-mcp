@@ -1,0 +1,794 @@
+"""Debugger operations for IDA Pro MCP.
+
+This module provides comprehensive debugging functionality including:
+- Debugger control (start, exit, continue, step, run_to)
+- Breakpoint management (add, delete, enable/disable, list)
+- Register inspection (all registers, GP registers, specific registers)
+- Memory operations (read/write debugger memory)
+- Call stack inspection
+"""
+
+import os
+from typing import Annotated, Optional
+
+import ida_dbg
+import ida_entry
+import ida_idd
+import ida_idaapi
+import ida_name
+import idaapi
+
+from .rpc import jsonrpc, unsafe
+from .sync import idaread, IDAError
+from .utils import (
+    RegisterValue,
+    ThreadRegisters,
+    Breakpoint,
+    normalize_list_input,
+    normalize_dict_list,
+    parse_address,
+    JsonSchema,
+)
+
+
+# ============================================================================
+# Constants and Helper Functions
+# ============================================================================
+
+GENERAL_PURPOSE_REGISTERS = {
+    "EAX",
+    "EBX",
+    "ECX",
+    "EDX",
+    "ESI",
+    "EDI",
+    "EBP",
+    "ESP",
+    "EIP",
+    "RAX",
+    "RBX",
+    "RCX",
+    "RDX",
+    "RSI",
+    "RDI",
+    "RBP",
+    "RSP",
+    "RIP",
+    "R8",
+    "R9",
+    "R10",
+    "R11",
+    "R12",
+    "R13",
+    "R14",
+    "R15",
+}
+
+
+def dbg_ensure_running() -> "ida_idd.debugger_t":
+    dbg = ida_idd.get_dbg()
+    if not dbg:
+        raise IDAError("Debugger not running")
+    if ida_dbg.get_ip_val() is None:
+        raise IDAError("Debugger not running")
+    return dbg
+
+
+def _get_registers_for_thread(dbg: "ida_idd.debugger_t", tid: int) -> ThreadRegisters:
+    """Helper to get registers for a specific thread."""
+    regs = []
+    regvals: ida_idd.regvals_t = ida_dbg.get_reg_vals(tid)
+    for reg_index, rv in enumerate(regvals):
+        rv: ida_idd.regval_t
+        reg_info = dbg.regs(reg_index)
+
+        try:
+            reg_value = rv.pyval(reg_info.dtype)
+        except ValueError:
+            reg_value = ida_idaapi.BADADDR
+
+        if isinstance(reg_value, int):
+            reg_value = hex(reg_value)
+        if isinstance(reg_value, bytes):
+            reg_value = reg_value.hex(" ")
+        else:
+            reg_value = str(reg_value)
+        regs.append(
+            RegisterValue(
+                name=reg_info.name,
+                value=reg_value,
+            )
+        )
+    return ThreadRegisters(
+        thread_id=tid,
+        registers=regs,
+    )
+
+
+def _get_registers_general_for_thread(
+    dbg: "ida_idd.debugger_t", tid: int
+) -> ThreadRegisters:
+    """Helper to get general-purpose registers for a specific thread."""
+    all_registers = _get_registers_for_thread(dbg, tid)
+    general_registers = [
+        reg
+        for reg in all_registers["registers"]
+        if reg["name"] in GENERAL_PURPOSE_REGISTERS
+    ]
+    return ThreadRegisters(
+        thread_id=tid,
+        registers=general_registers,
+    )
+
+
+def _get_registers_specific_for_thread(
+    dbg: "ida_idd.debugger_t", tid: int, register_names: list[str]
+) -> ThreadRegisters:
+    """Helper to get specific registers for a given thread."""
+    all_registers = _get_registers_for_thread(dbg, tid)
+    specific_registers = [
+        reg for reg in all_registers["registers"] if reg["name"] in register_names
+    ]
+    return ThreadRegisters(
+        thread_id=tid,
+        registers=specific_registers,
+    )
+
+
+def list_breakpoints():
+    breakpoints: list[Breakpoint] = []
+    for i in range(ida_dbg.get_bpt_qty()):
+        bpt = ida_dbg.bpt_t()
+        if ida_dbg.getn_bpt(i, bpt):
+            breakpoints.append(
+                Breakpoint(
+                    addr=hex(bpt.ea),
+                    enabled=bpt.flags & ida_dbg.BPT_ENABLED,
+                    condition=str(bpt.condition) if bpt.condition else None,
+                )
+            )
+    return breakpoints
+
+
+# ============================================================================
+# Debugger Control Operations
+# ============================================================================
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_start():
+    """Start debugger"""
+    if len(list_breakpoints()) == 0:
+        for i in range(ida_entry.get_entry_qty()):
+            ordinal = ida_entry.get_entry_ordinal(i)
+            addr = ida_entry.get_entry(ordinal)
+            if addr != ida_idaapi.BADADDR:
+                ida_dbg.add_bpt(addr, 0, idaapi.BPT_SOFT)
+
+    if idaapi.start_process("", "", "") == 1:
+        ip = ida_dbg.get_ip_val()
+        if ip is not None:
+            return hex(ip)
+    raise IDAError("Failed to start debugger")
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_exit():
+    """Exit debugger"""
+    dbg_ensure_running()
+    if idaapi.exit_process():
+        return
+    raise IDAError("Failed to exit debugger")
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_continue() -> str:
+    """Continue debugger"""
+    dbg_ensure_running()
+    if idaapi.continue_process():
+        ip = ida_dbg.get_ip_val()
+        if ip is not None:
+            return hex(ip)
+    raise IDAError("Failed to continue debugger")
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_run_to(
+    addr: Annotated[str, "Address"],
+):
+    """Run to address"""
+    dbg_ensure_running()
+    ea = parse_address(addr)
+    if idaapi.run_to(ea):
+        ip = ida_dbg.get_ip_val()
+        if ip is not None:
+            return hex(ip)
+    raise IDAError(f"Failed to run to address {hex(ea)}")
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_step_into():
+    """Step into"""
+    dbg_ensure_running()
+    if idaapi.step_into():
+        ip = ida_dbg.get_ip_val()
+        if ip is not None:
+            return hex(ip)
+    raise IDAError("Failed to step into")
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_step_over():
+    """Step over"""
+    dbg_ensure_running()
+    if idaapi.step_over():
+        ip = ida_dbg.get_ip_val()
+        if ip is not None:
+            return hex(ip)
+    raise IDAError("Failed to step over")
+
+
+# ============================================================================
+# Breakpoint Operations
+# ============================================================================
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_list_bps():
+    """List breakpoints"""
+    return list_breakpoints()
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_add_bp(
+    addrs: Annotated[
+        list[str] | str,
+        "Address(es) to add breakpoints at",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string", "description": "Address to add breakpoint at"},
+                    "description": "Array of addresses"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses (e.g., '0x401000, main')"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
+    """Add breakpoints"""
+    addrs = normalize_list_input(addrs)
+    results = []
+
+    for addr in addrs:
+        try:
+            ea = parse_address(addr)
+            if idaapi.add_bpt(ea, 0, idaapi.BPT_SOFT):
+                results.append({"addr": addr, "ok": True})
+            else:
+                breakpoints = list_breakpoints()
+                for bpt in breakpoints:
+                    if bpt["addr"] == hex(ea):
+                        results.append({"addr": addr, "ok": True})
+                        break
+                else:
+                    results.append({"addr": addr, "error": "Failed to set breakpoint"})
+        except Exception as e:
+            results.append({"addr": addr, "error": str(e)})
+
+    return results
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_delete_bp(
+    addrs: Annotated[
+        list[str] | str,
+        "Address(es) to delete breakpoints from",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string", "description": "Address to delete breakpoint from"},
+                    "description": "Array of addresses"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated addresses (e.g., '0x401000, main')"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
+    """Delete breakpoints"""
+    addrs = normalize_list_input(addrs)
+    results = []
+
+    for addr in addrs:
+        try:
+            ea = parse_address(addr)
+            if idaapi.del_bpt(ea):
+                results.append({"addr": addr, "ok": True})
+            else:
+                results.append({"addr": addr, "error": "Failed to delete breakpoint"})
+        except Exception as e:
+            results.append({"addr": addr, "error": str(e)})
+
+    return results
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_enable_bp(
+    items: Annotated[
+        list[dict] | dict,
+        "Breakpoint enable/disable operations",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "addr": {"type": "string", "description": "Breakpoint address"},
+                            "enabled": {"type": "boolean", "description": "Enable (true) or disable (false)"}
+                        },
+                        "required": ["addr", "enabled"]
+                    },
+                    "description": "Array of breakpoint enable/disable operations"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "addr": {"type": "string", "description": "Breakpoint address"},
+                        "enabled": {"type": "boolean", "description": "Enable (true) or disable (false)"}
+                    },
+                    "required": ["addr", "enabled"],
+                    "description": "Single breakpoint enable/disable operation"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated 'addr:enabled' pairs (e.g., '0x401000:1, main:0')"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
+    """Enable/disable breakpoints"""
+
+    def parse_addr_enabled(s: str) -> dict:
+        # Support "addr:0" or "addr:1" or just "addr" (defaults to enabled)
+        if ":" in s:
+            parts = s.split(":", 1)
+            enabled = parts[1].strip().lower() in ("1", "true", "yes", "on")
+            return {"addr": parts[0].strip(), "enabled": enabled}
+        return {"addr": s.strip(), "enabled": True}
+
+    items = normalize_dict_list(items, parse_addr_enabled)
+
+    results = []
+    for item in items:
+        addr = item.get("addr", "")
+        enable = item.get("enabled", True)
+
+        try:
+            ea = parse_address(addr)
+            if idaapi.enable_bpt(ea, enable):
+                results.append({"addr": addr, "ok": True})
+            else:
+                results.append(
+                    {
+                        "addr": addr,
+                        "error": f"Failed to {'enable' if enable else 'disable'} breakpoint",
+                    }
+                )
+        except Exception as e:
+            results.append({"addr": addr, "error": str(e)})
+
+    return results
+
+
+# ============================================================================
+# Register Operations
+# ============================================================================
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_regs() -> list[ThreadRegisters]:
+    """Get all registers"""
+    result: list[ThreadRegisters] = []
+    dbg = dbg_ensure_running()
+    for thread_index in range(ida_dbg.get_thread_qty()):
+        tid = ida_dbg.getn_thread(thread_index)
+        result.append(_get_registers_for_thread(dbg, tid))
+    return result
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_regs_thread(
+    tids: Annotated[
+        list[int] | int,
+        "Thread ID(s) to get registers for",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "integer", "description": "Thread ID"},
+                    "description": "Array of thread IDs"
+                },
+                {
+                    "type": "integer",
+                    "description": "Single thread ID"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
+    """Get thread registers"""
+    if isinstance(tids, int):
+        tids = [tids]
+
+    dbg = dbg_ensure_running()
+    available_tids = [ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())]
+    results = []
+
+    for tid in tids:
+        try:
+            if tid not in available_tids:
+                results.append(
+                    {"tid": tid, "regs": None, "error": f"Thread {tid} not found"}
+                )
+                continue
+            regs = _get_registers_for_thread(dbg, tid)
+            results.append({"tid": tid, "regs": regs})
+        except Exception as e:
+            results.append({"tid": tid, "regs": None, "error": str(e)})
+
+    return results
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_regs_cur() -> ThreadRegisters:
+    """Get current thread registers"""
+    dbg = dbg_ensure_running()
+    tid = ida_dbg.get_current_thread()
+    return _get_registers_for_thread(dbg, tid)
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_gpregs_thread(
+    tids: Annotated[
+        list[int] | int,
+        "Thread ID(s) to get GP registers for",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "integer", "description": "Thread ID"},
+                    "description": "Array of thread IDs"
+                },
+                {
+                    "type": "integer",
+                    "description": "Single thread ID"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
+    """Get GP registers for threads"""
+    if isinstance(tids, int):
+        tids = [tids]
+
+    dbg = dbg_ensure_running()
+    available_tids = [ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())]
+    results = []
+
+    for tid in tids:
+        try:
+            if tid not in available_tids:
+                results.append(
+                    {"tid": tid, "regs": None, "error": f"Thread {tid} not found"}
+                )
+                continue
+            regs = _get_registers_general_for_thread(dbg, tid)
+            results.append({"tid": tid, "regs": regs})
+        except Exception as e:
+            results.append({"tid": tid, "regs": None, "error": str(e)})
+
+    return results
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_current_gpregs() -> ThreadRegisters:
+    """Get current thread GP registers"""
+    dbg = dbg_ensure_running()
+    tid = ida_dbg.get_current_thread()
+    return _get_registers_general_for_thread(dbg, tid)
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_regs_for_thread(
+    thread_id: Annotated[int, "Thread ID"],
+    register_names: Annotated[
+        str,
+        "Register names (comma-separated)",
+        JsonSchema({
+            "type": "string",
+            "description": "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
+        })
+    ],
+) -> ThreadRegisters:
+    """Get specific thread registers"""
+    dbg = dbg_ensure_running()
+    if thread_id not in [
+        ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())
+    ]:
+        raise IDAError(f"Thread with ID {thread_id} not found")
+    names = [name.strip() for name in register_names.split(",")]
+    return _get_registers_specific_for_thread(dbg, thread_id, names)
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_current_regs(
+    register_names: Annotated[
+        str,
+        "Register names (comma-separated)",
+        JsonSchema({
+            "type": "string",
+            "description": "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
+        })
+    ],
+) -> ThreadRegisters:
+    """Get specific current thread registers"""
+    dbg = dbg_ensure_running()
+    tid = ida_dbg.get_current_thread()
+    names = [name.strip() for name in register_names.split(",")]
+    return _get_registers_specific_for_thread(dbg, tid, names)
+
+
+# ============================================================================
+# Call Stack Operations
+# ============================================================================
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_callstack() -> list[dict[str, str]]:
+    """Get call stack"""
+    callstack = []
+    try:
+        tid = ida_dbg.get_current_thread()
+        trace = ida_idd.call_stack_t()
+
+        if not ida_dbg.collect_stack_trace(tid, trace):
+            return []
+        for frame in trace:
+            frame_info = {
+                "addr": hex(frame.callea),
+            }
+            try:
+                module_info = ida_idd.modinfo_t()
+                if ida_dbg.get_module_info(frame.callea, module_info):
+                    frame_info["module"] = os.path.basename(module_info.name)
+                else:
+                    frame_info["module"] = "<unknown>"
+
+                name = (
+                    ida_name.get_nice_colored_name(
+                        frame.callea,
+                        ida_name.GNCN_NOCOLOR
+                        | ida_name.GNCN_NOLABEL
+                        | ida_name.GNCN_NOSEG
+                        | ida_name.GNCN_PREFDBG,
+                    )
+                    or "<unnamed>"
+                )
+                frame_info["symbol"] = name
+
+            except Exception as e:
+                frame_info["module"] = "<error>"
+                frame_info["symbol"] = str(e)
+
+            callstack.append(frame_info)
+
+    except Exception:
+        pass
+    return callstack
+
+
+# ============================================================================
+# Debugger Memory Operations
+# ============================================================================
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_read_mem(
+    regions: Annotated[
+        list[dict] | dict,
+        "Memory regions to read from",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "addr": {"type": "string", "description": "Address to read from"},
+                            "size": {"type": "integer", "description": "Number of bytes to read"}
+                        },
+                        "required": ["addr", "size"]
+                    },
+                    "description": "Array of memory regions to read"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "addr": {"type": "string", "description": "Address to read from"},
+                        "size": {"type": "integer", "description": "Number of bytes to read"}
+                    },
+                    "required": ["addr", "size"],
+                    "description": "Single memory region to read"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated 'addr:size' pairs (e.g., '0x401000:256, 0x402000:128')"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
+    """Read debug memory"""
+
+    def parse_addr_size(s: str) -> dict:
+        # Support "addr:size" or just "addr" (default size=256)
+        if ":" in s:
+            parts = s.split(":", 1)
+            return {"addr": parts[0].strip(), "size": int(parts[1].strip(), 0)}
+        return {"addr": s.strip(), "size": 256}
+
+    regions = normalize_dict_list(regions, parse_addr_size)
+    dbg_ensure_running()
+    results = []
+
+    for region in regions:
+        try:
+            addr = parse_address(region["addr"])
+            size = region["size"]
+
+            data = idaapi.dbg_read_memory(addr, size)
+            if data:
+                results.append(
+                    {
+                        "addr": region["addr"],
+                        "size": len(data),
+                        "data": data.hex(),
+                        "error": None,
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "addr": region["addr"],
+                        "size": 0,
+                        "data": None,
+                        "error": "Failed to read memory",
+                    }
+                )
+
+        except Exception as e:
+            results.append(
+                {"addr": region.get("addr"), "size": 0, "data": None, "error": str(e)}
+            )
+
+    return results
+
+
+@jsonrpc
+@idaread
+@unsafe
+def dbg_write_mem(
+    regions: Annotated[
+        list[dict] | dict,
+        "Memory regions to write to",
+        JsonSchema({
+            "oneOf": [
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "addr": {"type": "string", "description": "Address to write to"},
+                            "data": {"type": "string", "description": "Hex-encoded data to write"}
+                        },
+                        "required": ["addr", "data"]
+                    },
+                    "description": "Array of memory regions to write"
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "addr": {"type": "string", "description": "Address to write to"},
+                        "data": {"type": "string", "description": "Hex-encoded data to write"}
+                    },
+                    "required": ["addr", "data"],
+                    "description": "Single memory region to write"
+                },
+                {
+                    "type": "string",
+                    "description": "Comma-separated 'addr:hexdata' pairs (e.g., '0x401000:90909090, 0x402000:cccccccc')"
+                }
+            ]
+        })
+    ]
+) -> list[dict]:
+    """Write debug memory"""
+
+    def parse_addr_data(s: str) -> dict:
+        # Support "addr:hexdata" format
+        if ":" in s:
+            parts = s.split(":", 1)
+            return {"addr": parts[0].strip(), "data": parts[1].strip()}
+        # Just hex data without address (invalid)
+        return {"addr": "", "data": s.strip()}
+
+    regions = normalize_dict_list(regions, parse_addr_data)
+    dbg_ensure_running()
+    results = []
+
+    for region in regions:
+        try:
+            addr = parse_address(region["addr"])
+            data = bytes.fromhex(region["data"])
+
+            success = idaapi.dbg_write_memory(addr, data)
+            results.append(
+                {
+                    "addr": region["addr"],
+                    "size": len(data) if success else 0,
+                    "ok": success,
+                    "error": None if success else "Write failed",
+                }
+            )
+
+        except Exception as e:
+            results.append({"addr": region.get("addr"), "size": 0, "error": str(e)})
+
+    return results
