@@ -34,7 +34,7 @@ class JsonRpcRegistry:
     def __init__(self):
         self.methods: dict[str, Callable] = {}
 
-    def register(self, func: Callable) -> Callable:
+    def method(self, func: Callable) -> Callable:
         self.methods[func.__name__] = func # type: ignore
         return func
 
