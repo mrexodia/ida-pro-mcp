@@ -1,10 +1,10 @@
 """Example MCP server with test tools"""
 import time
 from typing import Annotated, Optional, TypedDict, NotRequired
-from mcp import McpToolRegistry, McpToolError, MCPServer
+from mcp import McpToolRegistry, McpToolError, McpServer
 
 # Create tool registry
-registry = McpToolRegistry()
+mcp = McpToolRegistry()
 
 class SystemInfo(TypedDict):
     platform: Annotated[str, "Operating system platform"]
@@ -17,7 +17,7 @@ class GreetingResponse(TypedDict):
     name: Annotated[str, "Name that was greeted"]
     age: Annotated[NotRequired[int], "Age if provided"]
 
-@registry.register
+@mcp.tool
 def divide(
     numerator: Annotated[float, "Numerator"],
     denominator: Annotated[float, "Denominator"]
@@ -25,7 +25,7 @@ def divide(
     """Divide two numbers (no zero check - tests natural exceptions)"""
     return numerator / denominator
 
-@registry.register
+@mcp.tool
 def greet(
     name: Annotated[str, "Name to greet"],
     age: Annotated[Optional[int], "Age of person"] = None
@@ -42,7 +42,7 @@ def greet(
         "name": name
     }
 
-@registry.register
+@mcp.tool
 def get_system_info() -> SystemInfo:
     """Get system information"""
     import platform
@@ -53,7 +53,7 @@ def get_system_info() -> SystemInfo:
         "timestamp": time.time()
     }
 
-@registry.register
+@mcp.tool
 def failing_tool(message: Annotated[str, "Error message to raise"]) -> str:
     """Tool that always fails (for testing error handling)"""
     raise McpToolError(message)
@@ -63,7 +63,7 @@ class StructInfo(TypedDict):
     size: Annotated[int, "Structure size in bytes"]
     fields: Annotated[list[str], "List of field names"]
 
-@registry.register
+@mcp.tool
 def struct_get(
     names: Annotated[list[str], "Array of structure names"]
          | Annotated[str, "Single structure name"]
@@ -81,11 +81,11 @@ def struct_get(
 if __name__ == "__main__":
     print("Starting MCP Example Server...")
     print("\nAvailable tools:")
-    for name in registry.methods.keys():
-        func = registry.methods[name]
+    for name in mcp.methods.keys():
+        func = mcp.methods[name]
         print(f"  - {name}: {func.__doc__}")
 
-    server = MCPServer(registry)
+    server = McpServer("127.0.0.1", 13337, mcp)
     server.start()
 
     print("\n" + "="*60)

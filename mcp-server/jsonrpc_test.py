@@ -10,49 +10,49 @@ from typing import Optional, Any
 from jsonrpc import JsonRpcRegistry
 
 # Create registry and register test methods
-registry = JsonRpcRegistry()
+jsonrpc = JsonRpcRegistry()
 
-@registry.register
+@jsonrpc.method
 def subtract(minuend: int, subtrahend: int) -> int:
     return minuend - subtrahend
 
-@registry.register
+@jsonrpc.method
 def sum_array(numbers: list) -> int:
     return sum(numbers)
 
-@registry.register
+@jsonrpc.method
 def update(a: int, b: int, c: int, d: int, e: int) -> str:
     return "updated"
 
-@registry.register
+@jsonrpc.method
 def foobar() -> str:
     return "bar"
 
-@registry.register
+@jsonrpc.method
 def notify_hello(value: int) -> None:
     pass
 
-@registry.register
+@jsonrpc.method
 def notify_sum(a: int, b: int, c: int) -> None:
     pass
 
-@registry.register
+@jsonrpc.method
 def get_data() -> list:
     return ["hello", 5]
 
-@registry.register
+@jsonrpc.method
 def greet(name: str, greeting: str = "Hello") -> str:
     return f"{greeting}, {name}!"
 
-@registry.register
+@jsonrpc.method
 def process_optional(value: Optional[int]) -> str:
     return f"Got: {value}"
 
-@registry.register
+@jsonrpc.method
 def union_test(id: int | str) -> str:
     return f"ID: {id}"
 
-@registry.register
+@jsonrpc.method
 def list_test(items: list[str]) -> int:
     return len(items)
 
@@ -121,7 +121,7 @@ def test_rpc(request: Any, expected_response: dict | None = None, description: s
     print(f"--> {request}")
 
     try:
-        result = registry.dispatch(request)
+        result = jsonrpc.dispatch(request)
     except Exception as e:
         print(f"\n❌ UNEXPECTED EXCEPTION:")
         traceback.print_exc()
