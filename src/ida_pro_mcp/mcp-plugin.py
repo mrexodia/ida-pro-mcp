@@ -1573,6 +1573,8 @@ class String(TypedDict):
     length: int
     string: str
 
+strings_cache = None
+
 @jsonrpc
 @idaread
 def list_strings_filter(
@@ -1582,7 +1584,10 @@ def list_strings_filter(
 ) -> Page[String]:
     """List matching strings in the database (paginated, filtered)"""
     strings: list[String] = []
-    for item in idautils.Strings():
+    global strings_cache
+    if strings_cache is None:
+        strings_cache = idautils.Strings()
+    for item in strings_cache:
         if item is None:
             continue
         try:
