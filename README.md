@@ -91,7 +91,8 @@ Available functionality:
 
 - `find_bytes(patterns)`: Find byte pattern(s) in binary (e.g., "48 8B ?? ??").
 - `find_insns(sequences)`: Find instruction sequence(s) in code.
-- `search(queries)`: Advanced search (immediate values, strings, data/code references).
+- `find_insn_operands(patterns)`: Find instructions with specific operand values (e.g., SUB with 0x60, CMP with specific immediates).
+- `search(queries)`: Advanced search with batch-first API (immediate values, strings, data/code references).
 
 ## Control Flow Analysis
 
@@ -126,9 +127,12 @@ Available functionality:
 
 **Key Features:**
 
-- **Batch-first API**: Most functions accept lists or comma-separated strings (e.g., `"0x401000, 0x402000"`)
+- **Batch-first API**: Enhanced with `{ty, qs}` pattern for type-specific batches
+  - `search(["password", "key"])` - Array defaults to string search
+  - `search({"ty": "immediate", "qs": [456, 228]})` - Batch immediate search
+  - `rename_all(["0x401000:main", "0x402000:init"])` - Natural string format for function renames
 - **Consistent error handling**: All batch operations return `[{..., error: null|string}, ...]`
-- **Performance**: Expensive operations (function lists, strings) are cached per batch
+- **Performance**: Strings are cached with MD5-based invalidation to avoid repeated `build_strlist` calls in large projects
 
 ## Prerequisites
 
