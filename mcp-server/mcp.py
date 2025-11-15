@@ -7,15 +7,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, get_type_hints, Annotated
 from urllib.parse import urlparse, parse_qs
 
-from jsonrpc import JsonRpcException, JsonRpcRegistry
+from jsonrpc import JsonRpcException, JsonRpcRegistry, JsonRpcError
 
-class IDAError(Exception):
+class McpToolError(Exception):
     def __init__(self, message: str):
         super().__init__(message)
 
     @property
     def message(self) -> str:
         return self.args[0]
+
+class McpToolRegistry(JsonRpcRegistry):
+    """JSON-RPC registry with custom error handling for MCP tools"""
+    def map_exception(self, e: Exception) -> JsonRpcError:
+        if isinstance(e, McpToolError):
+            return {
+                "code": -32000,
+                "message": str(e),
+                "data": traceback.format_exc()
+            }
+        return super().map_exception(e)
 
 # ============================================================================
 # MCP Streamable HTTP Implementation
@@ -91,50 +102,130 @@ class MCPProtocolHandler:
     def __init__(self, registry: JsonRpcRegistry):
         self.registry = registry
 
+    def _type_to_json_schema(self, py_type: Any) -> dict:
+        """Convert Python type hint to JSON schema object"""
+        from typing import get_origin, get_args, Union
+
+        # Handle Annotated[Type, "description"]
+        if get_origin(py_type) is Annotated:
+            args = get_args(py_type)
+            actual_type = args[0]
+            description = args[1] if len(args) > 1 else None
+            schema = self._type_to_json_schema(actual_type)
+            if description:
+                schema["description"] = description
+            return schema
+
+        # Handle Union/Optional types
+        if get_origin(py_type) is Union:
+            union_args = get_args(py_type)
+            non_none = [t for t in union_args if t is not type(None)]
+            if len(non_none) == 1:
+                return self._type_to_json_schema(non_none[0])
+            # Multiple types -> anyOf
+            return {"anyOf": [self._type_to_json_schema(t) for t in non_none]}
+
+        # Primitives
+        if py_type == int:
+            return {"type": "integer"}
+        if py_type == float:
+            return {"type": "number"}
+        if py_type == str:
+            return {"type": "string"}
+        if py_type == bool:
+            return {"type": "boolean"}
+
+        # Handle list types
+        if py_type == list or get_origin(py_type) is list:
+            args = get_args(py_type)
+            schema: dict[str, Any] = {"type": "array"}
+            if args:
+                schema["items"] = self._type_to_json_schema(args[0])
+            return schema
+
+        # Handle dict types
+        if py_type == dict or get_origin(py_type) is dict:
+            return {"type": "object"}
+
+        # TypedDict detection
+        if hasattr(py_type, "__annotations__"):
+            if hasattr(py_type, "__required_keys__") or hasattr(py_type, "__optional_keys__"):
+                return self._typed_dict_to_schema(py_type)
+
+        # Fallback
+        return {"type": "object"}
+
+    def _typed_dict_to_schema(self, typed_dict_class) -> dict:
+        """Convert TypedDict to JSON schema"""
+        try:
+            from typing_extensions import NotRequired
+        except ImportError:
+            from typing import NotRequired
+
+        from typing import get_origin, get_args
+
+        hints = get_type_hints(typed_dict_class, include_extras=True)
+        properties = {}
+        required = []
+
+        for field_name, field_type in hints.items():
+            # Check if field is NotRequired
+            is_not_required = get_origin(field_type) is NotRequired
+            if is_not_required:
+                field_type = get_args(field_type)[0]
+
+            properties[field_name] = self._type_to_json_schema(field_type)
+
+            # Add to required if not NotRequired
+            if not is_not_required:
+                # Also check __required_keys__ if available
+                if hasattr(typed_dict_class, "__required_keys__"):
+                    if field_name in typed_dict_class.__required_keys__:
+                        if field_name not in required:
+                            required.append(field_name)
+                else:
+                    # Default to required if no __required_keys__
+                    required.append(field_name)
+
+        schema = {
+            "type": "object",
+            "properties": properties
+        }
+        if required:
+            schema["required"] = required
+
+        return schema
+
     def generate_tool_schema(self, func_name: str, func: Callable) -> dict:
         """Generate MCP tool schema from a function"""
-        hints = get_type_hints(func)
-        hints.pop("return", None)
+        import inspect
+
+        hints = get_type_hints(func, include_extras=True)
+        return_type = hints.pop("return", None)
+        sig = inspect.signature(func)
 
         # Build parameter schema
         properties = {}
         required = []
 
         for param_name, param_type in hints.items():
-            # Handle Annotated types to extract descriptions
-            description = ""
-            actual_type = param_type
+            # Check if parameter has default value
+            param = sig.parameters.get(param_name)
+            has_default = param and param.default is not inspect.Parameter.empty
 
-            if hasattr(param_type, "__origin__"):
-                if param_type.__origin__ is Annotated:
-                    args = param_type.__metadata__
-                    if args:
-                        description = args[0]
-                    actual_type = param_type.__args__[0]
+            # Use _type_to_json_schema to handle all type conversions including Union
+            properties[param_name] = self._type_to_json_schema(param_type)
 
-            # Map Python types to JSON schema types
-            json_type = "string"  # default
-            if actual_type == int:
-                json_type = "integer"
-            elif actual_type == float:
-                json_type = "number"
-            elif actual_type == bool:
-                json_type = "boolean"
-            elif actual_type == str:
-                json_type = "string"
-
-            properties[param_name] = {
-                "type": json_type,
-                "description": description
-            }
-            required.append(param_name)
+            # Only add to required if no default value
+            if not has_default:
+                required.append(param_name)
 
         # Get docstring as description
         description = func.__doc__ or f"Call {func_name}"
         if description:
             description = description.strip()
 
-        return {
+        schema: dict[str, Any] = {
             "name": func_name,
             "description": description,
             "inputSchema": {
@@ -143,6 +234,24 @@ class MCPProtocolHandler:
                 "required": required
             }
         }
+
+        # Add outputSchema if return type exists and is not None
+        if return_type and return_type is not type(None):
+            return_schema = self._type_to_json_schema(return_type)
+            # MCP spec requires outputSchema to always be type: object
+            # Wrap primitives in an object with a "value" property
+            if return_schema.get("type") != "object":
+                schema["outputSchema"] = {
+                    "type": "object",
+                    "properties": {
+                        "value": return_schema
+                    },
+                    "required": ["value"]
+                }
+            else:
+                schema["outputSchema"] = return_schema
+
+        return schema
 
     def get_tools_list(self) -> list[dict]:
         """Generate list of all available tools"""
@@ -179,17 +288,53 @@ class MCPProtocolHandler:
         if not tool_name:
             raise JsonRpcException(-32602, "Missing tool name")
 
-        # Call the function via registry
-        result = self.registry.dispatch(tool_name, arguments)
-
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": json.dumps(result) if not isinstance(result, str) else result
-                }
-            ]
+        # Wrap tool call in JSON-RPC request
+        inner_request = {
+            "jsonrpc": "2.0",
+            "method": tool_name,
+            "params": arguments,
+            "id": None  # Notification
         }
+
+        inner_response = self.registry.dispatch(inner_request)
+
+        # Check for error response
+        if inner_response and "error" in inner_response:
+            error = inner_response["error"]
+            # Format error: message + optional data
+            error_text = error.get("message", "")
+            if "data" in error:
+                error_text += f"\n{str(error['data'])}"
+            return {
+                "content": [{"type": "text", "text": error_text}],
+                "isError": True
+            }
+
+        # Success case
+        result = inner_response.get("result") if inner_response else None
+
+        # Check if tool has outputSchema
+        func = self.registry.methods.get(tool_name)
+        has_output_schema = False
+        if func:
+            tool_schema = self.generate_tool_schema(tool_name, func)
+            has_output_schema = "outputSchema" in tool_schema
+
+        # Build response with both content and structuredContent
+        response: dict[str, Any] = {
+            "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
+            "isError": False
+        }
+
+        # If tool has outputSchema, also add structuredContent
+        if has_output_schema:
+            # Check if result needs wrapping (primitive types)
+            structured_result = result
+            if not isinstance(result, dict):
+                structured_result = {"value": result}
+            response["structuredContent"] = structured_result
+
+        return response
 
 class MCPHTTPRequestHandler(BaseHTTPRequestHandler):
     """HTTP request handler for MCP server using stdlib http.server"""
@@ -325,7 +470,7 @@ class MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 }
                 if e.data:
                     response["error"]["data"] = e.data
-            except IDAError as e:
+            except McpToolError as e:
                 response["error"] = {
                     "code": -32000,
                     "message": e.message
@@ -450,7 +595,7 @@ class MCPHTTPRequestHandler(BaseHTTPRequestHandler):
                 }
                 if e.data:
                     response["error"]["data"] = e.data
-            except IDAError as e:
+            except McpToolError as e:
                 response["error"] = {
                     "code": -32000,
                     "message": e.message
@@ -509,14 +654,14 @@ class MCPServer:
     BASE_PORT = 13337
     MAX_PORT_TRIES = 10
 
-    def __init__(self):
+    def __init__(self, tool_registry: JsonRpcRegistry):
         self.http_server = None
         self.server_thread = None
         self.running = False
         self.port = None  # Will be set when server starts
         self.sessions: dict[str, SessionState] = {}
         self.connections: list[SSEConnection] = []
-        self.mcp_handler = MCPProtocolHandler(rpc_registry)
+        self.mcp_handler = MCPProtocolHandler(tool_registry)
 
     def start(self):
         """Start the MCP server"""
@@ -527,6 +672,13 @@ class MCPServer:
         self.server_thread = threading.Thread(target=self._run_server, daemon=True)
         self.running = True
         self.server_thread.start()
+
+        # Wait for port to be assigned
+        import time
+        timeout = 2.0
+        start_time = time.time()
+        while self.port is None and time.time() - start_time < timeout:
+            time.sleep(0.01)
 
     def stop(self):
         """Stop the MCP server"""
@@ -562,8 +714,11 @@ class MCPServer:
         for i in range(self.MAX_PORT_TRIES):
             port = self.BASE_PORT + i
             try:
-                # Create HTTP server with threading support
-                self.http_server = ThreadingHTTPServer(
+                # Create HTTP server with threading support and exclusive binding
+                class ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
+                    allow_reuse_address = False
+
+                self.http_server = ExclusiveThreadingHTTPServer(
                     (self.HOST, port),
                     MCPHTTPRequestHandler
                 )
