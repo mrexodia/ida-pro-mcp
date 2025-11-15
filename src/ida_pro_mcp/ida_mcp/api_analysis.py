@@ -726,83 +726,232 @@ def find_paths(
 @idaread
 def search(
     queries: Annotated[
-        list[dict] | dict,
-        "{ ty: 'immediate', q: int, start?: addr } | { ty: 'string', q: str } | { ty: 'data_ref', q: addr } | { ty: 'code_ref', q: addr }",
+        list | dict,
+        "Array defaults to string search, or {ty: 'immediate'|'string'|'data_ref'|'code_ref', qs: [...]} for batch, or legacy {ty, q} format",
     ],
 ) -> list[dict]:
-    """Search (ty: 'immediate'|'string'|'data_ref'|'code_ref', q: value/pattern/target depending on ty)"""
+    """Search (batch-first API)
+
+    Examples:
+    - ["password", "key"] - String search (default)
+    - {"ty": "immediate", "qs": [456, 228, 0x1C8]} - Batch immediate search
+    - {"ty": "string", "qs": ["password", "admin"]} - Batch string search
+    - {"ty": "immediate", "q": 456} - Legacy single query format
+    """
+    # Handle new batch format: {ty, qs}
+    if isinstance(queries, dict) and "qs" in queries and "ty" in queries:
+        ty = queries["ty"]
+        query_list = queries["qs"]
+
+        results = []
+        for q in query_list:
+            # Convert to legacy format for processing
+            legacy_query = {"ty": ty, "q": q}
+            result = _search_single(legacy_query)
+            results.append(result)
+        return results
+
+    # Handle array of strings (default to string search)
+    if isinstance(queries, list) and all(isinstance(q, str) for q in queries):
+        results = []
+        for pattern in queries:
+            result = _search_single({"ty": "string", "q": pattern})
+            results.append(result)
+        return results
+
+    # Legacy format: list of {ty, q} dicts or single {ty, q} dict
     queries = normalize_dict_list(
         queries, lambda s: {"ty": "string", "q": s}
     )
+
     results = []
-
     for query in queries:
-        try:
-            query_type = query.get("ty")
-            matches = []
+        result = _search_single(query)
+        results.append(result)
 
-            if query_type == "immediate":
-                # Search for immediate values
-                # q: the immediate value to search for (int)
-                value = query.get("q", 0)
-                if isinstance(value, str):
-                    # Try to parse as hex or decimal
-                    try:
-                        value = int(value, 0)
-                    except ValueError:
-                        value = 0
-                start_ea = parse_address(
-                    query.get("start", hex(ida_ida.inf_get_min_ea()))
-                )
+    return results
 
-                ea = start_ea
-                while ea != idaapi.BADADDR:
-                    ea = ida_search.find_imm(ea, ida_search.SEARCH_DOWN, value)
-                    if ea != idaapi.BADADDR:
-                        matches.append(hex(ea))
-                        ea = idc.next_head(ea, ida_ida.inf_get_max_ea())
 
-            elif query_type == "string":
-                # Search for strings containing pattern
-                # q: the pattern to search for in strings (str)
-                pattern = query.get("q", "")
-                for s in idautils.Strings():
-                    if pattern.lower() in str(s).lower():
-                        matches.append(hex(s.ea))
+def _search_single(query: dict) -> dict:
+    """Internal helper to search for a single query"""
+    try:
+        query_type = query.get("ty")
+        matches = []
 
-            elif query_type == "data_ref":
-                # Find all data references to a target
-                # q: the target address to find references to (addr str)
-                target_str = query.get("q")
-                if target_str is None:
-                    continue
+        if query_type == "immediate":
+            # Search for immediate values
+            value = query.get("q", 0)
+            if isinstance(value, str):
+                try:
+                    value = int(value, 0)
+                except ValueError:
+                    value = 0
+
+            start_ea = parse_address(
+                query.get("start", hex(ida_ida.inf_get_min_ea()))
+            )
+
+            ea = start_ea
+            while ea < ida_ida.inf_get_max_ea():
+                # FIX: ida_search.find_imm returns (ea, operand_num) tuple
+                result = ida_search.find_imm(ea, ida_search.SEARCH_DOWN, value)
+                if result[0] == idaapi.BADADDR:
+                    break
+                found_ea = result[0]
+                matches.append(hex(found_ea))
+                ea = found_ea + 1
+
+        elif query_type == "string":
+            # Search for strings containing pattern
+            pattern = query.get("q", "")
+            for s in idautils.Strings():
+                if pattern.lower() in str(s).lower():
+                    matches.append(hex(s.ea))
+
+        elif query_type == "data_ref":
+            # Find all data references to a target
+            target_str = query.get("q")
+            if target_str is not None:
                 target = parse_address(target_str)
                 for xref in idautils.DataRefsTo(target):
                     matches.append(hex(xref))
 
-            elif query_type == "code_ref":
-                # Find all code references to a target
-                # q: the target address to find references to (addr str)
-                target_str = query.get("q")
-                if target_str is None:
-                    continue
+        elif query_type == "code_ref":
+            # Find all code references to a target
+            target_str = query.get("q")
+            if target_str is not None:
                 target = parse_address(target_str)
                 for xref in idautils.CodeRefsTo(target, 0):
                     matches.append(hex(xref))
 
-            results.append(
-                {
-                    "query": query,
-                    "matches": matches,
-                    "count": len(matches),
-                    "error": None,
-                }
-            )
+        return {
+            "query": query,
+            "matches": matches,
+            "count": len(matches),
+            "error": None,
+        }
 
-        except Exception as e:
-            results.append({"query": query, "matches": [], "count": 0, "error": str(e)})
+    except Exception as e:
+        return {"query": query, "matches": [], "count": 0, "error": str(e)}
 
-    return results
+
+@jsonrpc
+@idaread
+def find_insn_operands(
+    patterns: Annotated[
+        list | dict,
+        "Array of patterns, or {mnem: 'sub', operands: [0x60, ...], op_pos?: 0|1|2}",
+    ],
+) -> list[dict]:
+    """Find instructions with specific operand values
+
+    Examples:
+    - [{"mnem": "sub", "op2": 0x60}] - Find SUB with 0x60 as second operand
+    - {"mnem": "cmp", "operands": [0x6F, 0x20]} - Batch find CMP with values
+    - [{"mnem": "add", "op_any": -96}] - Find ADD with -96 in any operand
+    """
+    # Handle batch format: {mnem, operands, op_pos}
+    if isinstance(patterns, dict) and "mnem" in patterns and "operands" in patterns:
+        mnem = patterns["mnem"]
+        operands = patterns["operands"]
+        op_pos = patterns.get("op_pos")
+
+        results = []
+        for value in operands:
+            # Create pattern for single operand
+            if op_pos is not None:
+                pattern = {"mnem": mnem, f"op{op_pos}": value}
+            else:
+                pattern = {"mnem": mnem, "op_any": value}
+            matches = _find_insn_pattern(pattern)
+            results.append({
+                "mnem": mnem,
+                "operand": value,
+                "matches": matches,
+                "count": len(matches)
+            })
+        return results
+
+    # Handle list of patterns
+    if isinstance(patterns, list):
+        results = []
+        for pattern in patterns:
+            matches = _find_insn_pattern(pattern)
+            results.append({
+                "pattern": pattern,
+                "matches": matches,
+                "count": len(matches)
+            })
+        return results
+
+    # Single pattern dict
+    matches = _find_insn_pattern(patterns)
+    return [{
+        "pattern": patterns,
+        "matches": matches,
+        "count": len(matches)
+    }]
+
+
+def _find_insn_pattern(pattern: dict) -> list[str]:
+    """Internal helper to find instructions matching a pattern"""
+    mnem = pattern.get("mnem", "").lower()
+    op0_val = pattern.get("op0")
+    op1_val = pattern.get("op1")
+    op2_val = pattern.get("op2")
+    any_val = pattern.get("op_any")
+
+    matches = []
+
+    # Scan all executable segments
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
+            continue
+
+        ea = seg.start_ea
+        while ea < seg.end_ea:
+            # Check mnemonic
+            if mnem and idc.print_insn_mnem(ea).lower() != mnem:
+                ea = idc.next_head(ea, seg.end_ea)
+                if ea == idaapi.BADADDR:
+                    break
+                continue
+
+            # Check specific operand positions
+            match = True
+            if op0_val is not None:
+                if idc.get_operand_value(ea, 0) != op0_val:
+                    match = False
+
+            if op1_val is not None:
+                if idc.get_operand_value(ea, 1) != op1_val:
+                    match = False
+
+            if op2_val is not None:
+                if idc.get_operand_value(ea, 2) != op2_val:
+                    match = False
+
+            # Check any operand
+            if any_val is not None and match:
+                found_any = False
+                for i in range(8):
+                    if idc.get_operand_type(ea, i) == idaapi.o_void:
+                        break
+                    if idc.get_operand_value(ea, i) == any_val:
+                        found_any = True
+                        break
+                if not found_any:
+                    match = False
+
+            if match:
+                matches.append(hex(ea))
+
+            ea = idc.next_head(ea, seg.end_ea)
+            if ea == idaapi.BADADDR:
+                break
+
+    return matches
 
 
 # ============================================================================

@@ -171,81 +171,151 @@ def patch_asm(
 @idawrite
 def rename_all(
     renamings: Annotated[
-        list[dict] | dict,
-        "[{ty, addr, src, dst}, ...] or {ty, addr, src, dst}. ty: function|global|local|stack",
+        list | dict,
+        "Array defaults to function renames, or {ty: 'function'|'global'|'local'|'stack', qs: [...]} for batch",
     ],
 ) -> list[dict]:
-    """Rename anything (function/global/local/stack)"""
+    """Rename anything (batch-first API)
+
+    Examples:
+    - ["0x401000:main", "0x402000:init"] - Function renames (default)
+    - {"ty": "function", "qs": ["0x401000:main", "0x402000:init"]}
+    - {"ty": "global", "qs": ["old_var:new_var", "data:config"]}
+    - {"ty": "local", "qs": ["0x401000:old:new", "0x402000:v1:v2"]}
+    - {"ty": "stack", "qs": ["0x401000:var_8:buffer"]}
+    """
+    # Handle new batch format: {ty, qs}
+    if isinstance(renamings, dict) and "qs" in renamings and "ty" in renamings:
+        ty = renamings["ty"]
+        query_list = renamings["qs"]
+
+        results = []
+        for q in query_list:
+            item = _parse_rename_query(q, ty)
+            result = _rename_single(item)
+            results.append(result)
+        return results
+
+    # Handle array of strings (default to function renames)
+    if isinstance(renamings, list) and all(isinstance(q, str) for q in renamings):
+        results = []
+        for q in renamings:
+            item = _parse_rename_query(q, "function")
+            result = _rename_single(item)
+            results.append(result)
+        return results
+
+    # Legacy format: list of {ty, addr, src, dst} dicts
     renamings = normalize_dict_list(renamings)
     results = []
-
     for item in renamings:
-        try:
-            item_type = item["ty"]
-            success = False
-
-            if item_type == "function":
-                ea = parse_address(item["addr"])
-                success = idaapi.set_name(ea, item["dst"], idaapi.SN_CHECK)
-                if success:
-                    func = idaapi.get_func(ea)
-                    if func:
-                        refresh_decompiler_ctext(func.start_ea)
-
-            elif item_type == "global":
-                ea = idaapi.get_name_ea(idaapi.BADADDR, item["src"])
-                if ea != idaapi.BADADDR:
-                    success = idaapi.set_name(ea, item["dst"], idaapi.SN_CHECK)
-
-            elif item_type == "local":
-                func = idaapi.get_func(parse_address(item["addr"]))
-                if func:
-                    success = ida_hexrays.rename_lvar(
-                        func.start_ea, item["src"], item["dst"]
-                    )
-                    if success:
-                        refresh_decompiler_ctext(func.start_ea)
-
-            elif item_type == "stack":
-                func = idaapi.get_func(parse_address(item["addr"]))
-                if not func:
-                    results.append({"item": item, "error": "No function found"})
-                    continue
-
-                frame_tif = ida_typeinf.tinfo_t()
-                if not ida_frame.get_func_frame(frame_tif, func):
-                    results.append({"item": item, "error": "No frame"})
-                    continue
-
-                idx, udm = frame_tif.get_udm(item["src"])
-                if not udm:
-                    results.append({"item": item, "error": f"{item['src']} not found"})
-                    continue
-
-                tid = frame_tif.get_udm_tid(idx)
-                if ida_frame.is_special_frame_member(tid):
-                    results.append({"item": item, "error": "Special frame member"})
-                    continue
-
-                udm = ida_typeinf.udm_t()
-                frame_tif.get_udm_by_tid(udm, tid)
-                offset = udm.offset // 8
-                if ida_frame.is_funcarg_off(func, offset):
-                    results.append({"item": item, "error": "Argument member"})
-                    continue
-
-                sval = ida_frame.soff_to_fpoff(func, offset)
-                success = ida_frame.define_stkvar(func, item["dst"], sval, udm.type)
-
-            results.append(
-                {
-                    "item": item,
-                    "ok": success,
-                    "error": None if success else "Rename failed",
-                }
-            )
-
-        except Exception as e:
-            results.append({"item": item, "error": str(e)})
+        result = _rename_single(item)
+        results.append(result)
 
     return results
+
+
+def _parse_rename_query(query: str, ty: str) -> dict:
+    """Parse rename query string into dict format"""
+    parts = query.split(":", 2)
+
+    if ty == "function":
+        # Format: "addr:name"
+        if len(parts) != 2:
+            raise ValueError(f"Expected 'addr:name' for function, got: {query}")
+        return {"ty": "function", "addr": parts[0].strip(), "dst": parts[1].strip()}
+
+    elif ty == "global":
+        # Format: "old_name:new_name"
+        if len(parts) != 2:
+            raise ValueError(f"Expected 'old:new' for global, got: {query}")
+        return {"ty": "global", "src": parts[0].strip(), "dst": parts[1].strip()}
+
+    elif ty == "local":
+        # Format: "func_addr:old_name:new_name"
+        if len(parts) != 3:
+            raise ValueError(f"Expected 'func:old:new' for local, got: {query}")
+        return {
+            "ty": "local",
+            "addr": parts[0].strip(),
+            "src": parts[1].strip(),
+            "dst": parts[2].strip(),
+        }
+
+    elif ty == "stack":
+        # Format: "func_addr:old_name:new_name"
+        if len(parts) != 3:
+            raise ValueError(f"Expected 'func:old:new' for stack, got: {query}")
+        return {
+            "ty": "stack",
+            "addr": parts[0].strip(),
+            "src": parts[1].strip(),
+            "dst": parts[2].strip(),
+        }
+
+    else:
+        raise ValueError(f"Unknown rename type: {ty}")
+
+
+def _rename_single(item: dict) -> dict:
+    """Internal helper to rename a single item"""
+    try:
+        item_type = item["ty"]
+        success = False
+
+        if item_type == "function":
+            ea = parse_address(item["addr"])
+            success = idaapi.set_name(ea, item["dst"], idaapi.SN_CHECK)
+            if success:
+                func = idaapi.get_func(ea)
+                if func:
+                    refresh_decompiler_ctext(func.start_ea)
+
+        elif item_type == "global":
+            ea = idaapi.get_name_ea(idaapi.BADADDR, item["src"])
+            if ea != idaapi.BADADDR:
+                success = idaapi.set_name(ea, item["dst"], idaapi.SN_CHECK)
+
+        elif item_type == "local":
+            func = idaapi.get_func(parse_address(item["addr"]))
+            if func:
+                success = ida_hexrays.rename_lvar(
+                    func.start_ea, item["src"], item["dst"]
+                )
+                if success:
+                    refresh_decompiler_ctext(func.start_ea)
+
+        elif item_type == "stack":
+            func = idaapi.get_func(parse_address(item["addr"]))
+            if not func:
+                return {"item": item, "error": "No function found"}
+
+            frame_tif = ida_typeinf.tinfo_t()
+            if not ida_frame.get_func_frame(frame_tif, func):
+                return {"item": item, "error": "No frame"}
+
+            idx, udm = frame_tif.get_udm(item["src"])
+            if not udm:
+                return {"item": item, "error": f"{item['src']} not found"}
+
+            tid = frame_tif.get_udm_tid(idx)
+            if ida_frame.is_special_frame_member(tid):
+                return {"item": item, "error": "Special frame member"}
+
+            udm = ida_typeinf.udm_t()
+            frame_tif.get_udm_by_tid(udm, tid)
+            offset = udm.offset // 8
+            if ida_frame.is_funcarg_off(func, offset):
+                return {"item": item, "error": "Argument member"}
+
+            sval = ida_frame.soff_to_fpoff(func, offset)
+            success = ida_frame.define_stkvar(func, item["dst"], sval, udm.type)
+
+        return {
+            "item": item,
+            "ok": success,
+            "error": None if success else "Rename failed",
+        }
+
+    except Exception as e:
+        return {"item": item, "error": str(e)}
