@@ -38,14 +38,30 @@ __version__ = "2.0.0"
 __author__ = "IDA Pro MCP Contributors"
 
 __all__ = [
-    'MCPServer',
-    'rpc_registry',
-    'jsonrpc',
-    'unsafe',
-    'resource',
-    'JSONRPCError',
-    'idaread',
-    'idawrite',
-    'IDAError',
-    'IDASyncError',
+    # Infrastructure modules
+    "rpc",
+    "sync",
+    "utils",
+    "mcp",
+    # API modules
+    "api_core",
+    "api_analysis",
+    "api_memory",
+    "api_types",
+    "api_modify",
+    "api_stack",
+    "api_debug",
+    "api_python",
+    "api_resources",
+    # Re-exported components
+    "MCPServer",
+    "rpc_registry",
+    "jsonrpc",
+    "unsafe",
+    "resource",
+    "JSONRPCError",
+    "idaread",
+    "idawrite",
+    "IDAError",
+    "IDASyncError",
 ]

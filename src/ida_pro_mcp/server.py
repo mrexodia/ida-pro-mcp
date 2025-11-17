@@ -8,6 +8,7 @@ import http.client
 import tempfile
 import tomllib
 import tomli_w
+from typing import Any
 from urllib.parse import urlparse
 import glob
 
@@ -19,6 +20,7 @@ mcp = FastMCP("ida-pro-mcp", log_level="ERROR")
 jsonrpc_request_id = 1
 ida_host = "127.0.0.1"
 ida_port = 13337
+
 
 def make_jsonrpc_request(method: str, *params):
     """Make a JSON-RPC request to the IDA plugin"""
@@ -33,9 +35,9 @@ def make_jsonrpc_request(method: str, *params):
     jsonrpc_request_id += 1
 
     try:
-        conn.request("POST", "/mcp", json.dumps(request), {
-            "Content-Type": "application/json"
-        })
+        conn.request(
+            "POST", "/mcp", json.dumps(request), {"Content-Type": "application/json"}
+        )
         response = conn.getresponse()
         data = json.loads(response.read().decode())
 
@@ -58,6 +60,7 @@ def make_jsonrpc_request(method: str, *params):
     finally:
         conn.close()
 
+
 @mcp.tool()
 def check_connection() -> str:
     """Check if the IDA plugin is running"""
@@ -71,12 +74,15 @@ def check_connection() -> str:
             shortcut = "Ctrl+Alt+M"
         return f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?"
 
+
 # Code taken from https://github.com/mrexodia/ida-pro-mcp (MIT License)
 class MCPVisitor(ast.NodeVisitor):
     def __init__(self):
         self.types: dict[str, ast.ClassDef] = {}
         self.functions: dict[str, ast.FunctionDef] = {}
-        self.resources: dict[str, tuple[ast.FunctionDef, str]] = {}  # name -> (func, uri)
+        self.resources: dict[
+            str, tuple[ast.FunctionDef, str]
+        ] = {}  # name -> (func, uri)
         self.descriptions: dict[str, str] = {}
         self.unsafe: list[str] = []
 
@@ -86,12 +92,11 @@ class MCPVisitor(ast.NodeVisitor):
             return ast.Dict(
                 keys=[ast.Constant(value=k) for k in obj.keys()],
                 values=[self._dict_to_ast(v) for v in obj.values()],
-                ctx=ast.Load()
+                ctx=ast.Load(),
             )
         elif isinstance(obj, list):
             return ast.List(
-                elts=[self._dict_to_ast(item) for item in obj],
-                ctx=ast.Load()
+                elts=[self._dict_to_ast(item) for item in obj], ctx=ast.Load()
             )
         else:
             return ast.Constant(value=obj)
@@ -100,13 +105,20 @@ class MCPVisitor(ast.NodeVisitor):
         for decorator in node.decorator_list:
             # Handle @resource("uri") decorator
             if isinstance(decorator, ast.Call):
-                if isinstance(decorator.func, ast.Name) and decorator.func.id == "resource":
-                    if len(decorator.args) > 0 and isinstance(decorator.args[0], ast.Constant):
+                if (
+                    isinstance(decorator.func, ast.Name)
+                    and decorator.func.id == "resource"
+                ):
+                    if len(decorator.args) > 0 and isinstance(
+                        decorator.args[0], ast.Constant
+                    ):
                         uri = decorator.args[0].value
                         self.resources[node.name] = (node, uri)
                         # Extract description from docstring
                         body_comment = node.body[0]
-                        if isinstance(body_comment, ast.Expr) and isinstance(body_comment.value, ast.Constant):
+                        if isinstance(body_comment, ast.Expr) and isinstance(
+                            body_comment.value, ast.Constant
+                        ):
                             self.descriptions[node.name] = body_comment.value.value
                         return
             elif isinstance(decorator, ast.Name):
@@ -115,7 +127,9 @@ class MCPVisitor(ast.NodeVisitor):
                         arg_name = arg.arg
                         arg_type = arg.annotation
                         if arg_type is None:
-                            raise Exception(f"Missing argument type for {node.name}.{arg_name}")
+                            raise Exception(
+                                f"Missing argument type for {node.name}.{arg_name}"
+                            )
                         if isinstance(arg_type, ast.Subscript):
                             assert isinstance(arg_type.value, ast.Name)
                             assert arg_type.value.id == "Annotated"
@@ -130,25 +144,25 @@ class MCPVisitor(ast.NodeVisitor):
                             if len(arg_type.slice.elts) >= 3:
                                 schema_elem = arg_type.slice.elts[2]
                                 # Check if it's a JsonSchema(...) call
-                                if isinstance(schema_elem, ast.Call) and isinstance(schema_elem.func, ast.Name) and schema_elem.func.id == "JsonSchema":
+                                if (
+                                    isinstance(schema_elem, ast.Call)
+                                    and isinstance(schema_elem.func, ast.Name)
+                                    and schema_elem.func.id == "JsonSchema"
+                                ):
                                     # Extract the schema dict from JsonSchema(...)
                                     if len(schema_elem.args) > 0:
                                         json_schema = schema_elem.args[0]
 
                             # Build Field keywords
                             field_keywords = [
-                                ast.keyword(
-                                    arg="description",
-                                    value=annot_description
-                                )
+                                ast.keyword(arg="description", value=annot_description)
                             ]
 
                             # Add json_schema_extra if JsonSchema annotation found
                             if json_schema:
                                 field_keywords.append(
                                     ast.keyword(
-                                        arg="json_schema_extra",
-                                        value=json_schema
+                                        arg="json_schema_extra", value=json_schema
                                     )
                                 )
 
@@ -156,20 +170,28 @@ class MCPVisitor(ast.NodeVisitor):
                                 value=ast.Name(id="Annotated", ctx=ast.Load()),
                                 slice=ast.Tuple(
                                     elts=[
-                                    annot_type,
-                                    ast.Call(
-                                        func=ast.Name(id="Field", ctx=ast.Load()),
-                                        args=[],
-                                        keywords=field_keywords)],
-                                    ctx=ast.Load()),
-                                ctx=ast.Load())
+                                        annot_type,
+                                        ast.Call(
+                                            func=ast.Name(id="Field", ctx=ast.Load()),
+                                            args=[],
+                                            keywords=field_keywords,
+                                        ),
+                                    ],
+                                    ctx=ast.Load(),
+                                ),
+                                ctx=ast.Load(),
+                            )
                         elif isinstance(arg_type, ast.Name):
                             pass
                         else:
-                            raise Exception(f"Unexpected type annotation for {node.name}.{arg_name} -> {type(arg_type)}")
+                            raise Exception(
+                                f"Unexpected type annotation for {node.name}.{arg_name} -> {type(arg_type)}"
+                            )
 
                     body_comment = node.body[0]
-                    if isinstance(body_comment, ast.Expr) and isinstance(body_comment.value, ast.Constant):
+                    if isinstance(body_comment, ast.Expr) and isinstance(
+                        body_comment.value, ast.Constant
+                    ):
                         new_body = [body_comment]
                         self.descriptions[node.name] = body_comment.value.value
                     else:
@@ -183,7 +205,8 @@ class MCPVisitor(ast.NodeVisitor):
                     rpc_call = ast.Call(
                         func=ast.Name(id="make_jsonrpc_request", ctx=ast.Load()),
                         args=call_args,
-                        keywords=[])
+                        keywords=[],
+                    )
 
                     new_body.append(ast.Return(value=rpc_call))
                     decorator_list = [
@@ -191,13 +214,25 @@ class MCPVisitor(ast.NodeVisitor):
                             func=ast.Attribute(
                                 value=ast.Name(id="mcp", ctx=ast.Load()),
                                 attr="tool",
-                                ctx=ast.Load()),
+                                ctx=ast.Load(),
+                            ),
                             args=[],
-                            keywords=[]
+                            keywords=[],
                         )
                     ]
-                    node_nobody = ast.FunctionDef(node.name, node.args, new_body, decorator_list, node.returns, node.type_comment, lineno=node.lineno, col_offset=node.col_offset)
-                    assert node.name not in self.functions, f"Duplicate function: {node.name}"
+                    node_nobody = ast.FunctionDef(
+                        node.name,
+                        node.args,
+                        new_body,
+                        decorator_list,
+                        node.returns,
+                        node.type_comment,
+                        lineno=node.lineno,
+                        col_offset=node.col_offset,
+                    )
+                    assert node.name not in self.functions, (
+                        f"Duplicate function: {node.name}"
+                    )
                     self.functions[node.name] = node_nobody
                 elif decorator.id == "unsafe":
                     self.unsafe.append(node.name)
@@ -216,9 +251,13 @@ GENERATED_PY = os.path.join(SCRIPT_DIR, "server_generated.py")
 
 # NOTE: This is in the global scope on purpose
 if not os.path.exists(IDA_PLUGIN_PKG):
-    raise RuntimeError(f"IDA plugin package not found at {IDA_PLUGIN_PKG} (did you move it?)")
+    raise RuntimeError(
+        f"IDA plugin package not found at {IDA_PLUGIN_PKG} (did you move it?)"
+    )
 if not os.path.exists(IDA_PLUGIN_LOADER):
-    raise RuntimeError(f"IDA plugin loader not found at {IDA_PLUGIN_LOADER} (did you move it?)")
+    raise RuntimeError(
+        f"IDA plugin loader not found at {IDA_PLUGIN_LOADER} (did you move it?)"
+    )
 
 # Parse plugin code for type generation
 visitor = MCPVisitor()
@@ -279,7 +318,7 @@ try:
     if code_bytes != existing_code_bytes:
         with open(GENERATED_PY, "wb") as f:
             f.write(code_bytes)
-except:
+except Exception:
     print(f"Failed to generate code: {GENERATED_PY}", file=sys.stderr, flush=True)
 
 exec(compile(code, GENERATED_PY, "exec"))
@@ -292,13 +331,14 @@ SAFE_FUNCTIONS = [f for f in MCP_FUNCTIONS if f not in UNSAFE_FUNCTIONS]
 # MCP Resource Handlers
 # ============================================================================
 
+
 # Generate individual resource handlers for each discovered resource
 def create_resource_handler(res_name: str, res_func: ast.FunctionDef, uri_pattern: str):
     """Create a resource handler function that calls the IDA plugin via JSON-RPC"""
     import re
 
     # Extract parameter names from URI pattern (e.g., {addr} -> addr)
-    param_names = re.findall(r'\{(\w+)\}', uri_pattern)
+    param_names = re.findall(r"\{(\w+)\}", uri_pattern)
 
     # Get description
     description = visitor.descriptions.get(res_name, "")
@@ -337,13 +377,16 @@ def handler():
     # Register with FastMCP
     mcp.resource(uri_pattern)(handler)
 
+
 # Register all discovered resources
 for res_name, (res_func, uri_pattern) in visitor.resources.items():
     create_resource_handler(res_name, res_func, uri_pattern)
 
+
 def generate_readme():
     print("README:")
     print("- `check_connection()`: Check if the IDA plugin is running.")
+
     def get_description(name: str):
         function = visitor.functions[name]
         signature = function.name + "("
@@ -352,10 +395,16 @@ def generate_readme():
                 signature += ", "
             signature += arg.arg
         signature += ")"
-        description = visitor.descriptions.get(function.name, "<no description>").strip().split("\n")[0].strip()
+        description = (
+            visitor.descriptions.get(function.name, "<no description>")
+            .strip()
+            .split("\n")[0]
+            .strip()
+        )
         if description[-1] != ".":
             description += "."
         return f"- `{signature}`: {description}"
+
     for safe_function in SAFE_FUNCTIONS:
         if safe_function != "check_connection":
             print(get_description(safe_function))
@@ -366,20 +415,21 @@ def generate_readme():
     mcp_config = {
         "mcpServers": {
             "github.com/mrexodia/ida-pro-mcp": {
-            "command": "uv",
-            "args": [
-                "--directory",
-                "c:\\MCP\\ida-pro-mcp",
-                "run",
-                "server.py",
-                "--install-plugin"
-            ],
-            "timeout": 1800,
-            "disabled": False,
+                "command": "uv",
+                "args": [
+                    "--directory",
+                    "c:\\MCP\\ida-pro-mcp",
+                    "run",
+                    "server.py",
+                    "--install-plugin",
+                ],
+                "timeout": 1800,
+                "disabled": False,
             }
         }
     }
     print(json.dumps(mcp_config, indent=2))
+
 
 def get_python_executable():
     """Get the path to the Python executable"""
@@ -409,6 +459,7 @@ def get_python_executable():
                 return python_executable
     return sys.executable
 
+
 def copy_python_env(env: dict[str, str]):
     # Reference: https://docs.python.org/3/using/cmdline.html#environment-variables
     python_vars = [
@@ -431,53 +482,176 @@ def copy_python_env(env: dict[str, str]):
             env[var] = value
     return result
 
+
 def print_mcp_config():
     mcp_url = f"http://{ida_host}:{ida_port}/mcp"
-    print(json.dumps({
-            "mcpServers": {
-                mcp.name: {
-                    "type": "http",
-                    "url": mcp_url
-                }
-            }
-        }, indent=2)
+    print(
+        json.dumps(
+            {"mcpServers": {mcp.name: {"type": "http", "url": mcp_url}}}, indent=2
+        )
     )
+
 
 def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
     if sys.platform == "win32":
         configs = {
-            "Cline": (os.path.join(os.getenv("APPDATA", ""), "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
-            "Roo Code": (os.path.join(os.getenv("APPDATA", ""), "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
-            "Kilo Code": (os.path.join(os.getenv("APPDATA", ""), "Code", "User", "globalStorage", "kilocode.kilo-code", "settings"), "mcp_settings.json"),
-            "Claude": (os.path.join(os.getenv("APPDATA", ""), "Claude"), "claude_desktop_config.json"),
+            "Cline": (
+                os.path.join(
+                    os.getenv("APPDATA", ""),
+                    "Code",
+                    "User",
+                    "globalStorage",
+                    "saoudrizwan.claude-dev",
+                    "settings",
+                ),
+                "cline_mcp_settings.json",
+            ),
+            "Roo Code": (
+                os.path.join(
+                    os.getenv("APPDATA", ""),
+                    "Code",
+                    "User",
+                    "globalStorage",
+                    "rooveterinaryinc.roo-cline",
+                    "settings",
+                ),
+                "mcp_settings.json",
+            ),
+            "Kilo Code": (
+                os.path.join(
+                    os.getenv("APPDATA", ""),
+                    "Code",
+                    "User",
+                    "globalStorage",
+                    "kilocode.kilo-code",
+                    "settings",
+                ),
+                "mcp_settings.json",
+            ),
+            "Claude": (
+                os.path.join(os.getenv("APPDATA", ""), "Claude"),
+                "claude_desktop_config.json",
+            ),
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
-            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
+            "Windsurf": (
+                os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"),
+                "mcp_config.json",
+            ),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
-            "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
+            "LM Studio": (
+                os.path.join(os.path.expanduser("~"), ".lmstudio"),
+                "mcp.json",
+            ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
         }
     elif sys.platform == "darwin":
         configs = {
-            "Cline": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
-            "Roo Code": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
-            "Kilo Code": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Code", "User", "globalStorage", "kilocode.kilo-code", "settings"), "mcp_settings.json"),
-            "Claude": (os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Claude"), "claude_desktop_config.json"),
+            "Cline": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    "Library",
+                    "Application Support",
+                    "Code",
+                    "User",
+                    "globalStorage",
+                    "saoudrizwan.claude-dev",
+                    "settings",
+                ),
+                "cline_mcp_settings.json",
+            ),
+            "Roo Code": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    "Library",
+                    "Application Support",
+                    "Code",
+                    "User",
+                    "globalStorage",
+                    "rooveterinaryinc.roo-cline",
+                    "settings",
+                ),
+                "mcp_settings.json",
+            ),
+            "Kilo Code": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    "Library",
+                    "Application Support",
+                    "Code",
+                    "User",
+                    "globalStorage",
+                    "kilocode.kilo-code",
+                    "settings",
+                ),
+                "mcp_settings.json",
+            ),
+            "Claude": (
+                os.path.join(
+                    os.path.expanduser("~"), "Library", "Application Support", "Claude"
+                ),
+                "claude_desktop_config.json",
+            ),
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
-            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
+            "Windsurf": (
+                os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"),
+                "mcp_config.json",
+            ),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
-            "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
+            "LM Studio": (
+                os.path.join(os.path.expanduser("~"), ".lmstudio"),
+                "mcp.json",
+            ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
         }
     elif sys.platform == "linux":
         configs = {
-            "Cline": (os.path.join(os.path.expanduser("~"), ".config", "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings"), "cline_mcp_settings.json"),
-            "Roo Code": (os.path.join(os.path.expanduser("~"), ".config", "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings"), "mcp_settings.json"),
-            "Kilo Code": (os.path.join(os.path.expanduser("~"), ".config", "Code", "User", "globalStorage", "kilocode.kilo-code", "settings"), "mcp_settings.json"),
+            "Cline": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    ".config",
+                    "Code",
+                    "User",
+                    "globalStorage",
+                    "saoudrizwan.claude-dev",
+                    "settings",
+                ),
+                "cline_mcp_settings.json",
+            ),
+            "Roo Code": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    ".config",
+                    "Code",
+                    "User",
+                    "globalStorage",
+                    "rooveterinaryinc.roo-cline",
+                    "settings",
+                ),
+                "mcp_settings.json",
+            ),
+            "Kilo Code": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    ".config",
+                    "Code",
+                    "User",
+                    "globalStorage",
+                    "kilocode.kilo-code",
+                    "settings",
+                ),
+                "mcp_settings.json",
+            ),
             # Claude not supported on Linux
             "Cursor": (os.path.join(os.path.expanduser("~"), ".cursor"), "mcp.json"),
-            "Windsurf": (os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"), "mcp_config.json"),
+            "Windsurf": (
+                os.path.join(os.path.expanduser("~"), ".codeium", "windsurf"),
+                "mcp_config.json",
+            ),
             "Claude Code": (os.path.join(os.path.expanduser("~")), ".claude.json"),
-            "LM Studio": (os.path.join(os.path.expanduser("~"), ".lmstudio"), "mcp.json"),
+            "LM Studio": (
+                os.path.join(os.path.expanduser("~"), ".lmstudio"),
+                "mcp.json",
+            ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
         }
     else:
@@ -499,7 +673,11 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
         if not os.path.exists(config_path):
             config = {}
         else:
-            with open(config_path, "rb" if is_toml else "r", encoding=None if is_toml else "utf-8") as f:
+            with open(
+                config_path,
+                "rb" if is_toml else "r",
+                encoding=None if is_toml else "utf-8",
+            ) as f:
                 if is_toml:
                     data = f.read()
                     if len(data) == 0:
@@ -509,7 +687,9 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                             config = tomllib.loads(data.decode("utf-8"))
                         except tomllib.TOMLDecodeError:
                             if not quiet:
-                                print(f"Skipping {name} uninstall\n  Config: {config_path} (invalid TOML)")
+                                print(
+                                    f"Skipping {name} uninstall\n  Config: {config_path} (invalid TOML)"
+                                )
                             continue
                 else:
                     data = f.read().strip()
@@ -520,7 +700,9 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                             config = json.loads(data)
                         except json.decoder.JSONDecodeError:
                             if not quiet:
-                                print(f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)")
+                                print(
+                                    f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)"
+                                )
                             continue
 
         # Handle TOML vs JSON structure
@@ -542,7 +724,9 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
         if uninstall:
             if mcp.name not in mcp_servers:
                 if not quiet:
-                    print(f"Skipping {name} uninstall\n  Config: {config_path} (not installed)")
+                    print(
+                        f"Skipping {name} uninstall\n  Config: {config_path} (not installed)"
+                    )
                 continue
             del mcp_servers[mcp.name]
         else:
@@ -559,9 +743,13 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
 
         # Atomic write: temp file + rename
         suffix = ".toml" if is_toml else ".json"
-        fd, temp_path = tempfile.mkstemp(dir=config_dir, prefix=".tmp_", suffix=suffix, text=True)
+        fd, temp_path = tempfile.mkstemp(
+            dir=config_dir, prefix=".tmp_", suffix=suffix, text=True
+        )
         try:
-            with os.fdopen(fd, "wb" if is_toml else "w", encoding=None if is_toml else "utf-8") as f:
+            with os.fdopen(
+                fd, "wb" if is_toml else "w", encoding=None if is_toml else "utf-8"
+            ) as f:
                 if is_toml:
                     f.write(tomli_w.dumps(config).encode("utf-8"))
                 else:
@@ -573,13 +761,20 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
 
         if not quiet:
             action = "Uninstalled" if uninstall else "Installed"
-            print(f"{action} {name} MCP server (restart required)\n  Config: {config_path}")
+            print(
+                f"{action} {name} MCP server (restart required)\n  Config: {config_path}"
+            )
         installed += 1
     if not uninstall and installed == 0:
-        print("No MCP servers installed. For unsupported MCP clients, use the following config:\n")
+        print(
+            "No MCP servers installed. For unsupported MCP clients, use the following config:\n"
+        )
         print_mcp_config()
 
-def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False, allow_ida_free: bool = False):
+
+def install_ida_plugin(
+    *, uninstall: bool = False, quiet: bool = False, allow_ida_free: bool = False
+):
     if sys.platform == "win32":
         ida_folder = os.path.join(os.getenv("APPDATA"), "Hex-Rays", "IDA Pro")
     else:
@@ -587,7 +782,9 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False, allow_id
     if not allow_ida_free:
         free_licenses = glob.glob(os.path.join(ida_folder, "idafree_*.hexlic"))
         if len(free_licenses) > 0:
-            print("IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead.")
+            print(
+                "IDA Free does not support plugins and cannot be used. Purchase and install IDA Pro instead."
+            )
             sys.exit(1)
     ida_plugin_folder = os.path.join(ida_folder, "plugins")
 
@@ -636,7 +833,11 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False, allow_id
         installed_items = []
 
         # Install loader file
-        loader_realpath = os.path.realpath(loader_destination) if os.path.lexists(loader_destination) else None
+        loader_realpath = (
+            os.path.realpath(loader_destination)
+            if os.path.lexists(loader_destination)
+            else None
+        )
         if loader_realpath != loader_source:
             if os.path.lexists(loader_destination):
                 os.remove(loader_destination)
@@ -649,10 +850,16 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False, allow_id
                 installed_items.append(f"loader: {loader_destination}")
 
         # Install package directory
-        pkg_realpath = os.path.realpath(pkg_destination) if os.path.lexists(pkg_destination) else None
+        pkg_realpath = (
+            os.path.realpath(pkg_destination)
+            if os.path.lexists(pkg_destination)
+            else None
+        )
         if pkg_realpath != pkg_source:
             if os.path.lexists(pkg_destination):
-                if os.path.isdir(pkg_destination) and not os.path.islink(pkg_destination):
+                if os.path.isdir(pkg_destination) and not os.path.islink(
+                    pkg_destination
+                ):
                     shutil.rmtree(pkg_destination)
                 else:
                     os.remove(pkg_destination)
@@ -672,18 +879,43 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False, allow_id
             else:
                 print("Skipping IDA plugin installation (already up to date)")
 
+
 def main():
     global ida_host, ida_port
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
-    parser.add_argument("--install", action="store_true", help="Install the MCP Server and IDA plugin")
-    parser.add_argument("--uninstall", action="store_true", help="Uninstall the MCP Server and IDA plugin")
-    parser.add_argument("--allow-ida-free", action="store_true", help="Allow installation despite IDA Free being installed")
+    parser.add_argument(
+        "--install", action="store_true", help="Install the MCP Server and IDA plugin"
+    )
+    parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Uninstall the MCP Server and IDA plugin",
+    )
+    parser.add_argument(
+        "--allow-ida-free",
+        action="store_true",
+        help="Allow installation despite IDA Free being installed",
+    )
     parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--transport", type=str, default="stdio", help="MCP transport protocol to use (stdio or http://127.0.0.1:8744)")
-    parser.add_argument("--ida-rpc", type=str, default=f"http://{ida_host}:{ida_port}", help=f"IDA RPC server to use (default: http://{ida_host}:{ida_port})")
-    parser.add_argument("--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)")
-    parser.add_argument("--config", action="store_true", help="Generate MCP config JSON")
+    parser.add_argument(
+        "--transport",
+        type=str,
+        default="stdio",
+        help="MCP transport protocol to use (stdio or http://127.0.0.1:8744)",
+    )
+    parser.add_argument(
+        "--ida-rpc",
+        type=str,
+        default=f"http://{ida_host}:{ida_port}",
+        help=f"IDA RPC server to use (default: http://{ida_host}:{ida_port})",
+    )
+    parser.add_argument(
+        "--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)"
+    )
+    parser.add_argument(
+        "--config", action="store_true", help="Generate MCP config JSON"
+    )
     args = parser.parse_args()
 
     if args.install and args.uninstall:
@@ -737,11 +969,14 @@ def main():
             mcp.settings.host = url.hostname
             mcp.settings.port = url.port
             # NOTE: npx @modelcontextprotocol/inspector for debugging
-            print(f"MCP Server availabile at http://{mcp.settings.host}:{mcp.settings.port}/sse")
+            print(
+                f"MCP Server availabile at http://{mcp.settings.host}:{mcp.settings.port}/sse"
+            )
             mcp.settings.log_level = "INFO"
             mcp.run(transport="sse")
     except KeyboardInterrupt:
         pass
+
 
 if __name__ == "__main__":
     main()

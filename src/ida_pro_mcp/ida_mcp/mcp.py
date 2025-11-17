@@ -23,6 +23,7 @@ class McpToolError(Exception):
 
 class McpToolRegistry(JsonRpcRegistry):
     """JSON-RPC registry with custom error handling for MCP tools"""
+
     def map_exception(self, e: Exception) -> JsonRpcError:
         if isinstance(e, McpToolError):
             return {
@@ -42,6 +43,7 @@ class McpToolRegistry(JsonRpcRegistry):
 
 class _McpSseConnection:
     """Manages a single SSE client connection"""
+
     def __init__(self, wfile):
         self.wfile: BufferedIOBase = wfile
         self.session_id = str(uuid.uuid4())
@@ -114,7 +116,10 @@ class _McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, Mcp-Session-Id, Mcp-Protocol-Version")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Accept, X-Requested-With, Mcp-Session-Id, Mcp-Protocol-Version",
+        )
         self.send_header("Access-Control-Max-Age", "86400")
         self.end_headers()
 
@@ -128,7 +133,10 @@ class _McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version")
+            self.send_header(
+                "Access-Control-Allow-Headers",
+                "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version",
+            )
             self.end_headers()
             self.wfile.write(body)
 
@@ -220,7 +228,9 @@ class MCPServer:
         self.mcp_registry.methods["tools/list"] = self._mcp_tools_list
         self.mcp_registry.methods["tools/call"] = self._mcp_tools_call
         self.mcp_registry.methods["resources/list"] = self._mcp_resources_list
-        self.mcp_registry.methods["resources/templates/list"] = self._mcp_resource_templates_list
+        self.mcp_registry.methods["resources/templates/list"] = (
+            self._mcp_resource_templates_list
+        )
         self.mcp_registry.methods["resources/read"] = self._mcp_resources_read
 
     def start(self):
@@ -267,8 +277,7 @@ class MCPServer:
             try:
                 # Create HTTP server with threading support
                 self.http_server = ThreadingHTTPServer(
-                    (self.HOST, port),
-                    _McpHttpRequestHandler
+                    (self.HOST, port), _McpHttpRequestHandler
                 )
                 self.http_server.allow_reuse_address = False
                 self.port = port
@@ -276,7 +285,9 @@ class MCPServer:
             except OSError as e:
                 if e.errno in (98, 10048):  # Address already in use
                     if i == self.MAX_PORT_TRIES - 1:
-                        print(f"[MCP] Error: Could not find available port in range {self.BASE_PORT}-{self.BASE_PORT + self.MAX_PORT_TRIES - 1}")
+                        print(
+                            f"[MCP] Error: Could not find available port in range {self.BASE_PORT}-{self.BASE_PORT + self.MAX_PORT_TRIES - 1}"
+                        )
                         self.running = False
                         return
                     continue
@@ -295,7 +306,13 @@ class MCPServer:
         finally:
             self.running = False
 
-    def _mcp_initialize(self, protocolVersion: str, capabilities: dict, clientInfo: dict, _meta: dict | None = None) -> dict:
+    def _mcp_initialize(
+        self,
+        protocolVersion: str,
+        capabilities: dict,
+        clientInfo: dict,
+        _meta: dict | None = None,
+    ) -> dict:
         """MCP initialize method"""
         return {
             "protocolVersion": protocolVersion,
@@ -303,13 +320,10 @@ class MCPServer:
                 "tools": {},
                 "resources": {
                     "subscribe": False,  # No live updates yet
-                    "listChanged": False
-                }
+                    "listChanged": False,
+                },
             },
-            "serverInfo": {
-                "name": "ida-pro-mcp",
-                "version": "1.0.0"
-            },
+            "serverInfo": {"name": "ida-pro-mcp", "version": "1.0.0"},
         }
 
     def _mcp_tools_list(self, _meta: dict | None = None) -> dict:
@@ -323,22 +337,28 @@ class MCPServer:
             ]
         }
 
-    def _mcp_tools_call(self, name: str, arguments: dict | None = None, _meta: dict | None = None) -> dict:
+    def _mcp_tools_call(
+        self, name: str, arguments: dict | None = None, _meta: dict | None = None
+    ) -> dict:
         """MCP tools/call method"""
         # Wrap tool call in JSON-RPC request
-        tool_response = rpc_registry.dispatch({
-            "jsonrpc": "2.0",
-            "method": name,
-            "params": arguments,
-            "id": None,
-        })
+        tool_response = rpc_registry.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "method": name,
+                "params": arguments,
+                "id": None,
+            }
+        )
 
         # Check for error response
         if tool_response and "error" in tool_response:
             error = tool_response["error"]
             return {
-                "content": [{"type": "text", "text": error.get("message", "Unknown error")}],
-                "isError": True
+                "content": [
+                    {"type": "text", "text": error.get("message", "Unknown error")}
+                ],
+                "isError": True,
             }
 
         result = tool_response.get("result") if tool_response else None
@@ -349,7 +369,7 @@ class MCPServer:
 
         return {
             "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
-            "isError": False
+            "isError": False,
         }
 
     def _mcp_resources_list(self, _meta: dict | None = None) -> dict:
@@ -365,12 +385,14 @@ class MCPServer:
             description = func.__doc__ or f"Read {uri}"
             description = description.strip().split("\n")[0] if description else ""
 
-            resources.append({
-                "uri": uri,
-                "name": func_name,
-                "description": description,
-                "mimeType": "application/json"
-            })
+            resources.append(
+                {
+                    "uri": uri,
+                    "name": func_name,
+                    "description": description,
+                    "mimeType": "application/json",
+                }
+            )
 
         return {"resources": resources}
 
@@ -387,12 +409,14 @@ class MCPServer:
             description = func.__doc__ or f"Read {uri}"
             description = description.strip().split("\n")[0] if description else ""
 
-            templates.append({
-                "uriTemplate": uri,  # Note: uriTemplate, not uri
-                "name": func_name,
-                "description": description,
-                "mimeType": "application/json"
-            })
+            templates.append(
+                {
+                    "uriTemplate": uri,  # Note: uriTemplate, not uri
+                    "name": func_name,
+                    "description": description,
+                    "mimeType": "application/json",
+                }
+            )
 
         return {"resourceTemplates": templates}
 
@@ -405,7 +429,7 @@ class MCPServer:
             pattern = getattr(func, "__resource_uri__", "")
 
             # Convert pattern to regex, replacing {param} with named capture groups
-            regex_pattern = re.sub(r'\{(\w+)\}', r'(?P<\1>[^/]+)', pattern)
+            regex_pattern = re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", pattern)
             regex_pattern = f"^{regex_pattern}$"
 
             match = re.match(regex_pattern, uri)
@@ -414,54 +438,76 @@ class MCPServer:
                 params = list(match.groupdict().values())
 
                 try:
-                    tool_response = rpc_registry.dispatch({
-                        "jsonrpc": "2.0",
-                        "method": func_name,
-                        "params": params if params else [],
-                        "id": None,
-                    })
+                    tool_response = rpc_registry.dispatch(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": func_name,
+                            "params": params if params else [],
+                            "id": None,
+                        }
+                    )
 
                     if tool_response and "error" in tool_response:
                         error = tool_response["error"]
                         return {
-                            "contents": [{
-                                "uri": uri,
-                                "mimeType": "application/json",
-                                "text": json.dumps({"error": error.get("message", "Unknown error")}, indent=2)
-                            }],
-                            "isError": True
+                            "contents": [
+                                {
+                                    "uri": uri,
+                                    "mimeType": "application/json",
+                                    "text": json.dumps(
+                                        {
+                                            "error": error.get(
+                                                "message", "Unknown error"
+                                            )
+                                        },
+                                        indent=2,
+                                    ),
+                                }
+                            ],
+                            "isError": True,
                         }
 
                     result = tool_response.get("result") if tool_response else None
                     return {
-                        "contents": [{
-                            "uri": uri,
-                            "mimeType": "application/json",
-                            "text": json.dumps(result, indent=2)
-                        }]
+                        "contents": [
+                            {
+                                "uri": uri,
+                                "mimeType": "application/json",
+                                "text": json.dumps(result, indent=2),
+                            }
+                        ]
                     }
                 except Exception as e:
                     return {
-                        "contents": [{
-                            "uri": uri,
-                            "mimeType": "application/json",
-                            "text": json.dumps({"error": str(e)}, indent=2)
-                        }],
-                        "isError": True
+                        "contents": [
+                            {
+                                "uri": uri,
+                                "mimeType": "application/json",
+                                "text": json.dumps({"error": str(e)}, indent=2),
+                            }
+                        ],
+                        "isError": True,
                     }
 
         # No matching resource found
-        available = [getattr(f, "__resource_uri__", "") for f in rpc_registry.resources.values()]
+        available = [
+            getattr(f, "__resource_uri__", "") for f in rpc_registry.resources.values()
+        ]
         return {
-            "contents": [{
-                "uri": uri,
-                "mimeType": "application/json",
-                "text": json.dumps({
-                    "error": f"Resource not found: {uri}",
-                    "available_patterns": available
-                }, indent=2)
-            }],
-            "isError": True
+            "contents": [
+                {
+                    "uri": uri,
+                    "mimeType": "application/json",
+                    "text": json.dumps(
+                        {
+                            "error": f"Resource not found: {uri}",
+                            "available_patterns": available,
+                        },
+                        indent=2,
+                    ),
+                }
+            ],
+            "isError": True,
         }
 
     def _type_to_json_schema(self, py_type: Any) -> dict:
@@ -494,17 +540,17 @@ class MCPServer:
             return {"anyOf": [self._type_to_json_schema(t) for t in non_none]}
 
         # Primitives
-        if py_type == int:
+        if py_type is int:
             return {"type": "integer"}
-        if py_type == float:
+        if py_type is float:
             return {"type": "number"}
-        if py_type == str:
+        if py_type is str:
             return {"type": "string"}
-        if py_type == bool:
+        if py_type is bool:
             return {"type": "boolean"}
 
         # Handle list types
-        if py_type == list or get_origin(py_type) is list:
+        if py_type is list or get_origin(py_type) is list:
             args = get_args(py_type)
             schema: dict[str, Any] = {"type": "array"}
             if args:
@@ -512,12 +558,14 @@ class MCPServer:
             return schema
 
         # Handle dict types
-        if py_type == dict or get_origin(py_type) is dict:
+        if py_type is dict or get_origin(py_type) is dict:
             return {"type": "object"}
 
         # TypedDict detection
         if hasattr(py_type, "__annotations__"):
-            if hasattr(py_type, "__required_keys__") or hasattr(py_type, "__optional_keys__"):
+            if hasattr(py_type, "__required_keys__") or hasattr(
+                py_type, "__optional_keys__"
+            ):
                 return self._typed_dict_to_schema(py_type)
 
         # Fallback
@@ -555,10 +603,7 @@ class MCPServer:
                     # Default to required if no __required_keys__
                     required.append(field_name)
 
-        schema = {
-            "type": "object",
-            "properties": properties
-        }
+        schema = {"type": "object", "properties": properties}
         if required:
             schema["required"] = required
 
@@ -599,8 +644,8 @@ class MCPServer:
             "inputSchema": {
                 "type": "object",
                 "properties": properties,
-                "required": required
-            }
+                "required": required,
+            },
         }
 
         # Add outputSchema if return type exists and is not None
@@ -611,10 +656,8 @@ class MCPServer:
             if return_schema.get("type") != "object":
                 schema["outputSchema"] = {
                     "type": "object",
-                    "properties": {
-                        "value": return_schema
-                    },
-                    "required": ["value"]
+                    "properties": {"value": return_schema},
+                    "required": ["value"],
                 }
             else:
                 schema["outputSchema"] = return_schema

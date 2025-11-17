@@ -165,6 +165,7 @@ def py_eval(
 
     except Exception:
         import traceback
+
         return {
             "result": "",
             "stdout": "",

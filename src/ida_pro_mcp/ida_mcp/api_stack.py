@@ -29,9 +29,7 @@ from .utils import (
 
 @jsonrpc
 @idaread
-def stack_frame(
-    addrs: Annotated[list[str] | str, "Address(es)"]
-) -> list[dict]:
+def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
     """Get stack vars"""
     addrs = normalize_list_input(addrs)
     results = []
@@ -123,7 +121,11 @@ def delete_stack(
             idx, udm = frame_tif.get_udm(var_name)
             if not udm:
                 results.append(
-                    {"addr": fn_addr, "name": var_name, "error": f"{var_name} not found"}
+                    {
+                        "addr": fn_addr,
+                        "name": var_name,
+                        "error": f"{var_name} not found",
+                    }
                 )
                 continue
 

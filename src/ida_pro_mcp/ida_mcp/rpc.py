@@ -9,7 +9,8 @@ from .jsonrpc import JsonRpcRegistry, JsonRpcError
 
 class JSONRPCError(Exception):
     """IDA-specific JSON-RPC error (kept for backwards compatibility)"""
-    def __init__(self, code: int, message: str, data = None):
+
+    def __init__(self, code: int, message: str, data=None):
         self.code = code
         self.message = message
         self.data = data
@@ -17,6 +18,7 @@ class JSONRPCError(Exception):
 
 class RPCRegistry(JsonRpcRegistry):
     """IDA-specific RPC registry that extends JsonRpcRegistry with unsafe tracking"""
+
     def __init__(self):
         super().__init__()
         self.unsafe: set[str] = set()
@@ -83,6 +85,8 @@ def unsafe(func: Callable) -> Callable:
 
 def resource(uri: str) -> Callable[[Callable], Callable]:
     """Decorator to register a function as an MCP resource with URI pattern"""
+
     def decorator(func: Callable) -> Callable:
         return rpc_registry.register_resource(uri, func)
+
     return decorator

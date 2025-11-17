@@ -101,7 +101,9 @@ def idb_meta() -> Metadata:
 
 @jsonrpc
 @idaread
-def lookup_funcs(queries: Annotated[list[str] | str, "Address(es) or name(s)"]) -> list[dict]:
+def lookup_funcs(
+    queries: Annotated[list[str] | str, "Address(es) or name(s)"],
+) -> list[dict]:
     """Get functions by address or name (auto-detects)"""
     queries = normalize_list_input(queries)
 
@@ -136,7 +138,9 @@ def lookup_funcs(queries: Annotated[list[str] | str, "Address(es) or name(s)"]) 
                 if func:
                     results.append({"query": query, "fn": func, "error": None})
                 else:
-                    results.append({"query": query, "fn": None, "error": "Not a function"})
+                    results.append(
+                        {"query": query, "fn": None, "error": "Not a function"}
+                    )
             else:
                 results.append({"query": query, "fn": None, "error": "Not found"})
         except Exception as e:
@@ -163,8 +167,8 @@ def cursor_func() -> Optional[Function]:
 def int_convert(
     inputs: Annotated[
         list[NumberConversion] | NumberConversion,
-        "Convert numbers to various formats (hex, decimal, binary, ascii)"
-    ]
+        "Convert numbers to various formats (hex, decimal, binary, ascii)",
+    ],
 ) -> list[dict]:
     """Convert numbers to different formats"""
     inputs = normalize_dict_list(inputs, lambda s: {"text": s, "size": 64})
@@ -233,8 +237,8 @@ def int_convert(
 def list_funcs(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
-        "List functions with optional filtering and pagination"
-    ]
+        "List functions with optional filtering and pagination",
+    ],
 ) -> list[Page[Function]]:
     """List functions"""
     queries = normalize_dict_list(
@@ -263,8 +267,8 @@ def list_funcs(
 def list_globals(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
-        "List global variables with optional filtering and pagination"
-    ]
+        "List global variables with optional filtering and pagination",
+    ],
 ) -> list[Page[Global]]:
     """List globals"""
     queries = normalize_dict_list(
@@ -314,6 +318,7 @@ def imports(
 
         def imp_cb_w_context(ea, symbol_name, ordinal):
             return imp_cb(ea, symbol_name, ordinal, rv)
+
         ida_nalt.enum_import_names(i, imp_cb_w_context)
 
     return paginate(rv, offset, count)
@@ -324,8 +329,8 @@ def imports(
 def strings(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
-        "List strings with optional filtering and pagination"
-    ]
+        "List strings with optional filtering and pagination",
+    ],
 ) -> list[Page[String]]:
     """List strings"""
     queries = normalize_dict_list(

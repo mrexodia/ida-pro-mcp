@@ -32,7 +32,7 @@ from .utils import (
 @jsonrpc
 @idawrite
 def declare_type(
-    decls: Annotated[list[str] | str, "C type declarations"]
+    decls: Annotated[list[str] | str, "C type declarations"],
 ) -> list[dict]:
     """Declare types"""
     decls = normalize_list_input(decls)
@@ -96,7 +96,7 @@ def structs() -> list[StructureDefinition]:
 @jsonrpc
 @idaread
 def struct_info(
-    names: Annotated[list[str] | str, "Structure names to query"]
+    names: Annotated[list[str] | str, "Structure names to query"],
 ) -> list[dict]:
     """Get struct info"""
     names = normalize_list_input(names)
@@ -164,9 +164,7 @@ def struct_info(
 
 @jsonrpc
 @idaread
-def read_struct(
-    queries: list[StructRead] | StructRead
-) -> list[dict]:
+def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
     """Read struct fields"""
 
     def parse_addr_struct(s: str) -> dict:
@@ -264,7 +262,9 @@ def read_struct(
 
                 members.append(member_info)
 
-            results.append({"addr": addr_str, "struct": struct_name, "members": members})
+            results.append(
+                {"addr": addr_str, "struct": struct_name, "members": members}
+            )
         except Exception as e:
             results.append(
                 {
@@ -282,9 +282,8 @@ def read_struct(
 @idaread
 def search_structs(
     filter: Annotated[
-        str,
-        "Case-insensitive substring to search for in structure names"
-    ]
+        str, "Case-insensitive substring to search for in structure names"
+    ],
 ) -> list[dict]:
     """Search structs"""
     results = []
@@ -306,9 +305,11 @@ def search_structs(
                             "name": type_name,
                             "size": tif.get_size(),
                             "cardinality": cardinality,
-                            "is_union": udt_data.is_union
-                            if tif.get_udt_details(udt_data)
-                            else False,
+                            "is_union": (
+                                udt_data.is_union
+                                if tif.get_udt_details(udt_data)
+                                else False
+                            ),
                             "ordinal": ordinal,
                         }
                     )
@@ -323,9 +324,7 @@ def search_structs(
 
 @jsonrpc
 @idawrite
-def apply_types(
-    applications: list[TypeApplication] | TypeApplication
-) -> list[dict]:
+def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[dict]:
     """Apply types (function/global/local/stack)"""
 
     def parse_addr_type(s: str) -> dict:
@@ -357,7 +356,7 @@ def apply_types(
                             kind = "stack"
                         else:
                             kind = "global"
-                    except:
+                    except Exception:
                         kind = "global"
                 else:
                     kind = "global"
@@ -459,7 +458,7 @@ def apply_types(
 @jsonrpc
 @idaread
 def infer_types(
-    addrs: Annotated[list[str] | str, "Addresses to infer types for"]
+    addrs: Annotated[list[str] | str, "Addresses to infer types for"],
 ) -> list[dict]:
     """Infer types"""
     addrs = normalize_list_input(addrs)

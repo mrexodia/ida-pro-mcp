@@ -20,9 +20,7 @@ from .utils import normalize_list_input, parse_address, MemoryRead, MemoryPatch
 
 @jsonrpc
 @idaread
-def get_bytes(
-    regions: list[MemoryRead] | MemoryRead
-) -> list[dict]:
+def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     """Read bytes from memory addresses"""
     if isinstance(regions, dict):
         regions = [regions]
@@ -45,7 +43,7 @@ def get_bytes(
 @jsonrpc
 @idaread
 def get_u8(
-    addrs: Annotated[list[str] | str, "Addresses to read 8-bit unsigned integers from"]
+    addrs: Annotated[list[str] | str, "Addresses to read 8-bit unsigned integers from"],
 ) -> list[dict]:
     """Read 8-bit unsigned integers from memory addresses"""
     addrs = normalize_list_input(addrs)
@@ -65,7 +63,9 @@ def get_u8(
 @jsonrpc
 @idaread
 def get_u16(
-    addrs: Annotated[list[str] | str, "Addresses to read 16-bit unsigned integers from"]
+    addrs: Annotated[
+        list[str] | str, "Addresses to read 16-bit unsigned integers from"
+    ],
 ) -> list[dict]:
     """Read 16-bit unsigned integers from memory addresses"""
     addrs = normalize_list_input(addrs)
@@ -85,7 +85,9 @@ def get_u16(
 @jsonrpc
 @idaread
 def get_u32(
-    addrs: Annotated[list[str] | str, "Addresses to read 32-bit unsigned integers from"]
+    addrs: Annotated[
+        list[str] | str, "Addresses to read 32-bit unsigned integers from"
+    ],
 ) -> list[dict]:
     """Read 32-bit unsigned integers from memory addresses"""
     addrs = normalize_list_input(addrs)
@@ -105,7 +107,9 @@ def get_u32(
 @jsonrpc
 @idaread
 def get_u64(
-    addrs: Annotated[list[str] | str, "Addresses to read 64-bit unsigned integers from"]
+    addrs: Annotated[
+        list[str] | str, "Addresses to read 64-bit unsigned integers from"
+    ],
 ) -> list[dict]:
     """Read 64-bit unsigned integers from memory addresses"""
     addrs = normalize_list_input(addrs)
@@ -125,7 +129,7 @@ def get_u64(
 @jsonrpc
 @idaread
 def get_string(
-    addrs: Annotated[list[str] | str, "Addresses to read strings from"]
+    addrs: Annotated[list[str] | str, "Addresses to read strings from"],
 ) -> list[dict]:
     """Read strings from memory addresses"""
     addrs = normalize_list_input(addrs)
@@ -177,7 +181,9 @@ def get_global_variable_value_internal(ea: int) -> str:
 @jsonrpc
 @idaread
 def get_global_value(
-    queries: Annotated[list[str] | str, "Global variable addresses or names to read values from"]
+    queries: Annotated[
+        list[str] | str, "Global variable addresses or names to read values from"
+    ],
 ) -> list[dict]:
     """Read global variable values by address or name (auto-detects hex addresses vs names)"""
     from .utils import looks_like_address
@@ -219,9 +225,7 @@ def get_global_value(
 
 @jsonrpc
 @idawrite
-def patch(
-    patches: list[MemoryPatch] | MemoryPatch
-) -> list[dict]:
+def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[dict]:
     """Patch bytes at memory addresses with hex data"""
     if isinstance(patches, dict):
         patches = [patches]

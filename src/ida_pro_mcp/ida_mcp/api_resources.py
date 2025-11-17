@@ -149,7 +149,7 @@ def list_functions_resource(
 @resource("ida://function/{addr}")
 @idaread
 def get_function_resource(
-    addr: Annotated[str, "Function address (hex or decimal)"]
+    addr: Annotated[str, "Function address (hex or decimal)"],
 ) -> dict:
     """Get function details by address (no decompilation - use decompile tool)"""
     ea = parse_address(addr)
@@ -203,9 +203,7 @@ def list_globals_resource(
 
 @resource("ida://global/{name_or_addr}")
 @idaread
-def get_global_resource(
-    name_or_addr: Annotated[str, "Global name or address"]
-) -> dict:
+def get_global_resource(name_or_addr: Annotated[str, "Global name or address"]) -> dict:
     """Get specific global variable details"""
     # Try as address first
     try:
@@ -300,7 +298,9 @@ def list_imports_resource(
 
         def callback(ea, name, ordinal):
             imports.append(
-                Import(addr=hex(ea), imported_name=name or f"ord_{ordinal}", module=module)
+                Import(
+                    addr=hex(ea), imported_name=name or f"ord_{ordinal}", module=module
+                )
             )
             return True
 
@@ -542,7 +542,6 @@ def get_selection() -> dict:
 
     start = ida_kernwin.read_range_selection(None)
     if start:
-        end = ida_kernwin.read_range_selection(None)
         return {"start": hex(start[0]), "end": hex(start[1]) if start[1] else None}
     return {"selection": None}
 

@@ -88,7 +88,7 @@ def _get_cached_strings_dict() -> list[dict]:
 @jsonrpc
 @idaread
 def decompile(
-    addrs: Annotated[list[str] | str, "Function addresses to decompile"]
+    addrs: Annotated[list[str] | str, "Function addresses to decompile"],
 ) -> list[dict]:
     """Decompile functions to pseudocode"""
     addrs = normalize_list_input(addrs)
@@ -134,8 +134,10 @@ def decompile(
 @idaread
 def disasm(
     addrs: Annotated[list[str] | str, "Function addresses to disassemble"],
-    max_instructions: Annotated[int, "Max instructions per function (default: 5000, max: 50000)"] = 5000,
-    offset: Annotated[int, "Skip first N instructions (default: 0)"] = 0
+    max_instructions: Annotated[
+        int, "Max instructions per function (default: 5000, max: 50000)"
+    ] = 5000,
+    offset: Annotated[int, "Skip first N instructions (default: 0)"] = 0,
 ) -> list[dict]:
     """Disassemble functions to assembly instructions"""
     addrs = normalize_list_input(addrs)
@@ -151,12 +153,14 @@ def disasm(
             start = parse_address(start_addr)
             func = idaapi.get_func(start)
             if not func:
-                results.append({
-                    "addr": start_addr,
-                    "asm": None,
-                    "error": "No function found",
-                    "cursor": {"done": True}
-                })
+                results.append(
+                    {
+                        "addr": start_addr,
+                        "asm": None,
+                        "error": "No function found",
+                        "cursor": {"done": True},
+                    }
+                )
                 continue
             if is_window_active():
                 ida_kernwin.jumpto(start)
@@ -184,7 +188,7 @@ def disasm(
 
             # Apply pagination
             total_insns = len(all_instructions)
-            paginated_insns = all_instructions[offset:offset + max_instructions]
+            paginated_insns = all_instructions[offset : offset + max_instructions]
             has_more = offset + max_instructions < total_insns
 
             # Build disassembly string from paginated instructions
@@ -215,20 +219,28 @@ def disasm(
             if args is not None:
                 out["arguments"] = args
 
-            results.append({
-                "addr": start_addr,
-                "asm": out,
-                "instruction_count": len(paginated_insns),
-                "total_instructions": total_insns,
-                "cursor": {"next": offset + max_instructions} if has_more else {"done": True}
-            })
+            results.append(
+                {
+                    "addr": start_addr,
+                    "asm": out,
+                    "instruction_count": len(paginated_insns),
+                    "total_instructions": total_insns,
+                    "cursor": (
+                        {"next": offset + max_instructions}
+                        if has_more
+                        else {"done": True}
+                    ),
+                }
+            )
         except Exception as e:
-            results.append({
-                "addr": start_addr,
-                "asm": None,
-                "error": str(e),
-                "cursor": {"done": True}
-            })
+            results.append(
+                {
+                    "addr": start_addr,
+                    "asm": None,
+                    "error": str(e),
+                    "cursor": {"done": True},
+                }
+            )
 
     return results
 
@@ -241,7 +253,7 @@ def disasm(
 @jsonrpc
 @idaread
 def xrefs_to(
-    addrs: Annotated[list[str] | str, "Addresses to find cross-references to"]
+    addrs: Annotated[list[str] | str, "Addresses to find cross-references to"],
 ) -> list[dict]:
     """Get all cross-references to specified addresses"""
     addrs = normalize_list_input(addrs)
@@ -268,9 +280,7 @@ def xrefs_to(
 
 @jsonrpc
 @idaread
-def xrefs_to_field(
-    queries: list[StructFieldQuery] | StructFieldQuery
-) -> list[dict]:
+def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[dict]:
     """Get cross-references to structure fields"""
     if isinstance(queries, dict):
         queries = [queries]
@@ -363,7 +373,7 @@ def xrefs_to_field(
 @jsonrpc
 @idaread
 def callees(
-    addrs: Annotated[list[str] | str, "Function addresses to get callees for"]
+    addrs: Annotated[list[str] | str, "Function addresses to get callees for"],
 ) -> list[dict]:
     """Get all functions called by the specified functions"""
     addrs = normalize_list_input(addrs)
@@ -416,7 +426,7 @@ def callees(
 @jsonrpc
 @idaread
 def callers(
-    addrs: Annotated[list[str] | str, "Function addresses to get callers for"]
+    addrs: Annotated[list[str] | str, "Function addresses to get callers for"],
 ) -> list[dict]:
     """Get all functions that call the specified functions"""
     addrs = normalize_list_input(addrs)
@@ -468,7 +478,7 @@ def entrypoints() -> list[Function]:
 @jsonrpc
 @idaread
 def analyze_funcs(
-    addrs: Annotated[list[str] | str, "Function addresses to comprehensively analyze"]
+    addrs: Annotated[list[str] | str, "Function addresses to comprehensively analyze"],
 ) -> list[FunctionAnalysis]:
     """Comprehensive function analysis: decompilation, xrefs, callees, strings, constants, blocks"""
     addrs = normalize_list_input(addrs)
@@ -559,9 +569,11 @@ def analyze_funcs(
 @jsonrpc
 @idaread
 def find_bytes(
-    patterns: Annotated[list[str] | str, "Byte patterns to search for (e.g. '48 8B ?? ??')"],
+    patterns: Annotated[
+        list[str] | str, "Byte patterns to search for (e.g. '48 8B ?? ??')"
+    ],
     limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
+    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
 ) -> list[dict]:
     """Search for byte patterns in the binary (supports wildcards with ??)"""
     patterns = normalize_list_input(patterns)
@@ -580,12 +592,14 @@ def find_bytes(
                 compiled, ida_ida.inf_get_min_ea(), pattern, 16
             )
             if err:
-                results.append({
-                    "pattern": pattern,
-                    "matches": [],
-                    "count": 0,
-                    "cursor": {"done": True}
-                })
+                results.append(
+                    {
+                        "pattern": pattern,
+                        "matches": [],
+                        "count": 0,
+                        "cursor": {"done": True},
+                    }
+                )
                 continue
 
             # Search for all matches
@@ -602,27 +616,33 @@ def find_bytes(
 
         # Apply pagination
         if limit > 0:
-            matches = all_matches[offset:offset + limit]
+            matches = all_matches[offset : offset + limit]
             has_more = offset + limit < len(all_matches)
         else:
             matches = all_matches[offset:]
             has_more = False
 
-        results.append({
-            "pattern": pattern,
-            "matches": matches,
-            "count": len(matches),
-            "cursor": {"next": offset + limit} if has_more else {"done": True}
-        })
+        results.append(
+            {
+                "pattern": pattern,
+                "matches": matches,
+                "count": len(matches),
+                "cursor": {"next": offset + limit} if has_more else {"done": True},
+            }
+        )
     return results
 
 
 @jsonrpc
 @idaread
 def find_insns(
-    sequences: Annotated[list[list[str]] | list[str], "Instruction mnemonic sequences to search for"],
-    limit: Annotated[int, "Max matches per sequence (default: 1000, max: 10000)"] = 1000,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
+    sequences: Annotated[
+        list[list[str]] | list[str], "Instruction mnemonic sequences to search for"
+    ],
+    limit: Annotated[
+        int, "Max matches per sequence (default: 1000, max: 10000)"
+    ] = 1000,
+    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
 ) -> list[dict]:
     """Search for sequences of instruction mnemonics in the binary"""
     # Handle single sequence vs array of sequences
@@ -637,12 +657,14 @@ def find_insns(
 
     for sequence in sequences:
         if not sequence:
-            results.append({
-                "sequence": sequence,
-                "matches": [],
-                "count": 0,
-                "cursor": {"done": True}
-            })
+            results.append(
+                {
+                    "sequence": sequence,
+                    "matches": [],
+                    "count": 0,
+                    "cursor": {"done": True},
+                }
+            )
             continue
 
         all_matches = []
@@ -683,18 +705,20 @@ def find_insns(
 
         # Apply pagination
         if limit > 0:
-            matches = all_matches[offset:offset + limit]
+            matches = all_matches[offset : offset + limit]
             has_more = offset + limit < len(all_matches)
         else:
             matches = all_matches[offset:]
             has_more = False
 
-        results.append({
-            "sequence": sequence,
-            "matches": matches,
-            "count": len(matches),
-            "cursor": {"next": offset + limit} if has_more else {"done": True}
-        })
+        results.append(
+            {
+                "sequence": sequence,
+                "matches": matches,
+                "count": len(matches),
+                "cursor": {"next": offset + limit} if has_more else {"done": True},
+            }
+        )
 
     return results
 
@@ -708,8 +732,10 @@ def find_insns(
 @idaread
 def basic_blocks(
     addrs: Annotated[list[str] | str, "Function addresses to get basic blocks for"],
-    max_blocks: Annotated[int, "Max basic blocks per function (default: 1000, max: 10000)"] = 1000,
-    offset: Annotated[int, "Skip first N blocks (default: 0)"] = 0
+    max_blocks: Annotated[
+        int, "Max basic blocks per function (default: 1000, max: 10000)"
+    ] = 1000,
+    offset: Annotated[int, "Skip first N blocks (default: 0)"] = 0,
 ) -> list[dict]:
     """Get control flow graph basic blocks for functions"""
     addrs = normalize_list_input(addrs)
@@ -724,12 +750,14 @@ def basic_blocks(
             ea = parse_address(fn_addr)
             func = idaapi.get_func(ea)
             if not func:
-                results.append({
-                    "addr": fn_addr,
-                    "error": "Function not found",
-                    "blocks": [],
-                    "cursor": {"done": True}
-                })
+                results.append(
+                    {
+                        "addr": fn_addr,
+                        "error": "Function not found",
+                        "blocks": [],
+                        "cursor": {"done": True},
+                    }
+                )
                 continue
 
             flowchart = idaapi.FlowChart(func)
@@ -749,32 +777,36 @@ def basic_blocks(
 
             # Apply pagination
             total_blocks = len(all_blocks)
-            blocks = all_blocks[offset:offset + max_blocks]
+            blocks = all_blocks[offset : offset + max_blocks]
             has_more = offset + max_blocks < total_blocks
 
-            results.append({
-                "addr": fn_addr,
-                "blocks": blocks,
-                "count": len(blocks),
-                "total_blocks": total_blocks,
-                "cursor": {"next": offset + max_blocks} if has_more else {"done": True},
-                "error": None
-            })
+            results.append(
+                {
+                    "addr": fn_addr,
+                    "blocks": blocks,
+                    "count": len(blocks),
+                    "total_blocks": total_blocks,
+                    "cursor": (
+                        {"next": offset + max_blocks} if has_more else {"done": True}
+                    ),
+                    "error": None,
+                }
+            )
         except Exception as e:
-            results.append({
-                "addr": fn_addr,
-                "error": str(e),
-                "blocks": [],
-                "cursor": {"done": True}
-            })
+            results.append(
+                {
+                    "addr": fn_addr,
+                    "error": str(e),
+                    "blocks": [],
+                    "cursor": {"done": True},
+                }
+            )
     return results
 
 
 @jsonrpc
 @idaread
-def find_paths(
-    queries: list[PathQuery] | PathQuery
-) -> list[dict]:
+def find_paths(queries: list[PathQuery] | PathQuery) -> list[dict]:
     """Find execution paths between source and target addresses"""
     if isinstance(queries, dict):
         queries = [queries]
@@ -859,10 +891,14 @@ def find_paths(
 @jsonrpc
 @idaread
 def search(
-    type: Annotated[str, "Search type: 'string', 'immediate', 'data_ref', or 'code_ref'"],
-    targets: Annotated[list[str | int] | str | int, "Search targets (strings, integers, or addresses)"],
+    type: Annotated[
+        str, "Search type: 'string', 'immediate', 'data_ref', or 'code_ref'"
+    ],
+    targets: Annotated[
+        list[str | int] | str | int, "Search targets (strings, integers, or addresses)"
+    ],
     limit: Annotated[int, "Max matches per target (default: 1000, max: 10000)"] = 1000,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
+    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
 ) -> list[dict]:
     """Search for patterns in the binary (strings, immediate values, or references)"""
     if not isinstance(targets, list):
@@ -879,19 +915,25 @@ def search(
         all_strings = _get_cached_strings_dict()
         for pattern in targets:
             pattern_str = str(pattern)
-            all_matches = [s["addr"] for s in all_strings if pattern_str.lower() in s["string"].lower()]
+            all_matches = [
+                s["addr"]
+                for s in all_strings
+                if pattern_str.lower() in s["string"].lower()
+            ]
 
             # Apply pagination
-            matches = all_matches[offset:offset + limit]
+            matches = all_matches[offset : offset + limit]
             has_more = offset + limit < len(all_matches)
 
-            results.append({
-                "query": pattern_str,
-                "matches": matches,
-                "count": len(matches),
-                "cursor": {"next": offset + limit} if has_more else {"done": True},
-                "error": None
-            })
+            results.append(
+                {
+                    "query": pattern_str,
+                    "matches": matches,
+                    "count": len(matches),
+                    "cursor": {"next": offset + limit} if has_more else {"done": True},
+                    "error": None,
+                }
+            )
 
     elif type == "immediate":
         # Search for immediate values
@@ -915,16 +957,18 @@ def search(
                 pass
 
             # Apply pagination
-            matches = all_matches[offset:offset + limit]
+            matches = all_matches[offset : offset + limit]
             has_more = offset + limit < len(all_matches)
 
-            results.append({
-                "query": value,
-                "matches": matches,
-                "count": len(matches),
-                "cursor": {"next": offset + limit} if has_more else {"done": True},
-                "error": None
-            })
+            results.append(
+                {
+                    "query": value,
+                    "matches": matches,
+                    "count": len(matches),
+                    "cursor": {"next": offset + limit} if has_more else {"done": True},
+                    "error": None,
+                }
+            )
 
     elif type == "data_ref":
         # Find all data references to targets
@@ -935,27 +979,33 @@ def search(
 
                 # Apply pagination
                 if limit > 0:
-                    matches = all_matches[offset:offset + limit]
+                    matches = all_matches[offset : offset + limit]
                     has_more = offset + limit < len(all_matches)
                 else:
                     matches = all_matches[offset:]
                     has_more = False
 
-                results.append({
-                    "query": str(target_str),
-                    "matches": matches,
-                    "count": len(matches),
-                    "cursor": {"next": offset + limit} if has_more else {"done": True},
-                    "error": None
-                })
+                results.append(
+                    {
+                        "query": str(target_str),
+                        "matches": matches,
+                        "count": len(matches),
+                        "cursor": (
+                            {"next": offset + limit} if has_more else {"done": True}
+                        ),
+                        "error": None,
+                    }
+                )
             except Exception as e:
-                results.append({
-                    "query": str(target_str),
-                    "matches": [],
-                    "count": 0,
-                    "cursor": {"done": True},
-                    "error": str(e)
-                })
+                results.append(
+                    {
+                        "query": str(target_str),
+                        "matches": [],
+                        "count": 0,
+                        "cursor": {"done": True},
+                        "error": str(e),
+                    }
+                )
 
     elif type == "code_ref":
         # Find all code references to targets
@@ -966,39 +1016,46 @@ def search(
 
                 # Apply pagination
                 if limit > 0:
-                    matches = all_matches[offset:offset + limit]
+                    matches = all_matches[offset : offset + limit]
                     has_more = offset + limit < len(all_matches)
                 else:
                     matches = all_matches[offset:]
                     has_more = False
 
-                results.append({
-                    "query": str(target_str),
-                    "matches": matches,
-                    "count": len(matches),
-                    "cursor": {"next": offset + limit} if has_more else {"done": True},
-                    "error": None
-                })
+                results.append(
+                    {
+                        "query": str(target_str),
+                        "matches": matches,
+                        "count": len(matches),
+                        "cursor": (
+                            {"next": offset + limit} if has_more else {"done": True}
+                        ),
+                        "error": None,
+                    }
+                )
             except Exception as e:
-                results.append({
-                    "query": str(target_str),
-                    "matches": [],
-                    "count": 0,
-                    "cursor": {"done": True},
-                    "error": str(e)
-                })
+                results.append(
+                    {
+                        "query": str(target_str),
+                        "matches": [],
+                        "count": 0,
+                        "cursor": {"done": True},
+                        "error": str(e),
+                    }
+                )
 
     else:
-        results.append({
-            "query": None,
-            "matches": [],
-            "count": 0,
-            "cursor": {"done": True},
-            "error": f"Unknown search type: {type}"
-        })
+        results.append(
+            {
+                "query": None,
+                "matches": [],
+                "count": 0,
+                "cursor": {"done": True},
+                "error": f"Unknown search type: {type}",
+            }
+        )
 
     return results
-
 
 
 @jsonrpc
@@ -1006,7 +1063,7 @@ def search(
 def find_insn_operands(
     patterns: list[InsnPattern] | InsnPattern,
     limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
+    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
 ) -> list[dict]:
     """Find instructions with specific mnemonics and operand values"""
     if isinstance(patterns, dict):
@@ -1022,18 +1079,20 @@ def find_insn_operands(
 
         # Apply pagination
         if limit > 0:
-            matches = all_matches[offset:offset + limit]
+            matches = all_matches[offset : offset + limit]
             has_more = offset + limit < len(all_matches)
         else:
             matches = all_matches[offset:]
             has_more = False
 
-        results.append({
-            "pattern": pattern,
-            "matches": matches,
-            "count": len(matches),
-            "cursor": {"next": offset + limit} if has_more else {"done": True}
-        })
+        results.append(
+            {
+                "pattern": pattern,
+                "matches": matches,
+                "count": len(matches),
+                "cursor": {"next": offset + limit} if has_more else {"done": True},
+            }
+        )
     return results
 
 
@@ -1107,7 +1166,9 @@ def _find_insn_pattern(pattern: dict) -> list[str]:
 @idaread
 def export_funcs(
     addrs: Annotated[list[str] | str, "Function addresses to export"],
-    format: Annotated[str, "Export format: json (default), c_header, or prototypes"] = "json",
+    format: Annotated[
+        str, "Export format: json (default), c_header, or prototypes"
+    ] = "json",
 ) -> dict:
     """Export function data in various formats"""
     addrs = normalize_list_input(addrs)
@@ -1168,7 +1229,9 @@ def export_funcs(
 @jsonrpc
 @idaread
 def callgraph(
-    roots: Annotated[list[str] | str, "Root function addresses to start call graph traversal from"],
+    roots: Annotated[
+        list[str] | str, "Root function addresses to start call graph traversal from"
+    ],
     max_depth: Annotated[int, "Maximum depth for call graph traversal"] = 5,
 ) -> list[dict]:
     """Build call graph starting from root functions"""
@@ -1204,7 +1267,11 @@ def callgraph(
                     return
 
                 func_name = ida_funcs.get_func_name(f.start_ea)
-                nodes[hex(addr)] = {"addr": hex(addr), "name": func_name, "depth": depth}
+                nodes[hex(addr)] = {
+                    "addr": hex(addr),
+                    "name": func_name,
+                    "depth": depth,
+                }
 
                 # Get callees
                 for item_ea in idautils.FuncItems(f.start_ea):
@@ -1246,7 +1313,9 @@ def callgraph(
 @jsonrpc
 @idaread
 def xref_matrix(
-    entities: Annotated[list[str] | str, "Addresses to build cross-reference matrix for"]
+    entities: Annotated[
+        list[str] | str, "Addresses to build cross-reference matrix for"
+    ],
 ) -> dict:
     """Build matrix showing cross-references between entities"""
     entities = normalize_list_input(entities)
@@ -1288,7 +1357,7 @@ def xref_matrix(
 def analyze_strings(
     filters: list[StringFilter] | StringFilter,
     limit: Annotated[int, "Max matches per filter (default: 1000, max: 10000)"] = 1000,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
+    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
 ) -> list[dict]:
     """Analyze and filter strings in the binary"""
     if isinstance(filters, dict):
@@ -1322,17 +1391,19 @@ def analyze_strings(
 
         # Apply pagination
         if limit > 0:
-            matches = all_matches[offset:offset + limit]
+            matches = all_matches[offset : offset + limit]
             has_more = offset + limit < len(all_matches)
         else:
             matches = all_matches[offset:]
             has_more = False
 
-        results.append({
-            "filter": filt,
-            "matches": matches,
-            "count": len(matches),
-            "cursor": {"next": offset + limit} if has_more else {"done": True}
-        })
+        results.append(
+            {
+                "filter": filt,
+                "matches": matches,
+                "count": len(matches),
+                "cursor": {"next": offset + limit} if has_more else {"done": True},
+            }
+        )
 
     return results

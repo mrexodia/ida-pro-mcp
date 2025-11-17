@@ -10,6 +10,7 @@ import traceback
 # Try to import the package implementation
 try:
     from ida_mcp import MCPServer
+
     _IMPORTS_OK = True
     _IMPORT_ERROR = None
 except Exception as e:
@@ -21,8 +22,10 @@ except Exception as e:
     class MCPServer:
         def __init__(self):
             pass
+
         def start(self):
             print("[MCP] Cannot start: import failed")
+
         def stop(self):
             pass
 
@@ -43,7 +46,7 @@ class MCP(idaapi.plugin_t):
         global _IMPORTS_OK, _IMPORT_ERROR
         self.mcp_server = MCPServer()
         hotkey = MCP.wanted_hotkey.replace("-", "+")
-        if __import__('sys').platform == "darwin":
+        if __import__("sys").platform == "darwin":
             hotkey = hotkey.replace("Alt", "Option")
 
         if _IMPORTS_OK:
@@ -51,9 +54,7 @@ class MCP(idaapi.plugin_t):
                 f"[MCP] Plugin loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server"
             )
         else:
-            print(
-                "[MCP] Plugin loaded WITH ERRORS - check console above"
-            )
+            print("[MCP] Plugin loaded WITH ERRORS - check console above")
             print(f"[MCP] Error: {_IMPORT_ERROR}")
         return idaapi.PLUGIN_KEEP
 

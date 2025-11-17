@@ -259,7 +259,7 @@ def dbg_list_bps():
 @idaread
 @unsafe
 def dbg_add_bp(
-    addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"]
+    addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"],
 ) -> list[dict]:
     """Add breakpoints"""
     addrs = normalize_list_input(addrs)
@@ -288,7 +288,7 @@ def dbg_add_bp(
 @idaread
 @unsafe
 def dbg_delete_bp(
-    addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"]
+    addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"],
 ) -> list[dict]:
     """Delete breakpoints"""
     addrs = normalize_list_input(addrs)
@@ -310,9 +310,7 @@ def dbg_delete_bp(
 @jsonrpc
 @idaread
 @unsafe
-def dbg_enable_bp(
-    items: list[BreakpointOp] | BreakpointOp
-) -> list[dict]:
+def dbg_enable_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
     """Enable/disable breakpoints"""
 
     items = normalize_dict_list(items)
@@ -361,7 +359,7 @@ def dbg_regs() -> list[ThreadRegisters]:
 @idaread
 @unsafe
 def dbg_regs_thread(
-    tids: Annotated[list[int] | int, "Thread ID(s) to get registers for"]
+    tids: Annotated[list[int] | int, "Thread ID(s) to get registers for"],
 ) -> list[dict]:
     """Get thread registers"""
     if isinstance(tids, int):
@@ -400,7 +398,7 @@ def dbg_regs_cur() -> ThreadRegisters:
 @idaread
 @unsafe
 def dbg_gpregs_thread(
-    tids: Annotated[list[int] | int, "Thread ID(s) to get GP registers for"]
+    tids: Annotated[list[int] | int, "Thread ID(s) to get GP registers for"],
 ) -> list[dict]:
     """Get GP registers for threads"""
     if isinstance(tids, int):
@@ -440,7 +438,9 @@ def dbg_current_gpregs() -> ThreadRegisters:
 @unsafe
 def dbg_regs_for_thread(
     thread_id: Annotated[int, "Thread ID"],
-    register_names: Annotated[str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"],
+    register_names: Annotated[
+        str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
+    ],
 ) -> ThreadRegisters:
     """Get specific thread registers"""
     dbg = dbg_ensure_running()
@@ -456,7 +456,9 @@ def dbg_regs_for_thread(
 @idaread
 @unsafe
 def dbg_current_regs(
-    register_names: Annotated[str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"],
+    register_names: Annotated[
+        str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
+    ],
 ) -> ThreadRegisters:
     """Get specific current thread registers"""
     dbg = dbg_ensure_running()
@@ -524,9 +526,7 @@ def dbg_callstack() -> list[dict[str, str]]:
 @jsonrpc
 @idaread
 @unsafe
-def dbg_read_mem(
-    regions: list[MemoryRead] | MemoryRead
-) -> list[dict]:
+def dbg_read_mem(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     """Read debug memory"""
 
     regions = normalize_dict_list(regions)
@@ -569,9 +569,7 @@ def dbg_read_mem(
 @jsonrpc
 @idaread
 @unsafe
-def dbg_write_mem(
-    regions: list[MemoryPatch] | MemoryPatch
-) -> list[dict]:
+def dbg_write_mem(regions: list[MemoryPatch] | MemoryPatch) -> list[dict]:
     """Write debug memory"""
 
     regions = normalize_dict_list(regions)

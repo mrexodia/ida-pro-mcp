@@ -2,10 +2,22 @@ import json
 import types
 import inspect
 import traceback
-from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, is_typeddict
+from typing import (
+    Any,
+    Callable,
+    get_type_hints,
+    get_origin,
+    get_args,
+    Union,
+    TypedDict,
+    TypeAlias,
+    NotRequired,
+    is_typeddict,
+)
 
 JsonRpcId: TypeAlias = str | int | float | None
 JsonRpcParams: TypeAlias = dict[str, Any] | list[Any] | None
+
 
 class JsonRpcRequest(TypedDict):
     jsonrpc: str
@@ -13,10 +25,12 @@ class JsonRpcRequest(TypedDict):
     params: NotRequired[JsonRpcParams]
     id: NotRequired[JsonRpcId]
 
+
 class JsonRpcError(TypedDict):
     code: int
     message: str
     data: NotRequired[Any]
+
 
 class JsonRpcResponse(TypedDict):
     jsonrpc: str
@@ -24,26 +38,32 @@ class JsonRpcResponse(TypedDict):
     error: NotRequired[JsonRpcError]
     id: JsonRpcId
 
+
 class JsonRpcException(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
         self.code = code
         self.message = message
         self.data = data
 
+
 class JsonRpcRegistry:
     def __init__(self):
         self.methods: dict[str, Callable] = {}
 
     def method(self, func: Callable) -> Callable:
-        self.methods[func.__name__] = func # type: ignore
+        self.methods[func.__name__] = func  # type: ignore
         return func
 
-    def dispatch(self, request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
+    def dispatch(
+        self, request: dict | str | bytes | bytearray
+    ) -> JsonRpcResponse | None:
         try:
             if not isinstance(request, dict):
                 request = json.loads(request)
             if not isinstance(request, dict):
-                return self._error(None, -32600, "Invalid request: must be a JSON object")
+                return self._error(
+                    None, -32600, "Invalid request: must be a JSON object"
+                )
         except Exception as e:
             return self._error(None, -32700, "JSON parse error", str(e))
 
@@ -54,7 +74,9 @@ class JsonRpcRegistry:
         if method is None:
             return self._error(None, -32600, "Invalid request: 'method' is required")
         if not isinstance(method, str):
-            return self._error(None, -32600, "Invalid request: 'method' must be a string")
+            return self._error(
+                None, -32600, "Invalid request: 'method' must be a string"
+            )
 
         request_id: JsonRpcId = request.get("id")
         is_notification = "id" not in request
@@ -76,12 +98,15 @@ class JsonRpcRegistry:
             if is_notification:
                 return None
             error = self.map_exception(e)
-            return self._error(request_id, error["code"], error["message"], error.get("data"))
+            return self._error(
+                request_id, error["code"], error["message"], error.get("data")
+            )
 
     def map_exception(self, e: Exception) -> JsonRpcError:
         return {
             "code": -32603,
-            "message": "\n".join(traceback.format_exception(e)).strip() + "\n\nPlease report a bug!",
+            "message": "\n".join(traceback.format_exception(e)).strip()
+            + "\n\nPlease report a bug!",
         }
 
     def _call(self, method: str, params: Any) -> Any:
@@ -111,12 +136,12 @@ class JsonRpcRegistry:
             if len(params) < len(required_params):
                 raise JsonRpcException(
                     -32602,
-                    f"Invalid params: expected at least {len(required_params)} arguments, got {len(params)}"
+                    f"Invalid params: expected at least {len(required_params)} arguments, got {len(params)}",
                 )
             if len(params) > len(hints):
                 raise JsonRpcException(
                     -32602,
-                    f"Invalid params: expected at most {len(hints)} arguments, got {len(params)}"
+                    f"Invalid params: expected at most {len(hints)} arguments, got {len(params)}",
                 )
             params = dict(zip(hints.keys(), params))
 
@@ -127,15 +152,14 @@ class JsonRpcRegistry:
             if missing:
                 raise JsonRpcException(
                     -32602,
-                    f"Invalid params: missing required parameters: {list(missing)}"
+                    f"Invalid params: missing required parameters: {list(missing)}",
                 )
 
             # Check no extra params
             extra = set(params.keys()) - set(hints.keys())
             if extra:
                 raise JsonRpcException(
-                    -32602,
-                    f"Invalid params: unexpected parameters: {list(extra)}"
+                    -32602, f"Invalid params: unexpected parameters: {list(extra)}"
                 )
 
             validated_params = {}
@@ -154,12 +178,16 @@ class JsonRpcRegistry:
                     if expected_type is not type(None):
                         # Check if None is allowed in a Union
                         if not (origin is Union and type(None) in args):
-                            raise JsonRpcException(-32602, f"Invalid params: {param_name} cannot be null")
+                            raise JsonRpcException(
+                                -32602, f"Invalid params: {param_name} cannot be null"
+                            )
                     validated_params[param_name] = None
                     continue
 
                 # Handle Union types (int | str, Optional[int], etc.)
-                if origin is Union or (hasattr(types, 'UnionType') and origin is types.UnionType):
+                if origin is Union or (
+                    hasattr(types, "UnionType") and origin is types.UnionType
+                ):
                     type_matched = False
                     for arg_type in args:
                         if arg_type is type(None):
@@ -177,7 +205,9 @@ class JsonRpcRegistry:
                             break
 
                     if not type_matched:
-                        raise JsonRpcException(-32602, f"Invalid params: {param_name} has invalid type")
+                        raise JsonRpcException(
+                            -32602, f"Invalid params: {param_name} has invalid type"
+                        )
                     validated_params[param_name] = value
                     continue
 
@@ -186,7 +216,7 @@ class JsonRpcRegistry:
                     if not isinstance(value, origin):
                         raise JsonRpcException(
                             -32602,
-                            f"Invalid params: {param_name} expected {origin.__name__}, got {type(value).__name__}"
+                            f"Invalid params: {param_name} expected {origin.__name__}, got {type(value).__name__}",
                         )
                     validated_params[param_name] = value
                     continue
@@ -196,7 +226,7 @@ class JsonRpcRegistry:
                     if not isinstance(value, dict):
                         raise JsonRpcException(
                             -32602,
-                            f"Invalid params: {param_name} expected dict, got {type(value).__name__}"
+                            f"Invalid params: {param_name} expected dict, got {type(value).__name__}",
                         )
                     validated_params[param_name] = value
                     continue
@@ -210,7 +240,7 @@ class JsonRpcRegistry:
                     if not isinstance(value, expected_type):
                         raise JsonRpcException(
                             -32602,
-                            f"Invalid params: {param_name} expected {expected_type.__name__}, got {type(value).__name__}"
+                            f"Invalid params: {param_name} expected {expected_type.__name__}, got {type(value).__name__}",
                         )
                     validated_params[param_name] = value
                     continue
@@ -223,7 +253,9 @@ class JsonRpcRegistry:
         else:
             raise JsonRpcException(-32602, "Invalid params: must be array or object")
 
-    def _error(self, request_id: JsonRpcId, code: int, message: str, data: Any = None) -> JsonRpcResponse | None:
+    def _error(
+        self, request_id: JsonRpcId, code: int, message: str, data: Any = None
+    ) -> JsonRpcResponse | None:
         error: JsonRpcError = {
             "code": code,
             "message": message,

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP("github.com/mrexodia/ida-pro-mcp#idalib")
 
+
 def fixup_tool_argument_descriptions(mcp: FastMCP):
     # In our tool definitions within the ida_mcp package, we use `typing.Annotated` on function parameters
     # to attach documentation. For example:
@@ -83,9 +84,8 @@ def fixup_tool_argument_descriptions(mcp: FastMCP):
             #     InspectedAnnotation(type=<class 'str'>, qualifiers=set(), metadata=['Name of the function to get'])
             #
             annotation = intro.inspect_annotation(
-                                                  parameter.annotation,
-                                                  annotation_source=intro.AnnotationSource.ANY
-                                              )
+                parameter.annotation, annotation_source=intro.AnnotationSource.ANY
+            )
 
             # for our use case, where we attach a single string annotation that is meant as documentation,
             # we extract that string and assign it to "description" in the tool metadata.
@@ -100,16 +100,35 @@ def fixup_tool_argument_descriptions(mcp: FastMCP):
             if not isinstance(description, str):
                 continue
 
-            logger.debug("adding parameter documentation %s(%s='%s')", tool.name, name, description)
+            logger.debug(
+                "adding parameter documentation %s(%s='%s')",
+                tool.name,
+                name,
+                description,
+            )
             tool.parameters["properties"][name]["description"] = description
+
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for IDA Pro via idalib")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Show debug messages")
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to listen on, default: 127.0.0.1")
-    parser.add_argument("--port", type=int, default=8745, help="Port to listen on, default: 8745")
-    parser.add_argument("--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)")
-    parser.add_argument("input_path", type=Path, help="Path to the input file to analyze.")
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Show debug messages"
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="Host to listen on, default: 127.0.0.1",
+    )
+    parser.add_argument(
+        "--port", type=int, default=8745, help="Port to listen on, default: 8745"
+    )
+    parser.add_argument(
+        "--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)"
+    )
+    parser.add_argument(
+        "input_path", type=Path, help="Path to the input file to analyze."
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -173,8 +192,13 @@ def main():
     signal.signal(signal.SIGTERM, cleanup_and_exit)
 
     # NOTE: npx @modelcontextprotocol/inspector for debugging
-    logger.info("MCP Server availabile at: http://%s:%d/sse", mcp.settings.host, mcp.settings.port)
+    logger.info(
+        "MCP Server availabile at: http://%s:%d/sse",
+        mcp.settings.host,
+        mcp.settings.port,
+    )
     mcp.run(transport="sse")
+
 
 if __name__ == "__main__":
     main()
