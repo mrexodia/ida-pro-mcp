@@ -20,6 +20,7 @@ class RPCRegistry(JsonRpcRegistry):
     def __init__(self):
         super().__init__()
         self.unsafe: set[str] = set()
+        self.resources: dict[str, Callable] = {}
 
     def register(self, func: Callable) -> Callable:
         """Register a function (alias for method())"""
@@ -28,6 +29,14 @@ class RPCRegistry(JsonRpcRegistry):
     def mark_unsafe(self, func: Callable) -> Callable:
         """Mark a function as unsafe (requires --unsafe flag)"""
         self.unsafe.add(func.__name__)
+        return func
+
+    def register_resource(self, uri: str, func: Callable) -> Callable:
+        """Register a function as a resource with URI pattern"""
+        func.__resource_uri__ = uri
+        self.resources[func.__name__] = func
+        # Also register as a regular JSON-RPC method so it can be called
+        self.method(func)
         return func
 
     def map_exception(self, e: Exception) -> JsonRpcError:
@@ -63,3 +72,10 @@ def jsonrpc(func: Callable) -> Callable:
 def unsafe(func: Callable) -> Callable:
     """Decorator to mark a function as unsafe (requires --unsafe flag)"""
     return rpc_registry.mark_unsafe(func)
+
+
+def resource(uri: str) -> Callable[[Callable], Callable]:
+    """Decorator to register a function as an MCP resource with URI pattern"""
+    def decorator(func: Callable) -> Callable:
+        return rpc_registry.register_resource(uri, func)
+    return decorator

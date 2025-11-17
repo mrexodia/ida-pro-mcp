@@ -8,7 +8,7 @@ Architecture:
 - mcp.py: MCP protocol server (HTTP/SSE)
 - sync.py: IDA synchronization decorators (@idaread/@idawrite)
 - utils.py: Shared helpers and TypedDict definitions
-- api_*.py: Modular API implementations (71 functions total)
+- api_*.py: Modular API implementations (71 tools + 24 resources)
 """
 
 # Import infrastructure modules
@@ -17,7 +17,7 @@ from . import sync
 from . import utils
 from . import mcp
 
-# Import all API modules to register @jsonrpc functions
+# Import all API modules to register @jsonrpc functions and @resource functions
 from . import api_core
 from . import api_analysis
 from . import api_memory
@@ -26,9 +26,10 @@ from . import api_modify
 from . import api_stack
 from . import api_debug
 from . import api_python
+from . import api_resources
 
 # Re-export key components for external use
-from .rpc import rpc_registry, jsonrpc, unsafe, JSONRPCError
+from .rpc import rpc_registry, jsonrpc, unsafe, resource, JSONRPCError
 from .sync import idaread, idawrite, IDAError, IDASyncError
 from .mcp import MCPServer
 
@@ -41,6 +42,7 @@ __all__ = [
     'rpc_registry',
     'jsonrpc',
     'unsafe',
+    'resource',
     'JSONRPCError',
     'idaread',
     'idawrite',

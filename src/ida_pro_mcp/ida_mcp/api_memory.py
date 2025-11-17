@@ -219,7 +219,7 @@ def get_global_value(
 
 @jsonrpc
 @idawrite
-def put_bytes(
+def patch(
     patches: Annotated[list[MemoryPatch] | MemoryPatch, "Memory patch operations"]
 ) -> list[dict]:
     """Patch bytes at memory addresses with hex data"""

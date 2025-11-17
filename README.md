@@ -8,6 +8,48 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 
 Available functionality:
 
+## MCP Resources
+
+**Resources** are browsable IDB state endpoints that provide read-only access to binary metadata, functions, strings, and types. Unlike tools (which perform actions), resources follow REST-like URI patterns for efficient data exploration.
+
+**Core IDB State:**
+- `ida://idb/metadata` - IDB file info (path, arch, base, size, hashes)
+- `ida://idb/segments` - Memory segments with permissions
+- `ida://idb/entrypoints` - Entry points (main, TLS callbacks, etc.)
+
+**Code Browsing:**
+- `ida://functions` - List all functions (paginated, filterable)
+- `ida://function/{addr}` - Function details by address
+- `ida://globals` - List global variables (paginated, filterable)
+- `ida://global/{name_or_addr}` - Global variable details
+
+**Data Exploration:**
+- `ida://strings` - All strings (paginated, filterable)
+- `ida://string/{addr}` - String details at address
+- `ida://imports` - Imported functions (paginated)
+- `ida://import/{name}` - Import details by name
+- `ida://exports` - Exported functions (paginated)
+- `ida://export/{name}` - Export details by name
+
+**Type Information:**
+- `ida://types` - All local types
+- `ida://structs` - All structures/unions
+- `ida://struct/{name}` - Structure definition with fields
+
+**Analysis Context:**
+- `ida://xrefs/to/{addr}` - Cross-references to address
+- `ida://xrefs/from/{addr}` - Cross-references from address
+- `ida://stack/{func_addr}` - Stack frame variables
+
+**UI State:**
+- `ida://cursor` - Current cursor position and function
+- `ida://selection` - Current selection range
+
+**Debug State (when debugger active):**
+- `ida://debug/breakpoints` - All breakpoints
+- `ida://debug/registers` - Current register values
+- `ida://debug/callstack` - Current call stack
+
 ## Core Functions
 
 - `idb_meta()`: Get IDB metadata (path, module, base address, size, hashes).
@@ -88,10 +130,10 @@ Available functionality:
 
 ## Pattern Matching & Search
 
-- `find_bytes(patterns)`: Find byte pattern(s) in binary (e.g., "48 8B ?? ??").
-- `find_insns(sequences)`: Find instruction sequence(s) in code.
-- `find_insn_operands(patterns)`: Find instructions with specific operand values (e.g., SUB with 0x60, CMP with specific immediates).
-- `search(queries)`: Advanced search with batch-first API (immediate values, strings, data/code references).
+- `find_bytes(patterns, limit=1000, offset=0)`: Find byte pattern(s) in binary (e.g., "48 8B ?? ??"). Returns `cursor: {next: N}` or `{done: true}` for pagination.
+- `find_insns(sequences, limit=1000, offset=0)`: Find instruction sequence(s) in code. Returns `cursor: {next: N}` or `{done: true}` for pagination.
+- `find_insn_operands(patterns, limit=1000, offset=0)`: Find instructions with specific operand values (e.g., SUB with 0x60, CMP with specific immediates). Returns `cursor: {next: N}` or `{done: true}` for pagination.
+- `search(type, targets, limit=1000, offset=0)`: Advanced search with batch-first API (immediate values, strings, data/code references). Returns `cursor: {next: N}` or `{done: true}` per target.
 
 ## Control Flow Analysis
 
@@ -114,7 +156,7 @@ Available functionality:
 ## Batch Operations
 
 - `rename(batch)`: Unified batch rename operation for functions, globals, locals, and stack variables (accepts dict with optional `func`, `data`, `local`, `stack` keys).
-- `put_bytes(patches)`: Patch multiple byte sequences at once.
+- `patch(patches)`: Patch multiple byte sequences at once.
 
 ## Cross-Reference Analysis
 
@@ -122,13 +164,14 @@ Available functionality:
 
 ## String Analysis
 
-- `analyze_strings(filters)`: Analyze strings with pattern matching, length filtering, and xref information.
+- `analyze_strings(filters, limit=1000, offset=0)`: Analyze strings with pattern matching, length filtering, and xref information. Returns `cursor: {next: N}` or `{done: true}` per filter.
 
 **Key Features:**
 
 - **Type-safe API**: All functions use strongly-typed parameters with TypedDict schemas for better IDE support and LLM structured outputs
 - **Batch-first design**: Most operations accept both single items and lists
 - **Consistent error handling**: All batch operations return `[{..., error: null|string}, ...]`
+- **Cursor-based pagination**: Search functions return `cursor: {next: offset}` or `{done: true}` to enable efficient result streaming (default limit: 1000)
 - **Performance**: Strings are cached with MD5-based invalidation to avoid repeated `build_strlist` calls in large projects
 
 ## Prerequisites

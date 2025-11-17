@@ -76,6 +76,7 @@ class MCPVisitor(ast.NodeVisitor):
     def __init__(self):
         self.types: dict[str, ast.ClassDef] = {}
         self.functions: dict[str, ast.FunctionDef] = {}
+        self.resources: dict[str, tuple[ast.FunctionDef, str]] = {}  # name -> (func, uri)
         self.descriptions: dict[str, str] = {}
         self.unsafe: list[str] = []
 
@@ -97,7 +98,18 @@ class MCPVisitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node):
         for decorator in node.decorator_list:
-            if isinstance(decorator, ast.Name):
+            # Handle @resource("uri") decorator
+            if isinstance(decorator, ast.Call):
+                if isinstance(decorator.func, ast.Name) and decorator.func.id == "resource":
+                    if len(decorator.args) > 0 and isinstance(decorator.args[0], ast.Constant):
+                        uri = decorator.args[0].value
+                        self.resources[node.name] = (node, uri)
+                        # Extract description from docstring
+                        body_comment = node.body[0]
+                        if isinstance(body_comment, ast.Expr) and isinstance(body_comment.value, ast.Constant):
+                            self.descriptions[node.name] = body_comment.value.value
+                        return
+            elif isinstance(decorator, ast.Name):
                 if decorator.id == "jsonrpc":
                     for i, arg in enumerate(node.args.args):
                         arg_name = arg.arg
@@ -222,7 +234,7 @@ if os.path.exists(utils_file):
     module = ast.parse(code, utils_file)
     visitor.visit(module)
 
-# Parse all api files for @jsonrpc functions
+# Parse all api files for @jsonrpc functions and @resource functions
 for api_file in sorted(api_files):
     with open(api_file, "r", encoding="utf-8") as f:
         code = f.read()
@@ -239,6 +251,9 @@ from pydantic import Field
 
 T = TypeVar("T")
 
+# Resource metadata for MCP
+RESOURCE_METADATA = {}
+
 """
 for type in visitor.types.values():
     code += ast.unparse(type)
@@ -246,6 +261,13 @@ for type in visitor.types.values():
 for function in visitor.functions.values():
     code += ast.unparse(function)
     code += "\n\n"
+
+# Add resource metadata dictionary
+for res_name, (res_func, uri) in visitor.resources.items():
+    description = visitor.descriptions.get(res_name, "")
+    first_line = description.split("\n")[0].strip() if description else ""
+    code += f'RESOURCE_METADATA["{res_name}"] = {{"uri": "{uri}", "description": "{first_line}"}}\n'
+code += "\n"
 
 try:
     if os.path.exists(GENERATED_PY):
@@ -265,6 +287,61 @@ exec(compile(code, GENERATED_PY, "exec"))
 MCP_FUNCTIONS = ["check_connection"] + list(visitor.functions.keys())
 UNSAFE_FUNCTIONS = visitor.unsafe
 SAFE_FUNCTIONS = [f for f in MCP_FUNCTIONS if f not in UNSAFE_FUNCTIONS]
+
+# ============================================================================
+# MCP Resource Handlers
+# ============================================================================
+
+# Generate individual resource handlers for each discovered resource
+def create_resource_handler(res_name: str, res_func: ast.FunctionDef, uri_pattern: str):
+    """Create a resource handler function that calls the IDA plugin via JSON-RPC"""
+    import json
+    import re
+    import types
+
+    # Extract parameter names from URI pattern (e.g., {addr} -> addr)
+    param_names = re.findall(r'\{(\w+)\}', uri_pattern)
+
+    # Get description
+    description = visitor.descriptions.get(res_name, "")
+    first_line = description.split("\n")[0] if description else f"Read {uri_pattern}"
+
+    # Create handler function with proper signature using exec
+    if param_names:
+        # Build function signature
+        params_str = ", ".join(param_names)
+        func_code = f"""
+def handler({params_str}):
+    import json
+    try:
+        result = make_jsonrpc_request("{res_name}", {params_str})
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({{"error": str(e)}}, indent=2)
+"""
+    else:
+        func_code = f"""
+def handler():
+    import json
+    try:
+        result = make_jsonrpc_request("{res_name}")
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return json.dumps({{"error": str(e)}}, indent=2)
+"""
+
+    # Execute function code to create handler
+    local_vars = {"make_jsonrpc_request": make_jsonrpc_request}
+    exec(func_code, local_vars)
+    handler = local_vars["handler"]
+    handler.__doc__ = first_line
+
+    # Register with FastMCP
+    mcp.resource(uri_pattern)(handler)
+
+# Register all discovered resources
+for res_name, (res_func, uri_pattern) in visitor.resources.items():
+    create_resource_handler(res_name, res_func, uri_pattern)
 
 def generate_readme():
     print("README:")

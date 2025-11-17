@@ -219,6 +219,9 @@ class MCPServer:
         self.mcp_registry.methods["initialize"] = self._mcp_initialize
         self.mcp_registry.methods["tools/list"] = self._mcp_tools_list
         self.mcp_registry.methods["tools/call"] = self._mcp_tools_call
+        self.mcp_registry.methods["resources/list"] = self._mcp_resources_list
+        self.mcp_registry.methods["resources/templates/list"] = self._mcp_resource_templates_list
+        self.mcp_registry.methods["resources/read"] = self._mcp_resources_read
 
     def start(self):
         if self.running:
@@ -297,7 +300,11 @@ class MCPServer:
         return {
             "protocolVersion": protocolVersion,
             "capabilities": {
-                "tools": {}
+                "tools": {},
+                "resources": {
+                    "subscribe": False,  # No live updates yet
+                    "listChanged": False
+                }
             },
             "serverInfo": {
                 "name": "ida-pro-mcp",
@@ -341,6 +348,118 @@ class MCPServer:
         return {
             "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
             "isError": False
+        }
+
+    def _mcp_resources_list(self, _meta: dict | None = None) -> dict:
+        """MCP resources/list method - returns static resources only (no URI parameters)"""
+        resources = []
+        for func_name, func in rpc_registry.resources.items():
+            uri = getattr(func, "__resource_uri__", f"ida://unknown/{func_name}")
+
+            # Skip templates (resources with parameters like {addr})
+            if "{" in uri:
+                continue
+
+            description = func.__doc__ or f"Read {uri}"
+            description = description.strip().split("\n")[0] if description else ""
+
+            resources.append({
+                "uri": uri,
+                "name": func_name,
+                "description": description,
+                "mimeType": "application/json"
+            })
+
+        return {"resources": resources}
+
+    def _mcp_resource_templates_list(self, _meta: dict | None = None) -> dict:
+        """MCP resources/templates/list method - returns parameterized resource templates"""
+        templates = []
+        for func_name, func in rpc_registry.resources.items():
+            uri = getattr(func, "__resource_uri__", f"ida://unknown/{func_name}")
+
+            # Only include templates (resources with parameters like {addr})
+            if "{" not in uri:
+                continue
+
+            description = func.__doc__ or f"Read {uri}"
+            description = description.strip().split("\n")[0] if description else ""
+
+            templates.append({
+                "uriTemplate": uri,  # Note: uriTemplate, not uri
+                "name": func_name,
+                "description": description,
+                "mimeType": "application/json"
+            })
+
+        return {"resourceTemplates": templates}
+
+    def _mcp_resources_read(self, uri: str, _meta: dict | None = None) -> dict:
+        """MCP resources/read method"""
+        import re
+
+        # Try to match URI against all registered resource patterns
+        for func_name, func in rpc_registry.resources.items():
+            pattern = getattr(func, "__resource_uri__", "")
+
+            # Convert pattern to regex, replacing {param} with named capture groups
+            regex_pattern = re.sub(r'\{(\w+)\}', r'(?P<\1>[^/]+)', pattern)
+            regex_pattern = f"^{regex_pattern}$"
+
+            match = re.match(regex_pattern, uri)
+            if match:
+                # Found matching resource - call it via JSON-RPC
+                params = list(match.groupdict().values())
+
+                try:
+                    tool_response = rpc_registry.dispatch({
+                        "jsonrpc": "2.0",
+                        "method": func_name,
+                        "params": params if params else [],
+                        "id": None,
+                    })
+
+                    if tool_response and "error" in tool_response:
+                        error = tool_response["error"]
+                        return {
+                            "contents": [{
+                                "uri": uri,
+                                "mimeType": "application/json",
+                                "text": json.dumps({"error": error.get("message", "Unknown error")}, indent=2)
+                            }],
+                            "isError": True
+                        }
+
+                    result = tool_response.get("result") if tool_response else None
+                    return {
+                        "contents": [{
+                            "uri": uri,
+                            "mimeType": "application/json",
+                            "text": json.dumps(result, indent=2)
+                        }]
+                    }
+                except Exception as e:
+                    return {
+                        "contents": [{
+                            "uri": uri,
+                            "mimeType": "application/json",
+                            "text": json.dumps({"error": str(e)}, indent=2)
+                        }],
+                        "isError": True
+                    }
+
+        # No matching resource found
+        available = [getattr(f, "__resource_uri__", "") for f in rpc_registry.resources.values()]
+        return {
+            "contents": [{
+                "uri": uri,
+                "mimeType": "application/json",
+                "text": json.dumps({
+                    "error": f"Resource not found: {uri}",
+                    "available_patterns": available
+                }, indent=2)
+            }],
+            "isError": True
         }
 
     def _type_to_json_schema(self, py_type: Any) -> dict:
