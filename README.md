@@ -113,7 +113,7 @@ Available functionality:
 
 ## Batch Operations
 
-- `rename_all(renamings)`: Batch rename functions, globals, locals, or stack variables.
+- `rename(batch)`: Unified batch rename operation for functions, globals, locals, and stack variables (accepts dict with optional `func`, `data`, `local`, `stack` keys).
 - `put_bytes(patches)`: Patch multiple byte sequences at once.
 
 ## Cross-Reference Analysis
@@ -126,10 +126,8 @@ Available functionality:
 
 **Key Features:**
 
-- **Batch-first API**: Enhanced with `{ty, qs}` pattern for type-specific batches
-  - `search(["password", "key"])` - Array defaults to string search
-  - `search({"ty": "immediate", "qs": [456, 228]})` - Batch immediate search
-  - `rename_all(["0x401000:main", "0x402000:init"])` - Natural string format for function renames
+- **Type-safe API**: All functions use strongly-typed parameters with TypedDict schemas for better IDE support and LLM structured outputs
+- **Batch-first design**: Most operations accept both single items and lists
 - **Consistent error handling**: All batch operations return `[{..., error: null|string}, ...]`
 - **Performance**: Strings are cached with MD5-based invalidation to avoid repeated `build_strlist` calls in large projects
 

@@ -18,7 +18,13 @@ from .utils import (
     looks_like_address,
     decompile_checked,
     refresh_decompiler_ctext,
-    JsonSchema,
+    CommentOp,
+    AsmPatchOp,
+    FunctionRename,
+    GlobalRename,
+    LocalRename,
+    StackRename,
+    RenameBatch,
 )
 
 
@@ -30,47 +36,11 @@ from .utils import (
 @jsonrpc
 @idawrite
 def set_comments(
-    items: Annotated[
-        list[dict] | dict,
-        "Set comments at addresses",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "addr": {"type": "string", "description": "Address (hex or decimal)"},
-                            "comment": {"type": "string", "description": "Comment text"}
-                        },
-                        "required": ["addr", "comment"]
-                    },
-                    "description": "Array of comment operations"
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "addr": {"type": "string", "description": "Address (hex or decimal)"},
-                        "comment": {"type": "string", "description": "Comment text"}
-                    },
-                    "required": ["addr", "comment"],
-                    "description": "Single comment operation"
-                }
-            ]
-        })
-    ],
+    items: Annotated[list[CommentOp] | CommentOp, "Comment operations to apply"]
 ):
-    """Set comments"""
-
-    def parse_addr_comment(s: str) -> dict:
-        # Support "addr: comment" format
-        if ":" in s:
-            parts = s.split(":", 1)
-            return {"addr": parts[0].strip(), "comment": parts[1].strip()}
-        # Just address without comment (will clear comment)
-        return {"addr": s.strip(), "comment": ""}
-
-    items = normalize_dict_list(items, parse_addr_comment)
+    """Set comments at addresses (both disassembly and decompiler views)"""
+    if isinstance(items, dict):
+        items = [items]
 
     results = []
     for item in items:
@@ -150,47 +120,11 @@ def set_comments(
 @jsonrpc
 @idawrite
 def patch_asm(
-    items: Annotated[
-        list[dict] | dict,
-        "Patch assembly instructions",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "addr": {"type": "string", "description": "Address (hex or decimal)"},
-                            "asm": {"type": "string", "description": "Assembly instruction(s), semicolon-separated"}
-                        },
-                        "required": ["addr", "asm"]
-                    },
-                    "description": "Array of assembly patch operations"
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "addr": {"type": "string", "description": "Address (hex or decimal)"},
-                        "asm": {"type": "string", "description": "Assembly instruction(s), semicolon-separated"}
-                    },
-                    "required": ["addr", "asm"],
-                    "description": "Single assembly patch operation"
-                }
-            ]
-        })
-    ],
+    items: Annotated[list[AsmPatchOp] | AsmPatchOp, "Assembly patch operations to apply"]
 ) -> list[dict]:
-    """Patch assembly"""
-
-    def parse_addr_asm(s: str) -> dict:
-        # Support "addr: instruction" format
-        if ":" in s:
-            parts = s.split(":", 1)
-            return {"addr": parts[0].strip(), "asm": parts[1].strip()}
-        # Just instruction without address (invalid, but let it fail gracefully)
-        return {"addr": "", "asm": s.strip()}
-
-    items = normalize_dict_list(items, parse_addr_asm)
+    """Patch assembly instructions at addresses"""
+    if isinstance(items, dict):
+        items = [items]
 
     results = []
     for item in items:
@@ -226,179 +160,172 @@ def patch_asm(
 
 @jsonrpc
 @idawrite
-def rename_all(
-    renamings: Annotated[
-        list | dict,
-        "Batch rename functions, globals, locals, or stack variables",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "string", "pattern": "^0x[0-9a-fA-F]+:.+$"},
-                    "description": "Array of 'addr:name' strings for function renames (default)"
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "ty": {
-                            "type": "string",
-                            "enum": ["function", "global", "local", "stack"],
-                            "description": "Type of entity to rename"
-                        },
-                        "qs": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Batch of rename operations (format depends on type)"
-                        }
-                    },
-                    "required": ["ty", "qs"],
-                    "description": "Batch renames with explicit type"
-                }
-            ]
-        })
-    ],
-) -> list[dict]:
-    """Rename anything (batch-first API)
+def rename(
+    batch: Annotated[RenameBatch, "Batch rename operations across entity types"]
+) -> dict:
+    """Unified rename operation for functions, globals, locals, and stack variables"""
 
-    Examples:
-    - ["0x401000:main", "0x402000:init"] - Function renames (default)
-    - {"ty": "function", "qs": ["0x401000:main", "0x402000:init"]}
-    - {"ty": "global", "qs": ["old_var:new_var", "data:config"]}
-    - {"ty": "local", "qs": ["0x401000:old:new", "0x402000:v1:v2"]}
-    - {"ty": "stack", "qs": ["0x401000:var_8:buffer"]}
-    """
-    # Handle new batch format: {ty, qs}
-    if isinstance(renamings, dict) and "qs" in renamings and "ty" in renamings:
-        ty = renamings["ty"]
-        query_list = renamings["qs"]
+    def _normalize_items(items):
+        """Convert single item or None to list"""
+        if items is None:
+            return []
+        return [items] if isinstance(items, dict) else items
 
+    def _rename_funcs(items: list[FunctionRename]) -> list[dict]:
         results = []
-        for q in query_list:
-            item = _parse_rename_query(q, ty)
-            result = _rename_single(item)
-            results.append(result)
+        for item in items:
+            try:
+                ea = parse_address(item["addr"])
+                success = idaapi.set_name(ea, item["name"], idaapi.SN_CHECK)
+                if success:
+                    func = idaapi.get_func(ea)
+                    if func:
+                        refresh_decompiler_ctext(func.start_ea)
+                results.append({
+                    "addr": item["addr"],
+                    "name": item["name"],
+                    "ok": success,
+                    "error": None if success else "Rename failed"
+                })
+            except Exception as e:
+                results.append({"addr": item.get("addr"), "error": str(e)})
         return results
 
-    # Handle array of strings (default to function renames)
-    if isinstance(renamings, list) and all(isinstance(q, str) for q in renamings):
+    def _rename_globals(items: list[GlobalRename]) -> list[dict]:
         results = []
-        for q in renamings:
-            item = _parse_rename_query(q, "function")
-            result = _rename_single(item)
-            results.append(result)
+        for item in items:
+            try:
+                ea = idaapi.get_name_ea(idaapi.BADADDR, item["old"])
+                if ea == idaapi.BADADDR:
+                    results.append({
+                        "old": item["old"],
+                        "new": item["new"],
+                        "ok": False,
+                        "error": f"Global '{item['old']}' not found"
+                    })
+                    continue
+                success = idaapi.set_name(ea, item["new"], idaapi.SN_CHECK)
+                results.append({
+                    "old": item["old"],
+                    "new": item["new"],
+                    "ok": success,
+                    "error": None if success else "Rename failed"
+                })
+            except Exception as e:
+                results.append({"old": item.get("old"), "error": str(e)})
         return results
 
-    # Legacy format: list of {ty, addr, src, dst} dicts
-    renamings = normalize_dict_list(renamings)
-    results = []
-    for item in renamings:
-        result = _rename_single(item)
-        results.append(result)
-
-    return results
-
-
-def _parse_rename_query(query: str, ty: str) -> dict:
-    """Parse rename query string into dict format"""
-    parts = query.split(":", 2)
-
-    if ty == "function":
-        # Format: "addr:name"
-        if len(parts) != 2:
-            raise ValueError(f"Expected 'addr:name' for function, got: {query}")
-        return {"ty": "function", "addr": parts[0].strip(), "dst": parts[1].strip()}
-
-    elif ty == "global":
-        # Format: "old_name:new_name"
-        if len(parts) != 2:
-            raise ValueError(f"Expected 'old:new' for global, got: {query}")
-        return {"ty": "global", "src": parts[0].strip(), "dst": parts[1].strip()}
-
-    elif ty == "local":
-        # Format: "func_addr:old_name:new_name"
-        if len(parts) != 3:
-            raise ValueError(f"Expected 'func:old:new' for local, got: {query}")
-        return {
-            "ty": "local",
-            "addr": parts[0].strip(),
-            "src": parts[1].strip(),
-            "dst": parts[2].strip(),
-        }
-
-    elif ty == "stack":
-        # Format: "func_addr:old_name:new_name"
-        if len(parts) != 3:
-            raise ValueError(f"Expected 'func:old:new' for stack, got: {query}")
-        return {
-            "ty": "stack",
-            "addr": parts[0].strip(),
-            "src": parts[1].strip(),
-            "dst": parts[2].strip(),
-        }
-
-    else:
-        raise ValueError(f"Unknown rename type: {ty}")
-
-
-def _rename_single(item: dict) -> dict:
-    """Internal helper to rename a single item"""
-    try:
-        item_type = item["ty"]
-        success = False
-
-        if item_type == "function":
-            ea = parse_address(item["addr"])
-            success = idaapi.set_name(ea, item["dst"], idaapi.SN_CHECK)
-            if success:
-                func = idaapi.get_func(ea)
-                if func:
-                    refresh_decompiler_ctext(func.start_ea)
-
-        elif item_type == "global":
-            ea = idaapi.get_name_ea(idaapi.BADADDR, item["src"])
-            if ea != idaapi.BADADDR:
-                success = idaapi.set_name(ea, item["dst"], idaapi.SN_CHECK)
-
-        elif item_type == "local":
-            func = idaapi.get_func(parse_address(item["addr"]))
-            if func:
-                success = ida_hexrays.rename_lvar(
-                    func.start_ea, item["src"], item["dst"]
-                )
+    def _rename_locals(items: list[LocalRename]) -> list[dict]:
+        results = []
+        for item in items:
+            try:
+                func = idaapi.get_func(parse_address(item["func_addr"]))
+                if not func:
+                    results.append({
+                        "func_addr": item["func_addr"],
+                        "old": item["old"],
+                        "new": item["new"],
+                        "ok": False,
+                        "error": "No function found"
+                    })
+                    continue
+                success = ida_hexrays.rename_lvar(func.start_ea, item["old"], item["new"])
                 if success:
                     refresh_decompiler_ctext(func.start_ea)
+                results.append({
+                    "func_addr": item["func_addr"],
+                    "old": item["old"],
+                    "new": item["new"],
+                    "ok": success,
+                    "error": None if success else "Rename failed"
+                })
+            except Exception as e:
+                results.append({"func_addr": item.get("func_addr"), "error": str(e)})
+        return results
 
-        elif item_type == "stack":
-            func = idaapi.get_func(parse_address(item["addr"]))
-            if not func:
-                return {"item": item, "error": "No function found"}
+    def _rename_stack(items: list[StackRename]) -> list[dict]:
+        results = []
+        for item in items:
+            try:
+                func = idaapi.get_func(parse_address(item["func_addr"]))
+                if not func:
+                    results.append({
+                        "func_addr": item["func_addr"],
+                        "old": item["old"],
+                        "new": item["new"],
+                        "ok": False,
+                        "error": "No function found"
+                    })
+                    continue
 
-            frame_tif = ida_typeinf.tinfo_t()
-            if not ida_frame.get_func_frame(frame_tif, func):
-                return {"item": item, "error": "No frame"}
+                frame_tif = ida_typeinf.tinfo_t()
+                if not ida_frame.get_func_frame(frame_tif, func):
+                    results.append({
+                        "func_addr": item["func_addr"],
+                        "old": item["old"],
+                        "new": item["new"],
+                        "ok": False,
+                        "error": "No frame"
+                    })
+                    continue
 
-            idx, udm = frame_tif.get_udm(item["src"])
-            if not udm:
-                return {"item": item, "error": f"{item['src']} not found"}
+                idx, udm = frame_tif.get_udm(item["old"])
+                if not udm:
+                    results.append({
+                        "func_addr": item["func_addr"],
+                        "old": item["old"],
+                        "new": item["new"],
+                        "ok": False,
+                        "error": f"'{item['old']}' not found"
+                    })
+                    continue
 
-            tid = frame_tif.get_udm_tid(idx)
-            if ida_frame.is_special_frame_member(tid):
-                return {"item": item, "error": "Special frame member"}
+                tid = frame_tif.get_udm_tid(idx)
+                if ida_frame.is_special_frame_member(tid):
+                    results.append({
+                        "func_addr": item["func_addr"],
+                        "old": item["old"],
+                        "new": item["new"],
+                        "ok": False,
+                        "error": "Special frame member"
+                    })
+                    continue
 
-            udm = ida_typeinf.udm_t()
-            frame_tif.get_udm_by_tid(udm, tid)
-            offset = udm.offset // 8
-            if ida_frame.is_funcarg_off(func, offset):
-                return {"item": item, "error": "Argument member"}
+                udm = ida_typeinf.udm_t()
+                frame_tif.get_udm_by_tid(udm, tid)
+                offset = udm.offset // 8
+                if ida_frame.is_funcarg_off(func, offset):
+                    results.append({
+                        "func_addr": item["func_addr"],
+                        "old": item["old"],
+                        "new": item["new"],
+                        "ok": False,
+                        "error": "Argument member"
+                    })
+                    continue
 
-            sval = ida_frame.soff_to_fpoff(func, offset)
-            success = ida_frame.define_stkvar(func, item["dst"], sval, udm.type)
+                sval = ida_frame.soff_to_fpoff(func, offset)
+                success = ida_frame.define_stkvar(func, item["new"], sval, udm.type)
+                results.append({
+                    "func_addr": item["func_addr"],
+                    "old": item["old"],
+                    "new": item["new"],
+                    "ok": success,
+                    "error": None if success else "Rename failed"
+                })
+            except Exception as e:
+                results.append({"func_addr": item.get("func_addr"), "error": str(e)})
+        return results
 
-        return {
-            "item": item,
-            "ok": success,
-            "error": None if success else "Rename failed",
-        }
+    # Process each category
+    result = {}
+    if "func" in batch:
+        result["func"] = _rename_funcs(_normalize_items(batch["func"]))
+    if "data" in batch:
+        result["data"] = _rename_globals(_normalize_items(batch["data"]))
+    if "local" in batch:
+        result["local"] = _rename_locals(_normalize_items(batch["local"]))
+    if "stack" in batch:
+        result["stack"] = _rename_stack(_normalize_items(batch["stack"]))
 
-    except Exception as e:
-        return {"item": item, "error": str(e)}
+    return result

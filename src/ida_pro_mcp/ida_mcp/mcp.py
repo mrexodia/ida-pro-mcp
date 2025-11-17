@@ -13,7 +13,7 @@ from io import BufferedIOBase
 from .jsonrpc import JsonRpcRegistry, JsonRpcError
 from .rpc import rpc_registry
 from .sync import IDAError
-from .utils import handle_large_output, JsonSchema
+from .utils import handle_large_output
 
 
 class McpToolError(Exception):
@@ -352,21 +352,11 @@ class MCPServer:
             args = get_args(py_type)
             actual_type = args[0]
             description = None
-            json_schema_obj = None
 
-            # Look for description and JsonSchema in metadata
+            # Look for description in metadata
             for arg in args[1:]:
                 if isinstance(arg, str) and description is None:
                     description = arg
-                elif isinstance(arg, JsonSchema):
-                    json_schema_obj = arg
-
-            # Use JsonSchema if available
-            if json_schema_obj:
-                schema = json_schema_obj.schema.copy()
-                if description and "description" not in schema:
-                    schema["description"] = description
-                return schema
 
             schema = self._type_to_json_schema(actual_type)
             if description:

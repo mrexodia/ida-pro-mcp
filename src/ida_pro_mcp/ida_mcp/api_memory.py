@@ -10,7 +10,7 @@ import idaapi
 
 from .rpc import jsonrpc
 from .sync import idaread, idawrite
-from .utils import normalize_list_input, normalize_dict_list, parse_address, JsonSchema
+from .utils import normalize_list_input, normalize_dict_list, parse_address, MemoryRead, MemoryPatch
 
 
 # ============================================================================
@@ -21,52 +21,14 @@ from .utils import normalize_list_input, normalize_dict_list, parse_address, Jso
 @jsonrpc
 @idaread
 def get_bytes(
-    addrs: Annotated[
-        list[dict] | dict,
-        "Read bytes from memory addresses",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "addr": {"type": "string", "description": "Address to read from"},
-                            "size": {"type": "integer", "description": "Number of bytes to read"}
-                        },
-                        "required": ["addr", "size"]
-                    },
-                    "description": "Array of memory read requests"
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "addr": {"type": "string", "description": "Address to read from"},
-                        "size": {"type": "integer", "description": "Number of bytes to read"}
-                    },
-                    "required": ["addr", "size"],
-                    "description": "Single memory read request"
-                },
-                {
-                    "type": "string",
-                    "description": "addr:size format or just addr (defaults to 256 bytes)"
-                }
-            ]
-        })
-    ],
+    regions: Annotated[list[MemoryRead] | MemoryRead, "Memory regions to read from"]
 ) -> list[dict]:
-    """Read bytes"""
+    """Read bytes from memory addresses"""
+    if isinstance(regions, dict):
+        regions = [regions]
 
-    def parse_addr_size(s: str) -> dict:
-        # Support "addr:size" or just "addr" (default size=256)
-        if ":" in s:
-            parts = s.split(":", 1)
-            return {"addr": parts[0].strip(), "size": int(parts[1].strip(), 0)}
-        return {"addr": s.strip(), "size": 256}
-
-    addrs = normalize_dict_list(addrs, parse_addr_size)
     results = []
-    for item in addrs:
+    for item in regions:
         addr = item.get("addr", "")
         size = item.get("size", 0)
 
@@ -83,25 +45,9 @@ def get_bytes(
 @jsonrpc
 @idaread
 def get_u8(
-    addrs: Annotated[
-        list[str] | str,
-        "Read 8-bit unsigned integers from addresses",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "string", "description": "Address to read from"},
-                    "description": "Array of addresses"
-                },
-                {
-                    "type": "string",
-                    "description": "Single address or comma-separated addresses"
-                }
-            ]
-        })
-    ]
+    addrs: Annotated[list[str] | str, "Addresses to read 8-bit unsigned integers from"]
 ) -> list[dict]:
-    """Read uint8"""
+    """Read 8-bit unsigned integers from memory addresses"""
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -119,25 +65,9 @@ def get_u8(
 @jsonrpc
 @idaread
 def get_u16(
-    addrs: Annotated[
-        list[str] | str,
-        "Read 16-bit unsigned integers from addresses",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "string", "description": "Address to read from"},
-                    "description": "Array of addresses"
-                },
-                {
-                    "type": "string",
-                    "description": "Single address or comma-separated addresses"
-                }
-            ]
-        })
-    ]
+    addrs: Annotated[list[str] | str, "Addresses to read 16-bit unsigned integers from"]
 ) -> list[dict]:
-    """Read uint16"""
+    """Read 16-bit unsigned integers from memory addresses"""
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -155,25 +85,9 @@ def get_u16(
 @jsonrpc
 @idaread
 def get_u32(
-    addrs: Annotated[
-        list[str] | str,
-        "Read 32-bit unsigned integers from addresses",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "string", "description": "Address to read from"},
-                    "description": "Array of addresses"
-                },
-                {
-                    "type": "string",
-                    "description": "Single address or comma-separated addresses"
-                }
-            ]
-        })
-    ]
+    addrs: Annotated[list[str] | str, "Addresses to read 32-bit unsigned integers from"]
 ) -> list[dict]:
-    """Read uint32"""
+    """Read 32-bit unsigned integers from memory addresses"""
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -191,25 +105,9 @@ def get_u32(
 @jsonrpc
 @idaread
 def get_u64(
-    addrs: Annotated[
-        list[str] | str,
-        "Read 64-bit unsigned integers from addresses",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "string", "description": "Address to read from"},
-                    "description": "Array of addresses"
-                },
-                {
-                    "type": "string",
-                    "description": "Single address or comma-separated addresses"
-                }
-            ]
-        })
-    ]
+    addrs: Annotated[list[str] | str, "Addresses to read 64-bit unsigned integers from"]
 ) -> list[dict]:
-    """Read uint64"""
+    """Read 64-bit unsigned integers from memory addresses"""
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -227,25 +125,9 @@ def get_u64(
 @jsonrpc
 @idaread
 def get_string(
-    addrs: Annotated[
-        list[str] | str,
-        "Read strings from addresses",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "string", "description": "Address to read from"},
-                    "description": "Array of addresses"
-                },
-                {
-                    "type": "string",
-                    "description": "Single address or comma-separated addresses"
-                }
-            ]
-        })
-    ]
+    addrs: Annotated[list[str] | str, "Addresses to read strings from"]
 ) -> list[dict]:
-    """Read strings"""
+    """Read strings from memory addresses"""
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -295,25 +177,9 @@ def get_global_variable_value_internal(ea: int) -> str:
 @jsonrpc
 @idaread
 def get_global_value(
-    queries: Annotated[
-        list[str] | str,
-        "Read global variable values by address or name",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "string", "description": "Address or name to read from"},
-                    "description": "Array of addresses or names"
-                },
-                {
-                    "type": "string",
-                    "description": "Single address/name or comma-separated list"
-                }
-            ]
-        })
-    ]
+    queries: Annotated[list[str] | str, "Global variable addresses or names to read values from"]
 ) -> list[dict]:
-    """Read global var values by address or name (auto-detects)"""
+    """Read global variable values by address or name (auto-detects hex addresses vs names)"""
     from .utils import looks_like_address
 
     queries = normalize_list_input(queries)
@@ -354,38 +220,12 @@ def get_global_value(
 @jsonrpc
 @idawrite
 def put_bytes(
-    patches: Annotated[
-        list[dict] | dict,
-        "Patch bytes at addresses",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "addr": {"type": "string", "description": "Address to patch"},
-                            "data": {"type": "string", "description": "Hex data to write"}
-                        },
-                        "required": ["addr", "data"]
-                    },
-                    "description": "Array of patch requests"
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "addr": {"type": "string", "description": "Address to patch"},
-                        "data": {"type": "string", "description": "Hex data to write"}
-                    },
-                    "required": ["addr", "data"],
-                    "description": "Single patch request"
-                }
-            ]
-        })
-    ],
+    patches: Annotated[list[MemoryPatch] | MemoryPatch, "Memory patch operations"]
 ) -> list[dict]:
-    """Patch bytes"""
-    patches = normalize_dict_list(patches)
+    """Patch bytes at memory addresses with hex data"""
+    if isinstance(patches, dict):
+        patches = [patches]
+
     results = []
 
     for patch in patches:

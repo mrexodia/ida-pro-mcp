@@ -2,7 +2,7 @@ import json
 import types
 import inspect
 import traceback
-from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired
+from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, is_typeddict
 
 JsonRpcId: TypeAlias = str | int | float | None
 JsonRpcParams: TypeAlias = dict[str, Any] | list[Any] | None
@@ -168,6 +168,10 @@ class JsonRpcRegistry:
                         arg_origin = get_origin(arg_type)
                         check_type = arg_origin if arg_origin is not None else arg_type
 
+                        # TypedDict cannot be used with isinstance - check for dict instead
+                        if is_typeddict(arg_type):
+                            check_type = dict
+
                         if isinstance(value, check_type):
                             type_matched = True
                             break
@@ -183,6 +187,16 @@ class JsonRpcRegistry:
                         raise JsonRpcException(
                             -32602,
                             f"Invalid params: {param_name} expected {origin.__name__}, got {type(value).__name__}"
+                        )
+                    validated_params[param_name] = value
+                    continue
+
+                # Handle TypedDict (must check before basic types)
+                if is_typeddict(expected_type):
+                    if not isinstance(value, dict):
+                        raise JsonRpcException(
+                            -32602,
+                            f"Invalid params: {param_name} expected dict, got {type(value).__name__}"
                         )
                     validated_params[param_name] = value
                     continue

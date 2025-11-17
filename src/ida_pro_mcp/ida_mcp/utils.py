@@ -5,6 +5,7 @@ import struct
 import sys
 import tempfile
 from typing import (
+    Annotated,
     Any,
     Callable,
     Generic,
@@ -29,36 +30,146 @@ import idc
 from .sync import IDAError
 
 # ============================================================================
-# JSON Schema Annotation Helper
+# TypedDict Definitions for API Parameters
 # ============================================================================
 
 
-class JsonSchema:
-    """Embed JSON schema in type annotations for MCP tool generation
+class MemoryRead(TypedDict):
+    """Memory read request"""
+    addr: Annotated[str, "Address to read from (hex or decimal)"]
+    size: Annotated[int, "Number of bytes to read"]
 
-    Usage:
-        def my_func(
-            param: Annotated[
-                list | dict,
-                "Human-readable description",
-                JsonSchema({
-                    "oneOf": [
-                        {"type": "array", "items": {"type": "string"}},
-                        {"type": "object", "properties": {...}}
-                    ]
-                })
-            ]
-        ):
-    """
-    def __init__(self, schema: dict):
-        self.schema = schema
 
-    def __repr__(self):
-        return f"JsonSchema({self.schema!r})"
+class MemoryPatch(TypedDict):
+    """Memory patch operation"""
+    addr: Annotated[str, "Address to patch (hex or decimal)"]
+    data: Annotated[str, "Hex data to write (space-separated bytes)"]
+
+
+class CommentOp(TypedDict):
+    """Comment operation"""
+    addr: Annotated[str, "Address (hex or decimal)"]
+    comment: Annotated[str, "Comment text"]
+
+
+class AsmPatchOp(TypedDict):
+    """Assembly patch operation"""
+    addr: Annotated[str, "Address (hex or decimal)"]
+    asm: Annotated[str, "Assembly instruction(s), semicolon-separated"]
+
+
+class FunctionRename(TypedDict):
+    """Function rename operation"""
+    addr: Annotated[str, "Function address (hex or decimal)"]
+    name: Annotated[str, "New function name"]
+
+
+class GlobalRename(TypedDict):
+    """Global variable rename operation"""
+    old: Annotated[str, "Current variable name"]
+    new: Annotated[str, "New variable name"]
+
+
+class LocalRename(TypedDict):
+    """Local variable rename operation"""
+    func_addr: Annotated[str, "Function address containing the local variable"]
+    old: Annotated[str, "Current variable name"]
+    new: Annotated[str, "New variable name"]
+
+
+class StackRename(TypedDict):
+    """Stack variable rename operation"""
+    func_addr: Annotated[str, "Function address containing the stack variable"]
+    old: Annotated[str, "Current variable name"]
+    new: Annotated[str, "New variable name"]
+
+
+class RenameBatch(TypedDict, total=False):
+    """Batch rename operations across all entity types"""
+    func: Annotated[list[FunctionRename] | FunctionRename | None, "Function rename operations"]
+    data: Annotated[list[GlobalRename] | GlobalRename | None, "Global/data variable rename operations"]
+    local: Annotated[list[LocalRename] | LocalRename | None, "Local variable rename operations"]
+    stack: Annotated[list[StackRename] | StackRename | None, "Stack variable rename operations"]
+
+
+class PathQuery(TypedDict):
+    """Path finding query"""
+    source: Annotated[str, "Source address (hex or decimal)"]
+    target: Annotated[str, "Target address (hex or decimal)"]
+
+
+class StructFieldQuery(TypedDict):
+    """Struct field query for xrefs"""
+    struct: Annotated[str, "Structure name"]
+    field: Annotated[str, "Field name"]
+
+
+class ListQuery(TypedDict, total=False):
+    """Pagination query for listing operations"""
+    filter: Annotated[str, "Optional glob pattern to filter results"]
+    offset: Annotated[int, "Starting index (default: 0)"]
+    count: Annotated[int, "Maximum number of results (default: 50, 0 for all)"]
+
+
+class StringFilter(TypedDict, total=False):
+    """String analysis filter"""
+    pattern: Annotated[str, "Optional pattern to match in strings"]
+    min_length: Annotated[int, "Optional minimum string length"]
+
+
+class BreakpointOp(TypedDict):
+    """Debugger breakpoint operation"""
+    addr: Annotated[str, "Breakpoint address (hex or decimal)"]
+    enabled: Annotated[bool, "Enable (true) or disable (false)"]
+
+
+class InsnPattern(TypedDict, total=False):
+    """Instruction pattern for operand search"""
+    mnem: Annotated[str, "Instruction mnemonic to match"]
+    op0: Annotated[int, "Value to match in first operand"]
+    op1: Annotated[int, "Value to match in second operand"]
+    op2: Annotated[int, "Value to match in third operand"]
+    op_any: Annotated[int, "Value to match in any operand"]
+
+
+class NumberConversion(TypedDict, total=False):
+    """Number conversion request"""
+    text: Annotated[str, "Number string to convert"]
+    size: Annotated[int, "Byte size for conversion (omit for auto)"]
+
+
+class StructRead(TypedDict):
+    """Structure read request"""
+    addr: Annotated[str, "Memory address (hex or decimal)"]
+    struct: Annotated[str, "Structure name"]
+
+
+class TypeApplication(TypedDict, total=False):
+    """Type application operation"""
+    addr: Annotated[str, "Memory address"]
+    name: Annotated[str, "Variable/function name"]
+    ty: Annotated[str, "Type name or declaration"]
+    kind: Annotated[str, "Type of entity (auto-detected if omitted)"]
+    signature: Annotated[str, "Function signature (for kind=function)"]
+    variable: Annotated[str, "Local variable name (for kind=local)"]
+
+
+class StackVarDecl(TypedDict):
+    """Stack variable declaration"""
+    addr: Annotated[str, "Function address"]
+    offset: Annotated[str, "Stack offset"]
+    name: Annotated[str, "Variable name"]
+    ty: Annotated[str, "Type name"]
+
+
+class StackVarDelete(TypedDict):
+    """Stack variable deletion"""
+    addr: Annotated[str, "Function address"]
+    name: Annotated[str, "Variable name"]
 
 
 # ============================================================================
-# TypedDict Definitions
+# TypedDict Definitions for Results
 # ============================================================================
 
 

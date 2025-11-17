@@ -24,10 +24,12 @@ from .utils import (
     RegisterValue,
     ThreadRegisters,
     Breakpoint,
+    BreakpointOp,
+    MemoryRead,
+    MemoryPatch,
     normalize_list_input,
     normalize_dict_list,
     parse_address,
-    JsonSchema,
 )
 
 
@@ -257,23 +259,7 @@ def dbg_list_bps():
 @idaread
 @unsafe
 def dbg_add_bp(
-    addrs: Annotated[
-        list[str] | str,
-        "Address(es) to add breakpoints at",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "string", "description": "Address to add breakpoint at"},
-                    "description": "Array of addresses"
-                },
-                {
-                    "type": "string",
-                    "description": "Comma-separated addresses (e.g., '0x401000, main')"
-                }
-            ]
-        })
-    ]
+    addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"]
 ) -> list[dict]:
     """Add breakpoints"""
     addrs = normalize_list_input(addrs)
@@ -302,23 +288,7 @@ def dbg_add_bp(
 @idaread
 @unsafe
 def dbg_delete_bp(
-    addrs: Annotated[
-        list[str] | str,
-        "Address(es) to delete breakpoints from",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "string", "description": "Address to delete breakpoint from"},
-                    "description": "Array of addresses"
-                },
-                {
-                    "type": "string",
-                    "description": "Comma-separated addresses (e.g., '0x401000, main')"
-                }
-            ]
-        })
-    ]
+    addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"]
 ) -> list[dict]:
     """Delete breakpoints"""
     addrs = normalize_list_input(addrs)
@@ -342,37 +312,8 @@ def dbg_delete_bp(
 @unsafe
 def dbg_enable_bp(
     items: Annotated[
-        list[dict] | dict,
+        list[BreakpointOp] | BreakpointOp | str,
         "Breakpoint enable/disable operations",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "addr": {"type": "string", "description": "Breakpoint address"},
-                            "enabled": {"type": "boolean", "description": "Enable (true) or disable (false)"}
-                        },
-                        "required": ["addr", "enabled"]
-                    },
-                    "description": "Array of breakpoint enable/disable operations"
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "addr": {"type": "string", "description": "Breakpoint address"},
-                        "enabled": {"type": "boolean", "description": "Enable (true) or disable (false)"}
-                    },
-                    "required": ["addr", "enabled"],
-                    "description": "Single breakpoint enable/disable operation"
-                },
-                {
-                    "type": "string",
-                    "description": "Comma-separated 'addr:enabled' pairs (e.g., '0x401000:1, main:0')"
-                }
-            ]
-        })
     ]
 ) -> list[dict]:
     """Enable/disable breakpoints"""
@@ -431,23 +372,7 @@ def dbg_regs() -> list[ThreadRegisters]:
 @idaread
 @unsafe
 def dbg_regs_thread(
-    tids: Annotated[
-        list[int] | int,
-        "Thread ID(s) to get registers for",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "integer", "description": "Thread ID"},
-                    "description": "Array of thread IDs"
-                },
-                {
-                    "type": "integer",
-                    "description": "Single thread ID"
-                }
-            ]
-        })
-    ]
+    tids: Annotated[list[int] | int, "Thread ID(s) to get registers for"]
 ) -> list[dict]:
     """Get thread registers"""
     if isinstance(tids, int):
@@ -486,23 +411,7 @@ def dbg_regs_cur() -> ThreadRegisters:
 @idaread
 @unsafe
 def dbg_gpregs_thread(
-    tids: Annotated[
-        list[int] | int,
-        "Thread ID(s) to get GP registers for",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {"type": "integer", "description": "Thread ID"},
-                    "description": "Array of thread IDs"
-                },
-                {
-                    "type": "integer",
-                    "description": "Single thread ID"
-                }
-            ]
-        })
-    ]
+    tids: Annotated[list[int] | int, "Thread ID(s) to get GP registers for"]
 ) -> list[dict]:
     """Get GP registers for threads"""
     if isinstance(tids, int):
@@ -542,14 +451,7 @@ def dbg_current_gpregs() -> ThreadRegisters:
 @unsafe
 def dbg_regs_for_thread(
     thread_id: Annotated[int, "Thread ID"],
-    register_names: Annotated[
-        str,
-        "Register names (comma-separated)",
-        JsonSchema({
-            "type": "string",
-            "description": "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
-        })
-    ],
+    register_names: Annotated[str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"],
 ) -> ThreadRegisters:
     """Get specific thread registers"""
     dbg = dbg_ensure_running()
@@ -565,14 +467,7 @@ def dbg_regs_for_thread(
 @idaread
 @unsafe
 def dbg_current_regs(
-    register_names: Annotated[
-        str,
-        "Register names (comma-separated)",
-        JsonSchema({
-            "type": "string",
-            "description": "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
-        })
-    ],
+    register_names: Annotated[str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"],
 ) -> ThreadRegisters:
     """Get specific current thread registers"""
     dbg = dbg_ensure_running()
@@ -641,39 +536,7 @@ def dbg_callstack() -> list[dict[str, str]]:
 @idaread
 @unsafe
 def dbg_read_mem(
-    regions: Annotated[
-        list[dict] | dict,
-        "Memory regions to read from",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "addr": {"type": "string", "description": "Address to read from"},
-                            "size": {"type": "integer", "description": "Number of bytes to read"}
-                        },
-                        "required": ["addr", "size"]
-                    },
-                    "description": "Array of memory regions to read"
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "addr": {"type": "string", "description": "Address to read from"},
-                        "size": {"type": "integer", "description": "Number of bytes to read"}
-                    },
-                    "required": ["addr", "size"],
-                    "description": "Single memory region to read"
-                },
-                {
-                    "type": "string",
-                    "description": "Comma-separated 'addr:size' pairs (e.g., '0x401000:256, 0x402000:128')"
-                }
-            ]
-        })
-    ]
+    regions: Annotated[list[MemoryRead] | MemoryRead | str, "Memory regions to read from"]
 ) -> list[dict]:
     """Read debug memory"""
 
@@ -725,39 +588,7 @@ def dbg_read_mem(
 @idaread
 @unsafe
 def dbg_write_mem(
-    regions: Annotated[
-        list[dict] | dict,
-        "Memory regions to write to",
-        JsonSchema({
-            "oneOf": [
-                {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "addr": {"type": "string", "description": "Address to write to"},
-                            "data": {"type": "string", "description": "Hex-encoded data to write"}
-                        },
-                        "required": ["addr", "data"]
-                    },
-                    "description": "Array of memory regions to write"
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "addr": {"type": "string", "description": "Address to write to"},
-                        "data": {"type": "string", "description": "Hex-encoded data to write"}
-                    },
-                    "required": ["addr", "data"],
-                    "description": "Single memory region to write"
-                },
-                {
-                    "type": "string",
-                    "description": "Comma-separated 'addr:hexdata' pairs (e.g., '0x401000:90909090, 0x402000:cccccccc')"
-                }
-            ]
-        })
-    ]
+    regions: Annotated[list[MemoryPatch] | MemoryPatch | str, "Memory regions to write to"]
 ) -> list[dict]:
     """Write debug memory"""
 
