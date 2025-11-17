@@ -52,7 +52,7 @@ class MCP(idaapi.plugin_t):
             )
         else:
             print(
-                f"[MCP] Plugin loaded WITH ERRORS - check console above"
+                "[MCP] Plugin loaded WITH ERRORS - check console above"
             )
             print(f"[MCP] Error: {_IMPORT_ERROR}")
         return idaapi.PLUGIN_KEEP

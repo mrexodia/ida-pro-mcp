@@ -10,13 +10,12 @@ import ida_frame
 import idaapi
 
 from .rpc import jsonrpc
-from .sync import idaread, idawrite, IDAError, ida_major
+from .sync import idaread, idawrite
 from .utils import (
     normalize_list_input,
     normalize_dict_list,
     parse_address,
     get_type_by_name,
-    StackFrameVariable,
     StackVarDecl,
     StackVarDelete,
     get_stack_frame_variables_internal,
@@ -51,10 +50,7 @@ def stack_frame(
 @jsonrpc
 @idawrite
 def declare_stack(
-    items: Annotated[
-        list[StackVarDecl] | StackVarDecl,
-        "[{addr, offset, name, ty}, ...] or {addr, offset, name, ty}",
-    ],
+    items: list[StackVarDecl] | StackVarDecl,
 ):
     """Create stack vars"""
     items = normalize_dict_list(items)
@@ -99,22 +95,11 @@ def declare_stack(
 @jsonrpc
 @idawrite
 def delete_stack(
-    items: Annotated[
-        list[StackVarDelete] | StackVarDelete | str,
-        "[{addr, name}, ...] or {addr, name} or 'addr:name'",
-    ],
+    items: list[StackVarDelete] | StackVarDelete,
 ):
     """Delete stack vars"""
 
-    def parse_addr_name(s: str) -> dict:
-        # Support "addr:varname" format
-        if ":" in s:
-            parts = s.split(":", 1)
-            return {"addr": parts[0].strip(), "name": parts[1].strip()}
-        # Just varname without address (invalid)
-        return {"addr": "", "name": s.strip()}
-
-    items = normalize_dict_list(items, parse_addr_name)
+    items = normalize_dict_list(items)
     results = []
     for item in items:
         fn_addr = item.get("addr", "")

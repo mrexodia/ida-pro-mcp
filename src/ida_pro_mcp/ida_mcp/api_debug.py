@@ -9,7 +9,7 @@ This module provides comprehensive debugging functionality including:
 """
 
 import os
-from typing import Annotated, Optional
+from typing import Annotated
 
 import ida_dbg
 import ida_entry
@@ -311,22 +311,11 @@ def dbg_delete_bp(
 @idaread
 @unsafe
 def dbg_enable_bp(
-    items: Annotated[
-        list[BreakpointOp] | BreakpointOp | str,
-        "Breakpoint enable/disable operations",
-    ]
+    items: list[BreakpointOp] | BreakpointOp
 ) -> list[dict]:
     """Enable/disable breakpoints"""
 
-    def parse_addr_enabled(s: str) -> dict:
-        # Support "addr:0" or "addr:1" or just "addr" (defaults to enabled)
-        if ":" in s:
-            parts = s.split(":", 1)
-            enabled = parts[1].strip().lower() in ("1", "true", "yes", "on")
-            return {"addr": parts[0].strip(), "enabled": enabled}
-        return {"addr": s.strip(), "enabled": True}
-
-    items = normalize_dict_list(items, parse_addr_enabled)
+    items = normalize_dict_list(items)
 
     results = []
     for item in items:
@@ -536,18 +525,11 @@ def dbg_callstack() -> list[dict[str, str]]:
 @idaread
 @unsafe
 def dbg_read_mem(
-    regions: Annotated[list[MemoryRead] | MemoryRead | str, "Memory regions to read from"]
+    regions: list[MemoryRead] | MemoryRead
 ) -> list[dict]:
     """Read debug memory"""
 
-    def parse_addr_size(s: str) -> dict:
-        # Support "addr:size" or just "addr" (default size=256)
-        if ":" in s:
-            parts = s.split(":", 1)
-            return {"addr": parts[0].strip(), "size": int(parts[1].strip(), 0)}
-        return {"addr": s.strip(), "size": 256}
-
-    regions = normalize_dict_list(regions, parse_addr_size)
+    regions = normalize_dict_list(regions)
     dbg_ensure_running()
     results = []
 
@@ -588,19 +570,11 @@ def dbg_read_mem(
 @idaread
 @unsafe
 def dbg_write_mem(
-    regions: Annotated[list[MemoryPatch] | MemoryPatch | str, "Memory regions to write to"]
+    regions: list[MemoryPatch] | MemoryPatch
 ) -> list[dict]:
     """Write debug memory"""
 
-    def parse_addr_data(s: str) -> dict:
-        # Support "addr:hexdata" format
-        if ":" in s:
-            parts = s.split(":", 1)
-            return {"addr": parts[0].strip(), "data": parts[1].strip()}
-        # Just hex data without address (invalid)
-        return {"addr": "", "data": s.strip()}
-
-    regions = normalize_dict_list(regions, parse_addr_data)
+    regions = normalize_dict_list(regions)
     dbg_ensure_running()
     results = []
 

@@ -10,7 +10,7 @@ import idaapi
 
 from .rpc import jsonrpc
 from .sync import idaread, idawrite
-from .utils import normalize_list_input, normalize_dict_list, parse_address, MemoryRead, MemoryPatch
+from .utils import normalize_list_input, parse_address, MemoryRead, MemoryPatch
 
 
 # ============================================================================
@@ -21,7 +21,7 @@ from .utils import normalize_list_input, normalize_dict_list, parse_address, Mem
 @jsonrpc
 @idaread
 def get_bytes(
-    regions: Annotated[list[MemoryRead] | MemoryRead, "Memory regions to read from"]
+    regions: list[MemoryRead] | MemoryRead
 ) -> list[dict]:
     """Read bytes from memory addresses"""
     if isinstance(regions, dict):
@@ -220,7 +220,7 @@ def get_global_value(
 @jsonrpc
 @idawrite
 def patch(
-    patches: Annotated[list[MemoryPatch] | MemoryPatch, "Memory patch operations"]
+    patches: list[MemoryPatch] | MemoryPatch
 ) -> list[dict]:
     """Patch bytes at memory addresses with hex data"""
     if isinstance(patches, dict):

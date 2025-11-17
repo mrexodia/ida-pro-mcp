@@ -3,7 +3,6 @@
 from typing import Annotated, Optional
 
 import ida_hexrays
-import ida_funcs
 import idaapi
 import idautils
 import ida_nalt

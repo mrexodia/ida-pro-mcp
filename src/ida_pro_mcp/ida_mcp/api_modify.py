@@ -1,21 +1,16 @@
-from typing import Annotated
 
 import idaapi
 import idautils
 import idc
 import ida_hexrays
 import ida_bytes
-import ida_nalt
 import ida_typeinf
 import ida_frame
 
 from .rpc import jsonrpc
-from .sync import idawrite, idaread, IDAError
+from .sync import idawrite, IDAError
 from .utils import (
     parse_address,
-    normalize_list_input,
-    normalize_dict_list,
-    looks_like_address,
     decompile_checked,
     refresh_decompiler_ctext,
     CommentOp,
@@ -36,7 +31,7 @@ from .utils import (
 @jsonrpc
 @idawrite
 def set_comments(
-    items: Annotated[list[CommentOp] | CommentOp, "Comment operations to apply"]
+    items: list[CommentOp] | CommentOp
 ):
     """Set comments at addresses (both disassembly and decompiler views)"""
     if isinstance(items, dict):
@@ -120,7 +115,7 @@ def set_comments(
 @jsonrpc
 @idawrite
 def patch_asm(
-    items: Annotated[list[AsmPatchOp] | AsmPatchOp, "Assembly patch operations to apply"]
+    items: list[AsmPatchOp] | AsmPatchOp
 ) -> list[dict]:
     """Patch assembly instructions at addresses"""
     if isinstance(items, dict):
@@ -161,7 +156,7 @@ def patch_asm(
 @jsonrpc
 @idawrite
 def rename(
-    batch: Annotated[RenameBatch, "Batch rename operations across entity types"]
+    batch: RenameBatch
 ) -> dict:
     """Unified rename operation for functions, globals, locals, and stack variables"""
 

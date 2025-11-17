@@ -19,7 +19,6 @@ from .sync import idaread, is_window_active
 from .utils import (
     parse_address,
     normalize_list_input,
-    normalize_dict_list,
     get_function,
     get_prototype,
     get_stack_frame_variables_internal,
@@ -34,14 +33,10 @@ from .utils import (
     extract_function_strings,
     extract_function_constants,
     Function,
-    DisassemblyLine,
     Argument,
-    StackFrameVariable,
     DisassemblyFunction,
     Xref,
-    String,
     FunctionAnalysis,
-    PatternMatch,
     BasicBlock,
     PathQuery,
     StructFieldQuery,
@@ -274,7 +269,7 @@ def xrefs_to(
 @jsonrpc
 @idaread
 def xrefs_to_field(
-    queries: Annotated[list[StructFieldQuery] | StructFieldQuery, "Structure field queries"]
+    queries: list[StructFieldQuery] | StructFieldQuery
 ) -> list[dict]:
     """Get cross-references to structure fields"""
     if isinstance(queries, dict):
@@ -778,7 +773,7 @@ def basic_blocks(
 @jsonrpc
 @idaread
 def find_paths(
-    queries: Annotated[list[PathQuery] | PathQuery, "Source/target address pairs"]
+    queries: list[PathQuery] | PathQuery
 ) -> list[dict]:
     """Find execution paths between source and target addresses"""
     if isinstance(queries, dict):
@@ -1009,7 +1004,7 @@ def search(
 @jsonrpc
 @idaread
 def find_insn_operands(
-    patterns: Annotated[list[InsnPattern] | InsnPattern, "Instruction patterns with operand values to search for"],
+    patterns: list[InsnPattern] | InsnPattern,
     limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
 ) -> list[dict]:
@@ -1291,7 +1286,7 @@ def xref_matrix(
 @jsonrpc
 @idaread
 def analyze_strings(
-    filters: Annotated[list[StringFilter] | StringFilter, "String analysis filters"],
+    filters: list[StringFilter] | StringFilter,
     limit: Annotated[int, "Max matches per filter (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
 ) -> list[dict]:

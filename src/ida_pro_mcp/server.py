@@ -295,9 +295,7 @@ SAFE_FUNCTIONS = [f for f in MCP_FUNCTIONS if f not in UNSAFE_FUNCTIONS]
 # Generate individual resource handlers for each discovered resource
 def create_resource_handler(res_name: str, res_func: ast.FunctionDef, uri_pattern: str):
     """Create a resource handler function that calls the IDA plugin via JSON-RPC"""
-    import json
     import re
-    import types
 
     # Extract parameter names from URI pattern (e.g., {addr} -> addr)
     param_names = re.findall(r'\{(\w+)\}', uri_pattern)
@@ -668,11 +666,11 @@ def install_ida_plugin(*, uninstall: bool = False, quiet: bool = False, allow_id
 
         if not quiet:
             if installed_items:
-                print(f"Installed IDA Pro plugin (IDA restart required)")
+                print("Installed IDA Pro plugin (IDA restart required)")
                 for item in installed_items:
                     print(f"  {item}")
             else:
-                print(f"Skipping IDA plugin installation (already up to date)")
+                print("Skipping IDA plugin installation (already up to date)")
 
 def main():
     global ida_host, ida_port

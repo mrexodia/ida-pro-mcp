@@ -17,7 +17,6 @@ from typing import (
     overload,
 )
 
-import ida_bytes
 import ida_funcs
 import ida_hexrays
 import ida_kernwin

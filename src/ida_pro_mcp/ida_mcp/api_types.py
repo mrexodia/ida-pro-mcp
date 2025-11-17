@@ -1,4 +1,4 @@
-from typing import Annotated, TypedDict, Optional
+from typing import Annotated
 
 import ida_typeinf
 import ida_hexrays
@@ -9,7 +9,7 @@ import ida_ida
 import idaapi
 
 from .rpc import jsonrpc
-from .sync import idaread, idawrite, IDAError, ida_major
+from .sync import idaread, idawrite, ida_major
 from .utils import (
     normalize_list_input,
     normalize_dict_list,
@@ -165,10 +165,7 @@ def struct_info(
 @jsonrpc
 @idaread
 def read_struct(
-    queries: Annotated[
-        list[StructRead] | StructRead,
-        "Read structure fields at memory addresses"
-    ]
+    queries: list[StructRead] | StructRead
 ) -> list[dict]:
     """Read struct fields"""
 
@@ -327,10 +324,7 @@ def search_structs(
 @jsonrpc
 @idawrite
 def apply_types(
-    applications: Annotated[
-        list[TypeApplication] | TypeApplication,
-        "Apply types to functions, globals, locals, or stack variables"
-    ]
+    applications: list[TypeApplication] | TypeApplication
 ) -> list[dict]:
     """Apply types (function/global/local/stack)"""
 

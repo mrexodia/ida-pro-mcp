@@ -4,7 +4,7 @@ if sys.version_info < (3, 11):
     raise RuntimeError("Python 3.11 or higher is required for the MCP plugin")
 
 from typing import Callable
-from .jsonrpc import JsonRpcRegistry, JsonRpcException, JsonRpcError
+from .jsonrpc import JsonRpcRegistry, JsonRpcError
 
 
 class JSONRPCError(Exception):
