@@ -130,10 +130,10 @@ Available functionality:
 
 ## Pattern Matching & Search
 
-- `find_bytes(patterns, limit=1000, offset=0)`: Find byte pattern(s) in binary (e.g., "48 8B ?? ??"). Returns `cursor: {next: N}` or `{done: true}` for pagination.
-- `find_insns(sequences, limit=1000, offset=0)`: Find instruction sequence(s) in code. Returns `cursor: {next: N}` or `{done: true}` for pagination.
-- `find_insn_operands(patterns, limit=1000, offset=0)`: Find instructions with specific operand values (e.g., SUB with 0x60, CMP with specific immediates). Returns `cursor: {next: N}` or `{done: true}` for pagination.
-- `search(type, targets, limit=1000, offset=0)`: Advanced search with batch-first API (immediate values, strings, data/code references). Returns `cursor: {next: N}` or `{done: true}` per target.
+- `find_bytes(patterns, limit=1000, offset=0)`: Find byte pattern(s) in binary (e.g., "48 8B ?? ??"). Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
+- `find_insns(sequences, limit=1000, offset=0)`: Find instruction sequence(s) in code. Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
+- `find_insn_operands(patterns, limit=1000, offset=0)`: Find instructions with specific operand values. Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
+- `search(type, targets, limit=1000, offset=0)`: Advanced search (immediate values, strings, data/code references). Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
 
 ## Control Flow Analysis
 
@@ -164,14 +164,14 @@ Available functionality:
 
 ## String Analysis
 
-- `analyze_strings(filters, limit=1000, offset=0)`: Analyze strings with pattern matching, length filtering, and xref information. Returns `cursor: {next: N}` or `{done: true}` per filter.
+- `analyze_strings(filters, limit=1000, offset=0)`: Analyze strings with pattern matching, length filtering, and xref information. Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
 
 **Key Features:**
 
 - **Type-safe API**: All functions use strongly-typed parameters with TypedDict schemas for better IDE support and LLM structured outputs
 - **Batch-first design**: Most operations accept both single items and lists
 - **Consistent error handling**: All batch operations return `[{..., error: null|string}, ...]`
-- **Cursor-based pagination**: Search functions return `cursor: {next: offset}` or `{done: true}` to enable efficient result streaming (default limit: 1000)
+- **Cursor-based pagination**: Search functions return `cursor: {next: offset}` or `{done: true}` (default limit: 1000, enforced max: 10000 to prevent token overflow)
 - **Performance**: Strings are cached with MD5-based invalidation to avoid repeated `build_strlist` calls in large projects
 
 ## Prerequisites

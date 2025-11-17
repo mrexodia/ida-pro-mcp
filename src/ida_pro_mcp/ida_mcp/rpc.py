@@ -32,10 +32,17 @@ class RPCRegistry(JsonRpcRegistry):
         return func
 
     def register_resource(self, uri: str, func: Callable) -> Callable:
-        """Register a function as a resource with URI pattern"""
+        """Register a function as a resource with URI pattern
+
+        Resources are registered in TWO places:
+        1. rpc_registry.resources - for URI pattern matching and resource listing
+        2. rpc_registry.methods - so resources/read can dispatch to them via JSON-RPC
+
+        Note: Resources are filtered out of tools/list via __resource_uri__ attribute check
+        """
         func.__resource_uri__ = uri
         self.resources[func.__name__] = func
-        # Also register as a regular JSON-RPC method so it can be called
+        # Also register as JSON-RPC method (but won't appear in tools/list)
         self.method(func)
         return func
 

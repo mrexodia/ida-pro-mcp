@@ -318,6 +318,8 @@ class MCPServer:
             "tools": [
                 self._generate_tool_schema(func_name, func)
                 for func_name, func in rpc_registry.methods.items()
+                # Exclude resources - they should only be accessed via resources/read
+                if not hasattr(func, "__resource_uri__")
             ]
         }
 

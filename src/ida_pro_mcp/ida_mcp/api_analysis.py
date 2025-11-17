@@ -139,11 +139,16 @@ def decompile(
 @idaread
 def disasm(
     addrs: Annotated[list[str] | str, "Function addresses to disassemble"],
-    max_instructions: Annotated[int, "Max instructions per function (default: 5000, 0 for unlimited)"] = 5000,
+    max_instructions: Annotated[int, "Max instructions per function (default: 5000, max: 50000)"] = 5000,
     offset: Annotated[int, "Skip first N instructions (default: 0)"] = 0
 ) -> list[dict]:
     """Disassemble functions to assembly instructions"""
     addrs = normalize_list_input(addrs)
+
+    # Enforce max limit
+    if max_instructions <= 0 or max_instructions > 50000:
+        max_instructions = 50000
+
     results = []
 
     for start_addr in addrs:
@@ -184,12 +189,8 @@ def disasm(
 
             # Apply pagination
             total_insns = len(all_instructions)
-            if max_instructions > 0:
-                paginated_insns = all_instructions[offset:offset + max_instructions]
-                has_more = offset + max_instructions < total_insns
-            else:
-                paginated_insns = all_instructions[offset:]
-                has_more = False
+            paginated_insns = all_instructions[offset:offset + max_instructions]
+            has_more = offset + max_instructions < total_insns
 
             # Build disassembly string from paginated instructions
             lines_str = f"{func_name} ({segment_name} @ {hex(func.start_ea)}):"
@@ -564,11 +565,16 @@ def analyze_funcs(
 @idaread
 def find_bytes(
     patterns: Annotated[list[str] | str, "Byte patterns to search for (e.g. '48 8B ?? ??')"],
-    limit: Annotated[int, "Max matches per pattern (default: 1000, 0 for unlimited)"] = 1000,
+    limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
 ) -> list[dict]:
     """Search for byte patterns in the binary (supports wildcards with ??)"""
     patterns = normalize_list_input(patterns)
+
+    # Enforce max limit
+    if limit <= 0 or limit > 10000:
+        limit = 10000
+
     results = []
     for pattern in patterns:
         all_matches = []
@@ -620,13 +626,17 @@ def find_bytes(
 @idaread
 def find_insns(
     sequences: Annotated[list[list[str]] | list[str], "Instruction mnemonic sequences to search for"],
-    limit: Annotated[int, "Max matches per sequence (default: 1000, 0 for unlimited)"] = 1000,
+    limit: Annotated[int, "Max matches per sequence (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
 ) -> list[dict]:
     """Search for sequences of instruction mnemonics in the binary"""
     # Handle single sequence vs array of sequences
     if sequences and isinstance(sequences[0], str):
         sequences = [sequences]
+
+    # Enforce max limit
+    if limit <= 0 or limit > 10000:
+        limit = 10000
 
     results = []
 
@@ -703,11 +713,16 @@ def find_insns(
 @idaread
 def basic_blocks(
     addrs: Annotated[list[str] | str, "Function addresses to get basic blocks for"],
-    max_blocks: Annotated[int, "Max basic blocks per function (default: 1000, 0 for unlimited)"] = 1000,
+    max_blocks: Annotated[int, "Max basic blocks per function (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N blocks (default: 0)"] = 0
 ) -> list[dict]:
     """Get control flow graph basic blocks for functions"""
     addrs = normalize_list_input(addrs)
+
+    # Enforce max limit
+    if max_blocks <= 0 or max_blocks > 10000:
+        max_blocks = 10000
+
     results = []
     for fn_addr in addrs:
         try:
@@ -739,12 +754,8 @@ def basic_blocks(
 
             # Apply pagination
             total_blocks = len(all_blocks)
-            if max_blocks > 0:
-                blocks = all_blocks[offset:offset + max_blocks]
-                has_more = offset + max_blocks < total_blocks
-            else:
-                blocks = all_blocks[offset:]
-                has_more = False
+            blocks = all_blocks[offset:offset + max_blocks]
+            has_more = offset + max_blocks < total_blocks
 
             results.append({
                 "addr": fn_addr,
@@ -855,12 +866,16 @@ def find_paths(
 def search(
     type: Annotated[str, "Search type: 'string', 'immediate', 'data_ref', or 'code_ref'"],
     targets: Annotated[list[str | int] | str | int, "Search targets (strings, integers, or addresses)"],
-    limit: Annotated[int, "Max matches per target (default: 1000, 0 for unlimited)"] = 1000,
+    limit: Annotated[int, "Max matches per target (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
 ) -> list[dict]:
     """Search for patterns in the binary (strings, immediate values, or references)"""
     if not isinstance(targets, list):
         targets = [targets]
+
+    # Enforce max limit to prevent token overflow
+    if limit <= 0 or limit > 10000:
+        limit = 10000
 
     results = []
 
@@ -872,12 +887,8 @@ def search(
             all_matches = [s["addr"] for s in all_strings if pattern_str.lower() in s["string"].lower()]
 
             # Apply pagination
-            if limit > 0:
-                matches = all_matches[offset:offset + limit]
-                has_more = offset + limit < len(all_matches)
-            else:
-                matches = all_matches[offset:]
-                has_more = False
+            matches = all_matches[offset:offset + limit]
+            has_more = offset + limit < len(all_matches)
 
             results.append({
                 "query": pattern_str,
@@ -909,12 +920,8 @@ def search(
                 pass
 
             # Apply pagination
-            if limit > 0:
-                matches = all_matches[offset:offset + limit]
-                has_more = offset + limit < len(all_matches)
-            else:
-                matches = all_matches[offset:]
-                has_more = False
+            matches = all_matches[offset:offset + limit]
+            has_more = offset + limit < len(all_matches)
 
             results.append({
                 "query": value,
@@ -1003,12 +1010,16 @@ def search(
 @idaread
 def find_insn_operands(
     patterns: Annotated[list[InsnPattern] | InsnPattern, "Instruction patterns with operand values to search for"],
-    limit: Annotated[int, "Max matches per pattern (default: 1000, 0 for unlimited)"] = 1000,
+    limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
 ) -> list[dict]:
     """Find instructions with specific mnemonics and operand values"""
     if isinstance(patterns, dict):
         patterns = [patterns]
+
+    # Enforce max limit
+    if limit <= 0 or limit > 10000:
+        limit = 10000
 
     results = []
     for pattern in patterns:
@@ -1281,12 +1292,17 @@ def xref_matrix(
 @idaread
 def analyze_strings(
     filters: Annotated[list[StringFilter] | StringFilter, "String analysis filters"],
-    limit: Annotated[int, "Max matches per filter (default: 1000, 0 for unlimited)"] = 1000,
+    limit: Annotated[int, "Max matches per filter (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0
 ) -> list[dict]:
     """Analyze and filter strings in the binary"""
     if isinstance(filters, dict):
         filters = [filters]
+
+    # Enforce max limit
+    if limit <= 0 or limit > 10000:
+        limit = 10000
+
     # Use cached strings to avoid rebuilding on every call
     all_strings = _get_cached_strings_dict()
 
