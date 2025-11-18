@@ -94,16 +94,23 @@ def idaread(f):
 
 def is_window_active():
     """Returns whether IDA is currently active"""
+    # Source: https://github.com/OALabs/hexcopy-ida/blob/8b0b2a3021d7dc9010c01821b65a80c47d491b61/hexcopy.py#L30
+    using_pyside6 = (ida_major > 9) or (ida_major == 9 and ida_minor >= 2)
+
     try:
-        from PyQt5.QtWidgets import QApplication
-    except (ImportError, SystemError):
-        return False
+        if using_pyside6:
+            import PySide6.QtWidgets as QApplication
+        else:
+            import PyQt5.QtWidgets as QApplication
 
-    app = QApplication.instance()
-    if app is None:
-        return False
+        app = QApplication.instance()
+        if app is None:
+            return False
 
-    for widget in app.topLevelWidgets():
-        if widget.isActiveWindow():
-            return True
+        for widget in app.topLevelWidgets():
+            if widget.isActiveWindow():
+                return True
+    except Exception:
+        # Headless mode or other error (this is not a critical feature)
+        pass
     return False
