@@ -6,8 +6,6 @@ https://github.com/user-attachments/assets/6ebeaa92-a9db-43fa-b756-eececce2aca0
 
 The binaries and prompt for the video are available in the [mcp-reversing-dataset](https://github.com/mrexodia/mcp-reversing-dataset) repository.
 
-Available functionality:
-
 ## MCP Resources
 
 **Resources** are browsable IDB state endpoints that provide read-only access to binary metadata, functions, strings, and types. Unlike tools (which perform actions), resources follow REST-like URI patterns for efficient data exploration.
