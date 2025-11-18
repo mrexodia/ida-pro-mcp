@@ -5,34 +5,12 @@ It loads the actual implementation from the ida_mcp package.
 """
 
 import idaapi
-import traceback
+from typing import TYPE_CHECKING
 
-# Try to import the package implementation
-try:
-    from ida_mcp import MCPServer
-
-    _IMPORTS_OK = True
-    _IMPORT_ERROR = None
-except Exception as e:
-    _IMPORTS_OK = False
-    _IMPORT_ERROR = e
-    traceback.print_exc()
-
-    # Create dummy server
-    class MCPServer:
-        def __init__(self):
-            pass
-
-        def start(self):
-            print("[MCP] Cannot start: import failed")
-
-        def stop(self):
-            pass
-
-
-# ============================================================================
-# IDA Plugin Class
-# ============================================================================
+if TYPE_CHECKING:
+    from .ida_mcp import MCP_SERVER
+else:
+    from ida_mcp import MCP_SERVER
 
 
 class MCP(idaapi.plugin_t):
@@ -42,27 +20,40 @@ class MCP(idaapi.plugin_t):
     wanted_name = "MCP"
     wanted_hotkey = "Ctrl-Alt-M"
 
+    # TODO: make these configurable
+    HOST = "127.0.0.1"
+    BASE_PORT = 13337
+    MAX_PORT_TRIES = 10
+
     def init(self):
-        global _IMPORTS_OK, _IMPORT_ERROR
-        self.mcp_server = MCPServer()
         hotkey = MCP.wanted_hotkey.replace("-", "+")
         if __import__("sys").platform == "darwin":
             hotkey = hotkey.replace("Alt", "Option")
 
-        if _IMPORTS_OK:
-            print(
-                f"[MCP] Plugin loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server"
-            )
-        else:
-            print("[MCP] Plugin loaded WITH ERRORS - check console above")
-            print(f"[MCP] Error: {_IMPORT_ERROR}")
+        print(
+            f"[MCP] Plugin loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server"
+        )
         return idaapi.PLUGIN_KEEP
 
     def run(self, arg):
-        self.mcp_server.start()
+        for i in range(self.MAX_PORT_TRIES):
+            port = self.BASE_PORT + i
+            try:
+                MCP_SERVER.serve(self.HOST, port)
+                break
+            except OSError as e:
+                if e.errno in (98, 10048):  # Address already in use
+                    if i == self.MAX_PORT_TRIES - 1:
+                        print(
+                            f"[MCP] Error: Could not find available port in range {self.BASE_PORT}-{self.BASE_PORT + self.MAX_PORT_TRIES - 1}"
+                        )
+                        self.running = False
+                        return
+                    continue
+                raise
 
     def term(self):
-        self.mcp_server.stop()
+        MCP_SERVER.stop()
 
 
 def PLUGIN_ENTRY():

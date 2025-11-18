@@ -4,6 +4,7 @@ import functools
 from enum import IntEnum
 import idaapi
 import ida_kernwin
+from .rpc import McpToolError
 
 # ============================================================================
 # IDA Synchronization & Error Handling
@@ -12,7 +13,7 @@ import ida_kernwin
 ida_major, ida_minor = map(int, idaapi.get_kernel_version().split("."))
 
 
-class IDAError(Exception):
+class IDAError(McpToolError):
     def __init__(self, message: str):
         super().__init__(message)
 

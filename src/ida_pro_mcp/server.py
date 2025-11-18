@@ -1,6 +1,5 @@
 import os
 import sys
-import ast
 import json
 import shutil
 import argparse
@@ -8,240 +7,72 @@ import http.client
 import tempfile
 import tomllib
 import tomli_w
-from typing import Any
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 import glob
 
-from mcp.server.fastmcp import FastMCP
+if TYPE_CHECKING:
+    from ida_pro_mcp.ida_mcp.zeromcp import McpServer
+    from ida_pro_mcp.ida_mcp.zeromcp.jsonrpc import JsonRpcResponse, JsonRpcRequest
+else:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ida_mcp"))
+    from zeromcp import McpServer
+    from zeromcp.jsonrpc import JsonRpcResponse, JsonRpcRequest
+    sys.path.pop(0)  # Clean up
 
-# The log_level is necessary for Cline to work: https://github.com/jlowin/fastmcp/issues/81
-mcp = FastMCP("ida-pro-mcp", log_level="ERROR")
+IDA_HOST = "127.0.0.1"
+IDA_PORT = 13337
 
-jsonrpc_request_id = 1
-ida_host = "127.0.0.1"
-ida_port = 13337
+mcp = McpServer("ida-pro-mcp")
+dispatch_original = mcp.registry.dispatch
 
+def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
+    """Dispatch JSON-RPC requests to the MCP server registry"""
+    if not isinstance(request, dict):
+        request_obj: JsonRpcRequest = json.loads(request)
+    else:
+        request_obj: JsonRpcRequest = request # type: ignore
 
-def make_jsonrpc_request(method: str, *params):
-    """Make a JSON-RPC request to the IDA plugin"""
-    global jsonrpc_request_id, ida_host, ida_port
-    conn = http.client.HTTPConnection(ida_host, ida_port)
-    request = {
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": list(params),
-        "id": jsonrpc_request_id,
-    }
-    jsonrpc_request_id += 1
+    if request_obj["method"] == "initialize":
+            return dispatch_original(request)
+    elif request_obj["method"].startswith("notifications/"):
+        return dispatch_original(request)
 
+    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=1)
     try:
+        if isinstance(request, dict):
+            request = json.dumps(request)
+        elif isinstance(request, str):
+            request = request.encode("utf-8")
         conn.request(
-            "POST", "/mcp", json.dumps(request), {"Content-Type": "application/json"}
+            "POST", "/mcp", request, {"Content-Type": "application/json"}
         )
         response = conn.getresponse()
-        data = json.loads(response.read().decode())
+        data = response.read().decode()
+        return json.loads(data)
+    except Exception as e:
+        id = request_obj.get("id")
+        if id is None:
+            return None  # Notification, no response needed
 
-        if "error" in data:
-            error = data["error"]
-            code = error["code"]
-            message = error["message"]
-            pretty = f"JSON-RPC error {code}: {message}"
-            if "data" in error:
-                pretty += "\n" + error["data"]
-            raise Exception(pretty)
-
-        result = data["result"]
-        # NOTE: LLMs do not respond well to empty responses
-        if result is None:
-            result = "success"
-        return result
-    except Exception:
-        raise
-    finally:
-        conn.close()
-
-
-@mcp.tool()
-def check_connection() -> str:
-    """Check if the IDA plugin is running"""
-    try:
-        metadata = make_jsonrpc_request("get_metadata")
-        return f"Successfully connected to IDA Pro (open file: {metadata['module']})"
-    except Exception:
         if sys.platform == "darwin":
             shortcut = "Ctrl+Option+M"
         else:
             shortcut = "Ctrl+Alt+M"
-        return f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?"
+        return JsonRpcResponse({
+            "jsonrpc": "2.0",
+            "error": {
+                "code": -32000,
+                "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?",
+                "data": str(e),
+            },
+            "id": id,
+        })
+    finally:
+        conn.close()
 
 
-# Code taken from https://github.com/mrexodia/ida-pro-mcp (MIT License)
-class MCPVisitor(ast.NodeVisitor):
-    def __init__(self):
-        self.types: dict[str, ast.ClassDef] = {}
-        self.functions: dict[str, ast.FunctionDef] = {}
-        self.resources: dict[
-            str, tuple[ast.FunctionDef, str]
-        ] = {}  # name -> (func, uri)
-        self.descriptions: dict[str, str] = {}
-        self.unsafe: list[str] = []
-
-    def _dict_to_ast(self, obj: Any) -> ast.expr:
-        """Convert Python dict/list to AST representation"""
-        if isinstance(obj, dict):
-            return ast.Dict(
-                keys=[ast.Constant(value=k) for k in obj.keys()],
-                values=[self._dict_to_ast(v) for v in obj.values()],
-                ctx=ast.Load(),
-            )
-        elif isinstance(obj, list):
-            return ast.List(
-                elts=[self._dict_to_ast(item) for item in obj], ctx=ast.Load()
-            )
-        else:
-            return ast.Constant(value=obj)
-
-    def visit_FunctionDef(self, node):
-        for decorator in node.decorator_list:
-            # Handle @resource("uri") decorator
-            if isinstance(decorator, ast.Call):
-                if (
-                    isinstance(decorator.func, ast.Name)
-                    and decorator.func.id == "resource"
-                ):
-                    if len(decorator.args) > 0 and isinstance(
-                        decorator.args[0], ast.Constant
-                    ):
-                        uri = decorator.args[0].value
-                        self.resources[node.name] = (node, uri)
-                        # Extract description from docstring
-                        body_comment = node.body[0]
-                        if isinstance(body_comment, ast.Expr) and isinstance(
-                            body_comment.value, ast.Constant
-                        ):
-                            self.descriptions[node.name] = body_comment.value.value
-                        return
-            elif isinstance(decorator, ast.Name):
-                if decorator.id == "jsonrpc":
-                    for i, arg in enumerate(node.args.args):
-                        arg_name = arg.arg
-                        arg_type = arg.annotation
-                        if arg_type is None:
-                            raise Exception(
-                                f"Missing argument type for {node.name}.{arg_name}"
-                            )
-                        if isinstance(arg_type, ast.Subscript):
-                            assert isinstance(arg_type.value, ast.Name)
-                            assert arg_type.value.id == "Annotated"
-                            assert isinstance(arg_type.slice, ast.Tuple)
-                            assert len(arg_type.slice.elts) >= 2
-                            annot_type = arg_type.slice.elts[0]
-                            annot_description = arg_type.slice.elts[1]
-                            assert isinstance(annot_description, ast.Constant)
-
-                            # Check for JsonSchema annotation (3rd element in Annotated tuple)
-                            json_schema = None
-                            if len(arg_type.slice.elts) >= 3:
-                                schema_elem = arg_type.slice.elts[2]
-                                # Check if it's a JsonSchema(...) call
-                                if (
-                                    isinstance(schema_elem, ast.Call)
-                                    and isinstance(schema_elem.func, ast.Name)
-                                    and schema_elem.func.id == "JsonSchema"
-                                ):
-                                    # Extract the schema dict from JsonSchema(...)
-                                    if len(schema_elem.args) > 0:
-                                        json_schema = schema_elem.args[0]
-
-                            # Build Field keywords
-                            field_keywords = [
-                                ast.keyword(arg="description", value=annot_description)
-                            ]
-
-                            # Add json_schema_extra if JsonSchema annotation found
-                            if json_schema:
-                                field_keywords.append(
-                                    ast.keyword(
-                                        arg="json_schema_extra", value=json_schema
-                                    )
-                                )
-
-                            node.args.args[i].annotation = ast.Subscript(
-                                value=ast.Name(id="Annotated", ctx=ast.Load()),
-                                slice=ast.Tuple(
-                                    elts=[
-                                        annot_type,
-                                        ast.Call(
-                                            func=ast.Name(id="Field", ctx=ast.Load()),
-                                            args=[],
-                                            keywords=field_keywords,
-                                        ),
-                                    ],
-                                    ctx=ast.Load(),
-                                ),
-                                ctx=ast.Load(),
-                            )
-                        elif isinstance(arg_type, ast.Name):
-                            pass
-                        else:
-                            raise Exception(
-                                f"Unexpected type annotation for {node.name}.{arg_name} -> {type(arg_type)}"
-                            )
-
-                    body_comment = node.body[0]
-                    if isinstance(body_comment, ast.Expr) and isinstance(
-                        body_comment.value, ast.Constant
-                    ):
-                        new_body = [body_comment]
-                        self.descriptions[node.name] = body_comment.value.value
-                    else:
-                        new_body = []
-
-                    call_args = [ast.Constant(value=node.name)]
-                    for arg in node.args.args:
-                        call_args.append(ast.Name(id=arg.arg, ctx=ast.Load()))
-
-                    # Generate the RPC call
-                    rpc_call = ast.Call(
-                        func=ast.Name(id="make_jsonrpc_request", ctx=ast.Load()),
-                        args=call_args,
-                        keywords=[],
-                    )
-
-                    new_body.append(ast.Return(value=rpc_call))
-                    decorator_list = [
-                        ast.Call(
-                            func=ast.Attribute(
-                                value=ast.Name(id="mcp", ctx=ast.Load()),
-                                attr="tool",
-                                ctx=ast.Load(),
-                            ),
-                            args=[],
-                            keywords=[],
-                        )
-                    ]
-                    node_nobody = ast.FunctionDef(
-                        node.name,
-                        node.args,
-                        new_body,
-                        decorator_list,
-                        node.returns,
-                        node.type_comment,
-                        lineno=node.lineno,
-                        col_offset=node.col_offset,
-                    )
-                    assert node.name not in self.functions, (
-                        f"Duplicate function: {node.name}"
-                    )
-                    self.functions[node.name] = node_nobody
-                elif decorator.id == "unsafe":
-                    self.unsafe.append(node.name)
-
-    def visit_ClassDef(self, node):
-        for base in node.bases:
-            if isinstance(base, ast.Name):
-                if base.id == "TypedDict":
-                    self.types[node.name] = node
+mcp.registry.dispatch = dispatch_proxy
 
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -258,178 +89,6 @@ if not os.path.exists(IDA_PLUGIN_LOADER):
     raise RuntimeError(
         f"IDA plugin loader not found at {IDA_PLUGIN_LOADER} (did you move it?)"
     )
-
-# Parse plugin code for type generation
-visitor = MCPVisitor()
-
-# Parse all api_*.py files in package
-api_files = glob.glob(os.path.join(IDA_PLUGIN_PKG, "api_*.py"))
-utils_file = os.path.join(IDA_PLUGIN_PKG, "utils.py")
-
-# Parse utils.py first for TypedDict definitions
-if os.path.exists(utils_file):
-    with open(utils_file, "r", encoding="utf-8") as f:
-        code = f.read()
-    module = ast.parse(code, utils_file)
-    visitor.visit(module)
-
-# Parse all api files for @jsonrpc functions and @resource functions
-for api_file in sorted(api_files):
-    with open(api_file, "r", encoding="utf-8") as f:
-        code = f.read()
-    module = ast.parse(code, api_file)
-    visitor.visit(module)
-code = """# NOTE: This file has been automatically generated, do not modify!
-# Architecture based on https://github.com/mrexodia/ida-pro-mcp (MIT License)
-import sys
-if sys.version_info >= (3, 12):
-    from typing import Annotated, Optional, TypedDict, Generic, TypeVar, NotRequired
-else:
-    from typing_extensions import Annotated, Optional, TypedDict, Generic, TypeVar, NotRequired
-from pydantic import Field
-
-T = TypeVar("T")
-
-# Resource metadata for MCP
-RESOURCE_METADATA = {}
-
-"""
-for type in visitor.types.values():
-    code += ast.unparse(type)
-    code += "\n\n"
-for function in visitor.functions.values():
-    code += ast.unparse(function)
-    code += "\n\n"
-
-# Add resource metadata dictionary
-for res_name, (res_func, uri) in visitor.resources.items():
-    description = visitor.descriptions.get(res_name, "")
-    first_line = description.split("\n")[0].strip() if description else ""
-    code += f'RESOURCE_METADATA["{res_name}"] = {{"uri": "{uri}", "description": "{first_line}"}}\n'
-code += "\n"
-
-try:
-    if os.path.exists(GENERATED_PY):
-        with open(GENERATED_PY, "rb") as f:
-            existing_code_bytes = f.read()
-    else:
-        existing_code_bytes = b""
-    code_bytes = code.encode("utf-8").replace(b"\r", b"")
-    if code_bytes != existing_code_bytes:
-        with open(GENERATED_PY, "wb") as f:
-            f.write(code_bytes)
-except Exception:
-    print(f"Failed to generate code: {GENERATED_PY}", file=sys.stderr, flush=True)
-
-exec(compile(code, GENERATED_PY, "exec"))
-
-MCP_FUNCTIONS = ["check_connection"] + list(visitor.functions.keys())
-UNSAFE_FUNCTIONS = visitor.unsafe
-SAFE_FUNCTIONS = [f for f in MCP_FUNCTIONS if f not in UNSAFE_FUNCTIONS]
-
-# ============================================================================
-# MCP Resource Handlers
-# ============================================================================
-
-
-# Generate individual resource handlers for each discovered resource
-def create_resource_handler(res_name: str, res_func: ast.FunctionDef, uri_pattern: str):
-    """Create a resource handler function that calls the IDA plugin via JSON-RPC"""
-    import re
-
-    # Extract parameter names from URI pattern (e.g., {addr} -> addr)
-    param_names = re.findall(r"\{(\w+)\}", uri_pattern)
-
-    # Get description
-    description = visitor.descriptions.get(res_name, "")
-    first_line = description.split("\n")[0] if description else f"Read {uri_pattern}"
-
-    # Create handler function with proper signature using exec
-    if param_names:
-        # Build function signature
-        params_str = ", ".join(param_names)
-        func_code = f"""
-def handler({params_str}):
-    import json
-    try:
-        result = make_jsonrpc_request("{res_name}", {params_str})
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        return json.dumps({{"error": str(e)}}, indent=2)
-"""
-    else:
-        func_code = f"""
-def handler():
-    import json
-    try:
-        result = make_jsonrpc_request("{res_name}")
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        return json.dumps({{"error": str(e)}}, indent=2)
-"""
-
-    # Execute function code to create handler
-    local_vars = {"make_jsonrpc_request": make_jsonrpc_request}
-    exec(func_code, local_vars)
-    handler = local_vars["handler"]
-    handler.__doc__ = first_line
-
-    # Register with FastMCP
-    mcp.resource(uri_pattern)(handler)
-
-
-# Register all discovered resources
-for res_name, (res_func, uri_pattern) in visitor.resources.items():
-    create_resource_handler(res_name, res_func, uri_pattern)
-
-
-def generate_readme():
-    print("README:")
-    print("- `check_connection()`: Check if the IDA plugin is running.")
-
-    def get_description(name: str):
-        function = visitor.functions[name]
-        signature = function.name + "("
-        for i, arg in enumerate(function.args.args):
-            if i > 0:
-                signature += ", "
-            signature += arg.arg
-        signature += ")"
-        description = (
-            visitor.descriptions.get(function.name, "<no description>")
-            .strip()
-            .split("\n")[0]
-            .strip()
-        )
-        if description[-1] != ".":
-            description += "."
-        return f"- `{signature}`: {description}"
-
-    for safe_function in SAFE_FUNCTIONS:
-        if safe_function != "check_connection":
-            print(get_description(safe_function))
-    print("\nUnsafe functions (`--unsafe` flag required):\n")
-    for unsafe_function in UNSAFE_FUNCTIONS:
-        print(get_description(unsafe_function))
-    print("\nMCP Config:")
-    mcp_config = {
-        "mcpServers": {
-            "github.com/mrexodia/ida-pro-mcp": {
-                "command": "uv",
-                "args": [
-                    "--directory",
-                    "c:\\MCP\\ida-pro-mcp",
-                    "run",
-                    "server.py",
-                    "--install-plugin",
-                ],
-                "timeout": 1800,
-                "disabled": False,
-            }
-        }
-    }
-    print(json.dumps(mcp_config, indent=2))
-
 
 def get_python_executable():
     """Get the path to the Python executable"""
@@ -484,7 +143,7 @@ def copy_python_env(env: dict[str, str]):
 
 
 def print_mcp_config():
-    mcp_url = f"http://{ida_host}:{ida_port}/mcp"
+    mcp_url = f"http://{IDA_HOST}:{IDA_PORT}/mcp"
     print(
         json.dumps(
             {"mcpServers": {mcp.name: {"type": "http", "url": mcp_url}}}, indent=2
@@ -730,16 +389,11 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                 continue
             del mcp_servers[mcp.name]
         else:
-            mcp_url = f"http://{ida_host}:{ida_port}/mcp"
+            mcp_url = f"http://{IDA_HOST}:{IDA_PORT}/mcp"
             mcp_servers[mcp.name] = {
                 "type": "http",
                 "url": mcp_url,
             }
-
-            # JSON clients support autoApprove/alwaysAllow
-            if not is_toml:
-                mcp_servers[mcp.name]["autoApprove"] = SAFE_FUNCTIONS
-                mcp_servers[mcp.name]["alwaysAllow"] = SAFE_FUNCTIONS
 
         # Atomic write: temp file + rename
         suffix = ".toml" if is_toml else ".json"
@@ -776,7 +430,7 @@ def install_ida_plugin(
     *, uninstall: bool = False, quiet: bool = False, allow_ida_free: bool = False
 ):
     if sys.platform == "win32":
-        ida_folder = os.path.join(os.getenv("APPDATA"), "Hex-Rays", "IDA Pro")
+        ida_folder = os.path.join(os.environ["APPDATA"], "Hex-Rays", "IDA Pro")
     else:
         ida_folder = os.path.join(os.path.expanduser("~"), ".idapro")
     if not allow_ida_free:
@@ -881,7 +535,7 @@ def install_ida_plugin(
 
 
 def main():
-    global ida_host, ida_port
+    global IDA_HOST, IDA_PORT
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
     parser.add_argument(
         "--install", action="store_true", help="Install the MCP Server and IDA plugin"
@@ -907,11 +561,8 @@ def main():
     parser.add_argument(
         "--ida-rpc",
         type=str,
-        default=f"http://{ida_host}:{ida_port}",
-        help=f"IDA RPC server to use (default: http://{ida_host}:{ida_port})",
-    )
-    parser.add_argument(
-        "--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)"
+        default=f"http://{IDA_HOST}:{IDA_PORT}",
+        help=f"IDA RPC server to use (default: http://{IDA_HOST}:{IDA_PORT})",
     )
     parser.add_argument(
         "--config", action="store_true", help="Generate MCP config JSON"
@@ -932,11 +583,6 @@ def main():
         install_mcp_servers(uninstall=True)
         return
 
-    # NOTE: Developers can use this to generate the README
-    if args.generate_docs:
-        generate_readme()
-        return
-
     # NOTE: This is silent for automated Cline installations
     if args.install_plugin:
         install_ida_plugin(quiet=True, allow_ida_free=args.allow_ida_free)
@@ -949,32 +595,20 @@ def main():
     ida_rpc = urlparse(args.ida_rpc)
     if ida_rpc.hostname is None or ida_rpc.port is None:
         raise Exception(f"Invalid IDA RPC server: {args.ida_rpc}")
-    ida_host = ida_rpc.hostname
-    ida_port = ida_rpc.port
-
-    # Remove unsafe tools
-    if not args.unsafe:
-        mcp_tools = mcp._tool_manager._tools
-        for unsafe in UNSAFE_FUNCTIONS:
-            if unsafe in mcp_tools:
-                del mcp_tools[unsafe]
+    IDA_HOST = ida_rpc.hostname
+    IDA_PORT = ida_rpc.port
 
     try:
         if args.transport == "stdio":
-            mcp.run(transport="stdio")
+            mcp.stdio()
         else:
             url = urlparse(args.transport)
             if url.hostname is None or url.port is None:
                 raise Exception(f"Invalid transport URL: {args.transport}")
-            mcp.settings.host = url.hostname
-            mcp.settings.port = url.port
-            # NOTE: npx @modelcontextprotocol/inspector for debugging
-            print(
-                f"MCP Server availabile at http://{mcp.settings.host}:{mcp.settings.port}/sse"
-            )
-            mcp.settings.log_level = "INFO"
-            mcp.run(transport="sse")
-    except KeyboardInterrupt:
+            # NOTE: npx -y @modelcontextprotocol/inspector for debugging
+            mcp.serve(url.hostname, url.port)
+            input("Server is running, press Enter or Ctrl+C to stop.")
+    except (KeyboardInterrupt, EOFError):
         pass
 
 

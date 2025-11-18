@@ -15,7 +15,6 @@ Architecture:
 from . import rpc
 from . import sync
 from . import utils
-from . import mcp
 
 # Import all API modules to register @jsonrpc functions and @resource functions
 from . import api_core
@@ -29,20 +28,14 @@ from . import api_python
 from . import api_resources
 
 # Re-export key components for external use
-from .rpc import rpc_registry, jsonrpc, unsafe, resource, JSONRPCError
 from .sync import idaread, idawrite, IDAError, IDASyncError
-from .mcp import MCPServer
-
-# Plugin metadata
-__version__ = "2.0.0"
-__author__ = "IDA Pro MCP Contributors"
+from .rpc import MCP_SERVER, MCP_UNSAFE, jsonrpc, unsafe, resource
 
 __all__ = [
     # Infrastructure modules
     "rpc",
     "sync",
     "utils",
-    "mcp",
     # API modules
     "api_core",
     "api_analysis",
@@ -54,14 +47,13 @@ __all__ = [
     "api_python",
     "api_resources",
     # Re-exported components
-    "MCPServer",
-    "rpc_registry",
-    "jsonrpc",
-    "unsafe",
-    "resource",
-    "JSONRPCError",
     "idaread",
     "idawrite",
     "IDAError",
     "IDASyncError",
+    "MCP_SERVER",
+    "MCP_UNSAFE",
+    "jsonrpc",
+    "unsafe",
+    "resource",
 ]

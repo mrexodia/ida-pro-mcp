@@ -19,7 +19,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "mcp>=1.16.0",
+    "idapro>=0.0.7",
     "tomli-w>=1.0.0",
 ]
 
@@ -31,12 +31,6 @@ Issues = "https://github.com/mrexodia/ida-pro-mcp/issues"
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
-[dependency-groups]
-dev = [
-    "mcp[cli]>=1.6.0",
-    "ty>=0.0.1a21",
-]
-
 [project.scripts]
 ida-pro-mcp = "ida_pro_mcp.server:main"
 idalib-mcp = "ida_pro_mcp.idalib_server:main"
@@ -44,3 +38,6 @@ idalib-mcp = "ida_pro_mcp.idalib_server:main"
 [tool.pyright]
 include = ["src/ida_pro_mcp"]
 exclude = ["src/ida_pro_mcp/server_generated.py"]
+
+[tool.ruff]
+exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]
