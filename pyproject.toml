@@ -37,7 +37,6 @@ idalib-mcp = "ida_pro_mcp.idalib_server:main"
 
 [tool.pyright]
 include = ["src/ida_pro_mcp"]
-exclude = ["src/ida_pro_mcp/server_generated.py"]
 
 [tool.ruff]
 exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]

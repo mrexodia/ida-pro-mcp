@@ -56,7 +56,7 @@ git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 
 ### Plugin Architecture (ida_mcp/)
 
-**Modular API**: 8 specialized modules
+**Modular API**: 9 specialized modules
 - `api_core.py`: IDB metadata, function/string/import listing
 - `api_analysis.py`: Decompilation, disassembly, xrefs, paths, patterns
 - `api_memory.py`: Read bytes/integers/strings, patch operations
@@ -65,9 +65,10 @@ git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 - `api_stack.py`: Stack frame operations
 - `api_debug.py`: Debugger control (unsafe, requires `--unsafe` flag)
 - `api_python.py`: Python code execution in IDA context
+- `api_resources.py`: MCP resources (24 URI patterns for RESTful access via `ida://` URIs)
 
 **Infrastructure**:
-- `rpc.py`: JSON-RPC registry + type checking (`@tool` decorator)
+- `rpc.py`: JSON-RPC registry + type checking (`@tool`, `@resource`, `@unsafe` decorators)
 - `sync.py`: IDA thread synchronization (`@idaread`/`@idawrite` decorators)
 - `zeromcp/mcp.py`: HTTP/SSE server implementation (Streamable HTTP + SSE transports)
 - `utils.py`: TypedDict schemas, address parsing, pagination helpers
@@ -112,7 +113,7 @@ count: Annotated[int, "Maximum number of results"]
 1. Choose the appropriate `api_*.py` file (or create new one following `api_*.py` pattern)
 2. Import required IDA SDK modules and decorators:
    ```python
-   from .rpc import jsonrpc
+   from .rpc import tool
    from .sync import idaread  # or idawrite
    ```
 3. Define function with full type hints:
@@ -138,6 +139,20 @@ Mark debugger operations or destructive actions as unsafe:
 def dangerous_op():
     pass
 ```
+
+### MCP Resources
+
+Expose RESTful URI-based access to IDA data using `@resource`:
+```python
+@resource(uri="ida://functions/{pattern}")
+@idaread
+def functions_resource(pattern: str = "*") -> list[dict]:
+    """Get functions matching pattern via ida://functions/pattern URI"""
+    # Return data accessible via MCP resource protocol
+    return filtered_functions
+```
+
+Resources provide read-only access to IDA data via URI patterns. All resources use `@idaread`.
 
 ## Common Patterns
 
@@ -204,7 +219,7 @@ Server auto-negotiates based on client request.
 ## Prompting Best Practices
 
 **Critical for LLM accuracy**:
-- Always use `conv_num` tool for number base conversions (LLMs hallucinate on hex/decimal)
+- Always use `int_convert` tool for number base conversions (LLMs hallucinate on hex/decimal)
 - Remove obfuscation before LLM analysis (string encryption, control flow flattening)
 - Use FLIRT/Lumina to resolve library functions first
 - Avoid asking LLM to brute force - derive solutions from disassembly
@@ -213,7 +228,7 @@ Server auto-negotiates based on client request.
 > - Inspect decompilation and add comments
 > - Rename variables to sensible names
 > - Change types if necessary (especially pointers/arrays)
-> - NEVER convert number bases yourself - use `conv_num` MCP tool
+> - NEVER convert number bases yourself - use `int_convert` MCP tool
 > - Do not brute force - derive solutions from disassembly
 
 ## File Structure
@@ -221,34 +236,35 @@ Server auto-negotiates based on client request.
 ```
 src/ida_pro_mcp/
 ├── server.py              # MCP server + AST parser + installer
-├── server_generated.py    # Auto-generated (don't edit)
 ├── idalib_server.py       # Headless idalib support
 ├── ida_mcp.py             # IDA plugin loader
 └── ida_mcp/
     ├── __init__.py        # Package exports
     ├── rpc.py             # JSON-RPC registry
     ├── sync.py            # IDA thread sync
-    ├── mcp.py             # HTTP/SSE server
     ├── utils.py           # Shared helpers
+    ├── zeromcp/           # Vendored MCP server implementation
+    │   ├── mcp.py         # HTTP/SSE server
+    │   └── jsonrpc.py     # JSON-RPC protocol
     └── api_*.py           # Modular API implementations
 ```
 
 ## Installation Mechanics
 
-**Plugin installation** (`server.py:466-557`):
+**Plugin installation**:
 - Tries symlink first (development-friendly)
 - Falls back to copy on Windows/permission issues
 - Installs both `ida_mcp.py` (loader) and `ida_mcp/` (package)
 
-**MCP client configuration** (`server.py:330-464`):
+**MCP client configuration**:
 - Auto-detects Cline/Roo Code/Claude/Cursor/Windsurf/etc config paths
 - Injects server config into JSON/TOML files
 - Sets `autoApprove`/`alwaysAllow` for safe functions (non-debugger)
 
 ## Python Version Requirements
 
-- **Server**: Python >=3.11 (required by FastMCP)
-- **Plugin**: Python >=3.11 (checked in `rpc.py:3-4`)
+- **Server**: Python >=3.11 (uses vendored zeromcp MCP implementation)
+- **Plugin**: Python >=3.11
 - **IDA Pro**: 8.3+ (9.0 recommended), **IDA Free not supported** (no plugin API)
 
 Use `idapyswitch` to upgrade IDA's Python interpreter if needed.

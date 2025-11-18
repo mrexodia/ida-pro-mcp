@@ -60,16 +60,8 @@ def main():
     ida_auto.auto_wait()
 
     # Setup signal handlers to ensure IDA database is properly closed on shutdown.
-    #
-    # PROBLEM: When uvicorn (used by FastMCP's SSE transport) receives SIGINT/SIGTERM:
-    #   1. It captures the signal and performs graceful shutdown
-    #   2. After shutdown, it re-raises the signal with the default handler
-    #   3. The default handler immediately terminates the process at the OS level
-    #   4. This bypasses all remaining Python code (try/except/finally blocks)
-    #
-    # SOLUTION: Register our signal handlers BEFORE calling mcp.run(). When a signal
-    # arrives, our handlers execute first, allowing us to close the IDA database
-    # cleanly before the process terminates.
+    # When a signal arrives, our handlers execute first, allowing us to close the
+    # IDA database cleanly before the process terminates.
     def cleanup_and_exit(signum, frame):
         logger.info("Closing IDA database...")
         idapro.close_database()

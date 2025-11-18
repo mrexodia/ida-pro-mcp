@@ -213,19 +213,55 @@ _Note_: You need to load a binary in IDA before the plugin menu will show up.
 
 LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
 
-> Your task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
->
-> - Inspect the decompilation and add comments with your findings
-> - Rename variables to more sensible names
-> - Change the variable and argument types if necessary (especially pointer and array types)
-> - Change function names to be more descriptive
-> - If more details are necessary, disassemble the function and add comments with your findings
-> - NEVER convert number bases yourself. Use the `int_convert` MCP tool if needed!
-> - Do not attempt brute forcing, derive any solutions purely from the disassembly and simple python scripts
-> - Create a report.md with your findings and steps taken at the end
-> - When you find a solution, prompt to user for feedback with the password you found
+```md
+Your task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
+
+- Inspect the decompilation and add comments with your findings
+- Rename variables to more sensible names
+- Change the variable and argument types if necessary (especially pointer and array types)
+- Change function names to be more descriptive
+- If more details are necessary, disassemble the function and add comments with your findings
+- NEVER convert number bases yourself. Use the `int_convert` MCP tool if needed!
+- Do not attempt brute forcing, derive any solutions purely from the disassembly and simple python scripts
+- Create a report.md with your findings and steps taken at the end
+- When you find a solution, prompt to user for feedback with the password you found
+```
 
 This prompt was just the first experiment, please share if you found ways to improve the output!
+
+Another prompt by [@can1357](https://github.com/can1357):
+
+```md
+Your task is to create a complete and comprehensive reverse engineering analysis. Reference AGENTS.md to understand the project goals and ensure the analysis serves our purposes.
+
+Use the following systematic methodology:
+
+1. **Decompilation Analysis**
+   - Thoroughly inspect the decompiler output
+   - Add detailed comments documenting your findings
+   - Focus on understanding the actual functionality and purpose of each component (do not rely on old, incorrect comments)
+
+2. **Improve Readability in the Database**
+   - Rename variables to sensible, descriptive names
+   - Correct variable and argument types where necessary (especially pointers and array types)
+   - Update function names to be descriptive of their actual purpose
+
+3. **Deep Dive When Needed**
+   - If more details are necessary, examine the disassembly and add comments with findings
+   - Document any low-level behaviors that aren't clear from the decompilation alone
+   - Use sub-agents to perform detailed analysis
+
+4. **Important Constraints**
+   - NEVER convert number bases yourself - use the int_convert MCP tool if needed
+   - Use MCP tools to retrieve information as necessary
+   - Derive all conclusions from actual analysis, not assumptions
+
+5. **Documentation**
+   - Produce comprehensive RE/*.md files with your findings
+   - Document the steps taken and methodology used
+   - When asked by the user, ensure accuracy over previous analysis file
+   - Organize findings in a way that serves the project goals outlined in AGENTS.md or CLAUDE.md
+```
 
 Live stream discussing prompting and showing some real-world malware analysis:
 
@@ -283,7 +319,7 @@ To install the MCP server yourself, follow these steps:
 ```json
 {
 	"mcpServers": {
-		"github.com/mrexodia/ida-pro-mcp": {
+		"ida-pro-mcp": {
 			"command": "uv",
 			"args": ["--directory", "c:\\MCP\\ida-pro-mcp", "run", "server.py", "--install-plugin"],
 			"timeout": 1800,
@@ -293,21 +329,11 @@ To install the MCP server yourself, follow these steps:
 }
 ```
 
-To check if the connection works you can perform the following tool call:
-
-```
-<use_mcp_tool>
-<server_name>github.com/mrexodia/ida-pro-mcp</server_name>
-<tool_name>check_connection</tool_name>
-<arguments></arguments>
-</use_mcp_tool>
-```
-
 ## IDA Plugin installation
 
 The IDA Pro plugin will be installed automatically when the MCP server starts. If you disabled the `--install-plugin` option, use the following steps:
 
-1. Copy (**not move**) `src/ida_pro_mcp/ida_mcp.py` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows).
+1. Copy (**not move**) `src/ida_pro_mcp/ida_mcp.py` and `src/ida_mcp_mcp/ida_mcp/` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows).
 2. Open an IDB and click `Edit -> Plugins -> MCP` to start the server.
 
 </details>
