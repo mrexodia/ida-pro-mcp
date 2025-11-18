@@ -1,4 +1,5 @@
-# NOTE: Vendored from zeromcp v1.2.0
-from .mcp import McpRpcRegistry, McpToolError, McpServer
+# NOTE: Vendored from zeromcp 1.3.0
 
-__all__ = ["McpRpcRegistry", "McpToolError", "McpServer"]
+from .mcp import McpRpcRegistry, McpToolError, McpServer, McpHttpRequestHandler
+
+__all__ = ["McpRpcRegistry", "McpToolError", "McpServer", "McpHttpRequestHandler"]

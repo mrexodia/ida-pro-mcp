@@ -54,14 +54,14 @@ class MCP(idaapi.plugin_t):
         # HACK: ensure fresh load of ida_mcp package
         unload_package("ida_mcp")
         if TYPE_CHECKING:
-            from .ida_mcp import MCP_SERVER
+            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
         else:
-            from ida_mcp import MCP_SERVER
+            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
 
         for i in range(self.MAX_PORT_TRIES):
             port = self.BASE_PORT + i
             try:
-                MCP_SERVER.serve(self.HOST, port)
+                MCP_SERVER.serve(self.HOST, port, request_handler=IdaMcpHttpRequestHandler)
                 self.mcp = MCP_SERVER
                 break
             except OSError as e:

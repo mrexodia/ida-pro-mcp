@@ -1,4 +1,4 @@
-from .zeromcp import McpServer, McpToolError
+from .zeromcp import McpServer, McpToolError, McpHttpRequestHandler
 
 MCP_SERVER = McpServer("ida-pro-mcp")
 MCP_UNSAFE: set[str] = set()
@@ -20,6 +20,7 @@ def unsafe(func):
 __all__ = [
     "McpServer",
     "McpToolError",
+    "McpHttpRequestHandler",
     "MCP_SERVER",
     "MCP_UNSAFE",
     "tool",

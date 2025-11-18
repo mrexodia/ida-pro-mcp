@@ -59,7 +59,7 @@ class _McpSseConnection:
             self.alive = False
             return False
 
-class _McpHttpRequestHandler(BaseHTTPRequestHandler):
+class McpHttpRequestHandler(BaseHTTPRequestHandler):
     def __init__(self, request, client_address, server):
         self.mcp_server: "McpServer" = getattr(server, "mcp_server")
         super().__init__(request, client_address, server)
@@ -229,15 +229,16 @@ class McpServer:
             return self.resources.method(func)
         return decorator
 
-    def serve(self, host: str, port: int, *, background = True):
+    def serve(self, host: str, port: int, *, background = True, request_handler = McpHttpRequestHandler):
         if self._running:
             print("[MCP] Server is already running")
             return
 
         # Create server with deferred binding
+        assert issubclass(request_handler, McpHttpRequestHandler)
         self._http_server = (ThreadingHTTPServer if background else HTTPServer)(
             (host, port),
-            _McpHttpRequestHandler,
+            request_handler,
             bind_and_activate=False
         )
         self._http_server.allow_reuse_address = False
