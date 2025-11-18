@@ -61,7 +61,10 @@ class MCP(idaapi.plugin_t):
         for i in range(self.MAX_PORT_TRIES):
             port = self.BASE_PORT + i
             try:
-                MCP_SERVER.serve(self.HOST, port, request_handler=IdaMcpHttpRequestHandler)
+                MCP_SERVER.serve(
+                    self.HOST, port, request_handler=IdaMcpHttpRequestHandler
+                )
+                print(f"  Config: http://{self.HOST}:{port}/config.html")
                 self.mcp = MCP_SERVER
                 break
             except OSError as e:

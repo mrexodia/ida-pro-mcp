@@ -156,7 +156,7 @@ def generate_mcp_config(*, stdio: bool):
         }
         env = {}
         if copy_python_env(env):
-            print(f"[WARNING] Custom Python environment variables detected")
+            print("[WARNING] Custom Python environment variables detected")
             mcp_config["env"] = env
         return mcp_config
     else:
@@ -165,9 +165,17 @@ def generate_mcp_config(*, stdio: bool):
 
 def print_mcp_config():
     print("[HTTP MCP CONFIGURATION]")
-    print(json.dumps({"mcpServers": {mcp.name: generate_mcp_config(stdio=False)}}, indent=2))
+    print(
+        json.dumps(
+            {"mcpServers": {mcp.name: generate_mcp_config(stdio=False)}}, indent=2
+        )
+    )
     print("\n[STDIO MCP CONFIGURATION]")
-    print(json.dumps({"mcpServers": {mcp.name: generate_mcp_config(stdio=True)}}, indent=2))
+    print(
+        json.dumps(
+            {"mcpServers": {mcp.name: generate_mcp_config(stdio=True)}}, indent=2
+        )
+    )
 
 
 def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):

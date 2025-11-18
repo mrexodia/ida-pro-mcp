@@ -185,7 +185,8 @@ def get_global_value(
         list[str] | str, "Global variable addresses or names to read values from"
     ],
 ) -> list[dict]:
-    """Read global variable values by address or name (auto-detects hex addresses vs names)"""
+    """Read global variable values by address or name
+    (auto-detects hex addresses vs names)"""
     from .utils import looks_like_address
 
     queries = normalize_list_input(queries)

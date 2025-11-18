@@ -384,13 +384,10 @@ class McpServer:
             if "{" in uri:
                 continue
 
-            description = func.__doc__ or f"Read {uri}"
-            description = description.strip().split("\n")[0] if description else ""
-
             resources.append({
                 "uri": uri,
                 "name": func_name,
-                "description": description,
+                "description": (func.__doc__ or f"Read {uri}").strip(),
                 "mimeType": "application/json",
             })
 
@@ -406,13 +403,10 @@ class McpServer:
             if "{" not in uri:
                 continue
 
-            description = func.__doc__ or f"Read {uri}"
-            description = description.strip().split("\n")[0] if description else ""
-
             templates.append({
                 "uriTemplate": uri,
                 "name": func_name,
-                "description": description,
+                "description": (func.__doc__ or f"Read {uri}").strip(),
                 "mimeType": "application/json",
             })
 

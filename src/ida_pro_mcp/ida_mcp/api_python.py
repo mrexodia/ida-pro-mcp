@@ -33,7 +33,10 @@ from .utils import parse_address, get_function
 def py_eval(
     code: Annotated[str, "Python code"],
 ) -> dict:
-    """Execute Python code in IDA context. Returns dict with result/stdout/stderr. Has access to all IDA API modules. Supports Jupyter-style evaluation."""
+    """Execute Python code in IDA context.
+    Returns dict with result/stdout/stderr.
+    Has access to all IDA API modules.
+    Supports Jupyter-style evaluation."""
     # Capture stdout/stderr
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
