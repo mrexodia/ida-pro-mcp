@@ -9,7 +9,7 @@ import ida_typeinf
 import ida_frame
 import idaapi
 
-from .rpc import jsonrpc
+from .rpc import tool
 from .sync import idaread, idawrite
 from .utils import (
     normalize_list_input,
@@ -27,7 +27,7 @@ from .utils import (
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
     """Get stack vars"""
@@ -45,7 +45,7 @@ def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
     return results
 
 
-@jsonrpc
+@tool
 @idawrite
 def declare_stack(
     items: list[StackVarDecl] | StackVarDecl,
@@ -90,7 +90,7 @@ def declare_stack(
     return results
 
 
-@jsonrpc
+@tool
 @idawrite
 def delete_stack(
     items: list[StackVarDelete] | StackVarDelete,

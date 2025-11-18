@@ -18,7 +18,7 @@ import ida_segment
 import ida_typeinf
 import ida_xref
 
-from .rpc import jsonrpc, unsafe
+from .rpc import tool, unsafe
 from .sync import idaread
 from .utils import parse_address, get_function
 
@@ -27,7 +27,7 @@ from .utils import parse_address, get_function
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def py_eval(

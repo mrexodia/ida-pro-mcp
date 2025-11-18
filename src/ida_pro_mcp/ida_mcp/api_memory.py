@@ -8,7 +8,7 @@ from typing import Annotated
 import ida_bytes
 import idaapi
 
-from .rpc import jsonrpc
+from .rpc import tool
 from .sync import idaread, idawrite
 from .utils import normalize_list_input, parse_address, MemoryRead, MemoryPatch
 
@@ -18,7 +18,7 @@ from .utils import normalize_list_input, parse_address, MemoryRead, MemoryPatch
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     """Read bytes from memory addresses"""
@@ -40,7 +40,7 @@ def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def get_u8(
     addrs: Annotated[list[str] | str, "Addresses to read 8-bit unsigned integers from"],
@@ -60,7 +60,7 @@ def get_u8(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def get_u16(
     addrs: Annotated[
@@ -82,7 +82,7 @@ def get_u16(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def get_u32(
     addrs: Annotated[
@@ -104,7 +104,7 @@ def get_u32(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def get_u64(
     addrs: Annotated[
@@ -126,7 +126,7 @@ def get_u64(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def get_string(
     addrs: Annotated[list[str] | str, "Addresses to read strings from"],
@@ -178,7 +178,7 @@ def get_global_variable_value_internal(ea: int) -> str:
         return " ".join(hex(x) for x in ida_bytes.get_bytes(ea, size))
 
 
-@jsonrpc
+@tool
 @idaread
 def get_global_value(
     queries: Annotated[
@@ -223,7 +223,7 @@ def get_global_value(
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idawrite
 def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[dict]:
     """Patch bytes at memory addresses with hex data"""

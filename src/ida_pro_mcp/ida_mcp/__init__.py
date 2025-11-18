@@ -16,7 +16,7 @@ from . import rpc
 from . import sync
 from . import utils
 
-# Import all API modules to register @jsonrpc functions and @resource functions
+# Import all API modules to register @tool functions and @resource functions
 from . import api_core
 from . import api_analysis
 from . import api_memory
@@ -29,7 +29,7 @@ from . import api_resources
 
 # Re-export key components for external use
 from .sync import idaread, idawrite, IDAError, IDASyncError
-from .rpc import MCP_SERVER, MCP_UNSAFE, jsonrpc, unsafe, resource
+from .rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, resource
 
 __all__ = [
     # Infrastructure modules
@@ -53,7 +53,7 @@ __all__ = [
     "IDASyncError",
     "MCP_SERVER",
     "MCP_UNSAFE",
-    "jsonrpc",
+    "tool",
     "unsafe",
     "resource",
 ]

@@ -45,6 +45,7 @@ def sync_wrapper(ff, safety_mode: IDASafety):
         logger.error(error_str)
         raise IDASyncError(error_str)
 
+    # NOTE: This is not actually a queue, there is one item in it at most
     res_container = queue.Queue()
 
     def runned():

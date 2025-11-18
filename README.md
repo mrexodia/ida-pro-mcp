@@ -330,14 +330,14 @@ Feel free to open a PR to add your IDA Pro MCP server here.
 
 ## Development
 
-Adding new features is a super easy and streamlined process. All you have to do is add a new `@jsonrpc` function to the modular API files in `src/ida_pro_mcp/ida_mcp/api_*.py` and your function will be available in the MCP server without any additional boilerplate! Below is a video where I add the `get_metadata` function in less than 2 minutes (including testing):
+Adding new features is a super easy and streamlined process. All you have to do is add a new `@tool` function to the modular API files in `src/ida_pro_mcp/ida_mcp/api_*.py` and your function will be available in the MCP server without any additional boilerplate! Below is a video where I add the `get_metadata` function in less than 2 minutes (including testing):
 
 https://github.com/user-attachments/assets/951de823-88ea-4235-adcb-9257e316ae64
 
 To test the MCP server itself:
 
 ```sh
-uv run mcp dev src/ida_pro_mcp/server.py
+npx -y @modelcontextprotocol/inspector
 ```
 
 This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.

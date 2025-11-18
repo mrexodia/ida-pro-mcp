@@ -14,7 +14,7 @@ import ida_entry
 import ida_search
 import ida_idaapi
 import ida_xref
-from .rpc import jsonrpc
+from .rpc import tool
 from .sync import idaread, is_window_active
 from .utils import (
     parse_address,
@@ -85,7 +85,7 @@ def _get_cached_strings_dict() -> list[dict]:
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def decompile(
     addrs: Annotated[list[str] | str, "Function addresses to decompile"],
@@ -130,7 +130,7 @@ def decompile(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def disasm(
     addrs: Annotated[list[str] | str, "Function addresses to disassemble"],
@@ -250,7 +250,7 @@ def disasm(
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def xrefs_to(
     addrs: Annotated[list[str] | str, "Addresses to find cross-references to"],
@@ -278,7 +278,7 @@ def xrefs_to(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[dict]:
     """Get cross-references to structure fields"""
@@ -370,7 +370,7 @@ def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[d
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def callees(
     addrs: Annotated[list[str] | str, "Function addresses to get callees for"],
@@ -423,7 +423,7 @@ def callees(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def callers(
     addrs: Annotated[list[str] | str, "Function addresses to get callers for"],
@@ -456,7 +456,7 @@ def callers(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def entrypoints() -> list[Function]:
     """Get entry points"""
@@ -475,7 +475,7 @@ def entrypoints() -> list[Function]:
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def analyze_funcs(
     addrs: Annotated[list[str] | str, "Function addresses to comprehensively analyze"],
@@ -566,7 +566,7 @@ def analyze_funcs(
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def find_bytes(
     patterns: Annotated[
@@ -633,7 +633,7 @@ def find_bytes(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def find_insns(
     sequences: Annotated[
@@ -728,7 +728,7 @@ def find_insns(
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def basic_blocks(
     addrs: Annotated[list[str] | str, "Function addresses to get basic blocks for"],
@@ -804,7 +804,7 @@ def basic_blocks(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def find_paths(queries: list[PathQuery] | PathQuery) -> list[dict]:
     """Find execution paths between source and target addresses"""
@@ -888,7 +888,7 @@ def find_paths(queries: list[PathQuery] | PathQuery) -> list[dict]:
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def search(
     type: Annotated[
@@ -1058,7 +1058,7 @@ def search(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def find_insn_operands(
     patterns: list[InsnPattern] | InsnPattern,
@@ -1162,7 +1162,7 @@ def _find_insn_pattern(pattern: dict) -> list[str]:
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def export_funcs(
     addrs: Annotated[list[str] | str, "Function addresses to export"],
@@ -1226,7 +1226,7 @@ def export_funcs(
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def callgraph(
     roots: Annotated[
@@ -1310,7 +1310,7 @@ def callgraph(
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def xref_matrix(
     entities: Annotated[
@@ -1352,7 +1352,7 @@ def xref_matrix(
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def analyze_strings(
     filters: list[StringFilter] | StringFilter,

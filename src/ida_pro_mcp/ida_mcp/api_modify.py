@@ -6,7 +6,7 @@ import ida_bytes
 import ida_typeinf
 import ida_frame
 
-from .rpc import jsonrpc
+from .rpc import tool
 from .sync import idawrite, IDAError
 from .utils import (
     parse_address,
@@ -27,7 +27,7 @@ from .utils import (
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idawrite
 def set_comments(items: list[CommentOp] | CommentOp):
     """Set comments at addresses (both disassembly and decompiler views)"""
@@ -109,7 +109,7 @@ def set_comments(items: list[CommentOp] | CommentOp):
     return results
 
 
-@jsonrpc
+@tool
 @idawrite
 def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
     """Patch assembly instructions at addresses"""
@@ -151,7 +151,7 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
     return results
 
 
-@jsonrpc
+@tool
 @idawrite
 def rename(batch: RenameBatch) -> dict:
     """Unified rename operation for functions, globals, locals, and stack variables"""

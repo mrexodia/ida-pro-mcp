@@ -9,7 +9,7 @@ import ida_nalt
 import ida_typeinf
 import ida_segment
 
-from .rpc import jsonrpc
+from .rpc import tool
 from .sync import idaread
 from .utils import (
     Metadata,
@@ -76,7 +76,7 @@ def _get_cached_strings() -> list[String]:
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def idb_meta() -> Metadata:
     """Get IDB metadata"""
@@ -99,7 +99,7 @@ def idb_meta() -> Metadata:
     )
 
 
-@jsonrpc
+@tool
 @idaread
 def lookup_funcs(
     queries: Annotated[list[str] | str, "Address(es) or name(s)"],
@@ -149,21 +149,21 @@ def lookup_funcs(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def cursor_addr() -> str:
     """Get current address"""
     return hex(idaapi.get_screen_ea())
 
 
-@jsonrpc
+@tool
 @idaread
 def cursor_func() -> Optional[Function]:
     """Get current function"""
     return get_function(idaapi.get_screen_ea())
 
 
-@jsonrpc
+@tool
 def int_convert(
     inputs: Annotated[
         list[NumberConversion] | NumberConversion,
@@ -232,7 +232,7 @@ def int_convert(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def list_funcs(
     queries: Annotated[
@@ -262,7 +262,7 @@ def list_funcs(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def list_globals(
     queries: Annotated[
@@ -295,7 +295,7 @@ def list_globals(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def imports(
     offset: Annotated[int, "Offset"],
@@ -324,7 +324,7 @@ def imports(
     return paginate(rv, offset, count)
 
 
-@jsonrpc
+@tool
 @idaread
 def strings(
     queries: Annotated[
@@ -372,7 +372,7 @@ def ida_segment_perm2str(perm: int) -> str:
     return "".join(perms)
 
 
-@jsonrpc
+@tool
 @idaread
 def segments() -> list[Segment]:
     """List all segments"""
@@ -394,7 +394,7 @@ def segments() -> list[Segment]:
     return segments
 
 
-@jsonrpc
+@tool
 @idaread
 def local_types():
     """List local types"""

@@ -8,7 +8,7 @@ import ida_frame
 import ida_ida
 import idaapi
 
-from .rpc import jsonrpc
+from .rpc import tool
 from .sync import idaread, idawrite, ida_major
 from .utils import (
     normalize_list_input,
@@ -29,7 +29,7 @@ from .utils import (
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idawrite
 def declare_type(
     decls: Annotated[list[str] | str, "C type declarations"],
@@ -61,7 +61,7 @@ def declare_type(
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 def structs() -> list[StructureDefinition]:
     """List all structures"""
@@ -93,7 +93,7 @@ def structs() -> list[StructureDefinition]:
     return rv
 
 
-@jsonrpc
+@tool
 @idaread
 def struct_info(
     names: Annotated[list[str] | str, "Structure names to query"],
@@ -162,7 +162,7 @@ def struct_info(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
     """Read struct fields"""
@@ -278,7 +278,7 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def search_structs(
     filter: Annotated[
@@ -322,7 +322,7 @@ def search_structs(
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idawrite
 def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[dict]:
     """Apply types (function/global/local/stack)"""
@@ -455,7 +455,7 @@ def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[d
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 def infer_types(
     addrs: Annotated[list[str] | str, "Addresses to infer types for"],

@@ -3,8 +3,13 @@ from .zeromcp import McpServer, McpToolError
 MCP_SERVER = McpServer("ida-pro-mcp")
 MCP_UNSAFE: set[str] = set()
 
-jsonrpc = MCP_SERVER.tool
-resource = MCP_SERVER.resource
+
+def tool(func):
+    return MCP_SERVER.tool(func)
+
+
+def resource(uri):
+    return MCP_SERVER.resource(uri)
 
 
 def unsafe(func):
@@ -17,7 +22,7 @@ __all__ = [
     "McpToolError",
     "MCP_SERVER",
     "MCP_UNSAFE",
-    "jsonrpc",
+    "tool",
     "unsafe",
     "resource",
 ]

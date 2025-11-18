@@ -18,7 +18,7 @@ import ida_idaapi
 import ida_name
 import idaapi
 
-from .rpc import jsonrpc, unsafe
+from .rpc import tool, unsafe
 from .sync import idaread, IDAError
 from .utils import (
     RegisterValue,
@@ -157,7 +157,7 @@ def list_breakpoints():
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_start():
@@ -176,7 +176,7 @@ def dbg_start():
     raise IDAError("Failed to start debugger")
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_exit():
@@ -187,7 +187,7 @@ def dbg_exit():
     raise IDAError("Failed to exit debugger")
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_continue() -> str:
@@ -200,7 +200,7 @@ def dbg_continue() -> str:
     raise IDAError("Failed to continue debugger")
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_run_to(
@@ -216,7 +216,7 @@ def dbg_run_to(
     raise IDAError(f"Failed to run to address {hex(ea)}")
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_step_into():
@@ -229,7 +229,7 @@ def dbg_step_into():
     raise IDAError("Failed to step into")
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_step_over():
@@ -247,7 +247,7 @@ def dbg_step_over():
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_list_bps():
@@ -255,7 +255,7 @@ def dbg_list_bps():
     return list_breakpoints()
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_add_bp(
@@ -284,7 +284,7 @@ def dbg_add_bp(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_delete_bp(
@@ -307,7 +307,7 @@ def dbg_delete_bp(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_enable_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
@@ -342,7 +342,7 @@ def dbg_enable_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_regs() -> list[ThreadRegisters]:
@@ -355,7 +355,7 @@ def dbg_regs() -> list[ThreadRegisters]:
     return result
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_regs_thread(
@@ -384,7 +384,7 @@ def dbg_regs_thread(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_regs_cur() -> ThreadRegisters:
@@ -394,7 +394,7 @@ def dbg_regs_cur() -> ThreadRegisters:
     return _get_registers_for_thread(dbg, tid)
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_gpregs_thread(
@@ -423,7 +423,7 @@ def dbg_gpregs_thread(
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_current_gpregs() -> ThreadRegisters:
@@ -433,7 +433,7 @@ def dbg_current_gpregs() -> ThreadRegisters:
     return _get_registers_general_for_thread(dbg, tid)
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_regs_for_thread(
@@ -452,7 +452,7 @@ def dbg_regs_for_thread(
     return _get_registers_specific_for_thread(dbg, thread_id, names)
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_current_regs(
@@ -472,7 +472,7 @@ def dbg_current_regs(
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_callstack() -> list[dict[str, str]]:
@@ -523,7 +523,7 @@ def dbg_callstack() -> list[dict[str, str]]:
 # ============================================================================
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_read_mem(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
@@ -566,7 +566,7 @@ def dbg_read_mem(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     return results
 
 
-@jsonrpc
+@tool
 @idaread
 @unsafe
 def dbg_write_mem(regions: list[MemoryPatch] | MemoryPatch) -> list[dict]:

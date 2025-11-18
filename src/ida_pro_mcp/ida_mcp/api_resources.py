@@ -38,7 +38,7 @@ from .utils import (
 
 @resource("ida://idb/metadata")
 @idaread
-def get_idb_metadata() -> Metadata:
+def idb_metadata_resource() -> Metadata:
     """Get IDB file metadata (path, arch, base address, size, hashes)"""
     import hashlib
 
@@ -74,7 +74,7 @@ def get_idb_metadata() -> Metadata:
 
 @resource("ida://idb/segments")
 @idaread
-def get_segments() -> list[Segment]:
+def idb_segments_resource() -> list[Segment]:
     """Get all memory segments with permissions"""
     segments = []
     for seg_ea in idautils.Segments():
@@ -102,7 +102,7 @@ def get_segments() -> list[Segment]:
 
 @resource("ida://idb/entrypoints")
 @idaread
-def get_entrypoints() -> list[dict]:
+def idb_entrypoints_resource() -> list[dict]:
     """Get entry points (main, TLS callbacks, etc.)"""
     entrypoints = []
     entry_count = ida_nalt.get_entry_qty()
@@ -121,7 +121,7 @@ def get_entrypoints() -> list[dict]:
 
 @resource("ida://functions")
 @idaread
-def list_functions_resource(
+def functions_resource(
     filter: Annotated[str, "Optional glob pattern to filter by name"] = "",
     offset: Annotated[int, "Starting index"] = 0,
     count: Annotated[int, "Maximum results (0=all)"] = 50,
@@ -148,7 +148,7 @@ def list_functions_resource(
 
 @resource("ida://function/{addr}")
 @idaread
-def get_function_resource(
+def function_addr_resource(
     addr: Annotated[str, "Function address (hex or decimal)"],
 ) -> dict:
     """Get function details by address (no decompilation - use decompile tool)"""
@@ -182,7 +182,7 @@ def get_function_resource(
 
 @resource("ida://globals")
 @idaread
-def list_globals_resource(
+def globals_resource(
     filter: Annotated[str, "Optional glob pattern to filter by name"] = "",
     offset: Annotated[int, "Starting index"] = 0,
     count: Annotated[int, "Maximum results (0=all)"] = 50,
@@ -203,7 +203,7 @@ def list_globals_resource(
 
 @resource("ida://global/{name_or_addr}")
 @idaread
-def get_global_resource(name_or_addr: Annotated[str, "Global name or address"]) -> dict:
+def global_id_resource(name_or_addr: Annotated[str, "Global name or address"]) -> dict:
     """Get specific global variable details"""
     # Try as address first
     try:
@@ -241,7 +241,7 @@ def get_global_resource(name_or_addr: Annotated[str, "Global name or address"]) 
 
 @resource("ida://strings")
 @idaread
-def list_strings_resource(
+def strings_resource(
     filter: Annotated[str, "Optional pattern to match in strings"] = "",
     offset: Annotated[int, "Starting index"] = 0,
     count: Annotated[int, "Maximum results (0=all)"] = 50,
@@ -267,7 +267,7 @@ def list_strings_resource(
 
 @resource("ida://string/{addr}")
 @idaread
-def get_string_resource(addr: Annotated[str, "String address"]) -> dict:
+def string_addr_resource(addr: Annotated[str, "String address"]) -> dict:
     """Get specific string details"""
     ea = parse_address(addr)
     try:
@@ -286,7 +286,7 @@ def get_string_resource(addr: Annotated[str, "String address"]) -> dict:
 
 @resource("ida://imports")
 @idaread
-def list_imports_resource(
+def imports_resource(
     offset: Annotated[int, "Starting index"] = 0,
     count: Annotated[int, "Maximum results (0=all)"] = 50,
 ) -> Page[Import]:
@@ -311,7 +311,7 @@ def list_imports_resource(
 
 @resource("ida://import/{name}")
 @idaread
-def get_import_resource(name: Annotated[str, "Import name"]) -> dict:
+def import_name_resource(name: Annotated[str, "Import name"]) -> dict:
     """Get specific import details"""
     nimps = ida_nalt.get_import_module_qty()
     for i in range(nimps):
@@ -340,7 +340,7 @@ def get_import_resource(name: Annotated[str, "Import name"]) -> dict:
 
 @resource("ida://exports")
 @idaread
-def list_exports_resource(
+def exports_resource(
     offset: Annotated[int, "Starting index"] = 0,
     count: Annotated[int, "Maximum results (0=all)"] = 50,
 ) -> Page[dict]:
@@ -358,7 +358,7 @@ def list_exports_resource(
 
 @resource("ida://export/{name}")
 @idaread
-def get_export_resource(name: Annotated[str, "Export name"]) -> dict:
+def export_name_resource(name: Annotated[str, "Export name"]) -> dict:
     """Get specific export details"""
     entry_count = ida_nalt.get_entry_qty()
     for i in range(entry_count):
@@ -383,7 +383,7 @@ def get_export_resource(name: Annotated[str, "Export name"]) -> dict:
 
 @resource("ida://types")
 @idaread
-def list_types_resource() -> list[dict]:
+def types_resource() -> list[dict]:
     """Get all local types"""
     import ida_typeinf
 
@@ -398,7 +398,7 @@ def list_types_resource() -> list[dict]:
 
 @resource("ida://structs")
 @idaread
-def list_structs_resource() -> list[dict]:
+def structs_resource() -> list[dict]:
     """Get all structures/unions"""
     import ida_struct
 
@@ -419,7 +419,7 @@ def list_structs_resource() -> list[dict]:
 
 @resource("ida://struct/{name}")
 @idaread
-def get_struct_resource(name: Annotated[str, "Structure name"]) -> dict:
+def struct_name_resource(name: Annotated[str, "Structure name"]) -> dict:
     """Get structure definition with fields"""
     import ida_struct
     import ida_typeinf
@@ -464,7 +464,7 @@ def get_struct_resource(name: Annotated[str, "Structure name"]) -> dict:
 
 @resource("ida://xrefs/to/{addr}")
 @idaread
-def get_xrefs_to_resource(addr: Annotated[str, "Target address"]) -> list[dict]:
+def xrefs_to_addr_resource(addr: Annotated[str, "Target address"]) -> list[dict]:
     """Get cross-references to address"""
     ea = parse_address(addr)
     xrefs = []
@@ -480,7 +480,7 @@ def get_xrefs_to_resource(addr: Annotated[str, "Target address"]) -> list[dict]:
 
 @resource("ida://xrefs/from/{addr}")
 @idaread
-def get_xrefs_from_resource(addr: Annotated[str, "Source address"]) -> list[dict]:
+def xrefs_from_resource(addr: Annotated[str, "Source address"]) -> list[dict]:
     """Get cross-references from address"""
     ea = parse_address(addr)
     xrefs = []
@@ -496,7 +496,7 @@ def get_xrefs_from_resource(addr: Annotated[str, "Source address"]) -> list[dict
 
 @resource("ida://stack/{func_addr}")
 @idaread
-def get_stack_frame_resource(func_addr: Annotated[str, "Function address"]) -> dict:
+def stack_func_resource(func_addr: Annotated[str, "Function address"]) -> dict:
     """Get stack frame variables for a function"""
     from .utils import get_stack_frame_variables_internal
 
@@ -512,7 +512,7 @@ def get_stack_frame_resource(func_addr: Annotated[str, "Function address"]) -> d
 
 @resource("ida://cursor")
 @idaread
-def get_cursor_position() -> dict:
+def cursor_resource() -> dict:
     """Get current cursor position and function"""
     import ida_kernwin
 
@@ -536,7 +536,7 @@ def get_cursor_position() -> dict:
 
 @resource("ida://selection")
 @idaread
-def get_selection() -> dict:
+def selection_resource() -> dict:
     """Get current selection range (if any)"""
     import ida_kernwin
 
@@ -553,7 +553,7 @@ def get_selection() -> dict:
 
 @resource("ida://debug/breakpoints")
 @idaread
-def get_debug_breakpoints() -> list[dict]:
+def debug_breakpoints_resource() -> list[dict]:
     """Get all debugger breakpoints"""
     import ida_dbg
 
@@ -578,7 +578,7 @@ def get_debug_breakpoints() -> list[dict]:
 
 @resource("ida://debug/registers")
 @idaread
-def get_debug_registers() -> dict:
+def debug_registers_resource() -> dict:
     """Get current debugger register values"""
     import ida_dbg
     import ida_idd
@@ -598,7 +598,7 @@ def get_debug_registers() -> dict:
 
 @resource("ida://debug/callstack")
 @idaread
-def get_debug_callstack() -> list[dict]:
+def debug_callstack_resource() -> list[dict]:
     """Get current debugger call stack"""
     import ida_dbg
 

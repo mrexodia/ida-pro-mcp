@@ -7,10 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 IDA Pro MCP Server - enables LLM-assisted reverse engineering by bridging IDA Pro with Model Context Protocol clients through a JSON-RPC HTTP server.
 
 **Architecture**: Dual-process design
-- **MCP Server** (`server.py`): Python >=3.11, runs via `uv`, generates tool schemas from IDA plugin API
-- **IDA Plugin** (`ida_mcp/`): Runs inside IDA Pro, exposes JSON-RPC over HTTP (port 13337+)
-
-**Key Innovation**: Auto-generates MCP tools via AST parsing - add `@jsonrpc` decorated functions to `api_*.py` files and they become MCP tools without boilerplate.
+- **MCP Server** (`server.py`): Python >=3.11, runs via `uv`, proxies to the MCP server hosted by IDA
+- **IDA Plugin** (`ida_mcp/`): Runs inside IDA Pro, exposes MCP server over HTTP (port 13337+)
 
 ## Development Commands
 
@@ -56,14 +54,6 @@ git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 
 ## Architecture Deep Dive
 
-### Code Generation Pipeline
-
-1. **AST Parsing** (`server.py:171-189`): Parse all `api_*.py` files for `@jsonrpc` decorated functions
-2. **Schema Generation** (`server.py:190-221`): Generate MCP tool schemas from type hints
-3. **Tool Registration** (`server.py:222`): `exec()` compiled code to register tools with FastMCP
-
-**Critical**: `server_generated.py` is auto-generated on import - never edit manually.
-
 ### Plugin Architecture (ida_mcp/)
 
 **Modular API**: 8 specialized modules
@@ -77,16 +67,16 @@ git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 - `api_python.py`: Python code execution in IDA context
 
 **Infrastructure**:
-- `rpc.py`: JSON-RPC registry + type checking (`@jsonrpc` decorator)
+- `rpc.py`: JSON-RPC registry + type checking (`@tool` decorator)
 - `sync.py`: IDA thread synchronization (`@idaread`/`@idawrite` decorators)
-- `mcp.py`: HTTP/SSE server implementation (Streamable HTTP + SSE transports)
+- `zeromcp/mcp.py`: HTTP/SSE server implementation (Streamable HTTP + SSE transports)
 - `utils.py`: TypedDict schemas, address parsing, pagination helpers
 
 ### Decorator Chain Pattern
 
 Every API function follows this pattern:
 ```python
-@jsonrpc          # 1. Register with RPC registry
+@tool             # 1. Register MCP tool
 @idaread          # 2. Execute on IDA's main thread (read-only)
 def my_api(param: Annotated[str, "description"]) -> ReturnType:
     """Docstring becomes MCP tool description"""
@@ -127,7 +117,7 @@ count: Annotated[int, "Maximum number of results"]
    ```
 3. Define function with full type hints:
    ```python
-   @jsonrpc
+   @tool
    @idaread
    def my_function(param: Annotated[str, "param description"]) -> dict:
        """Tool description (first line used in MCP schema)"""
@@ -143,7 +133,7 @@ count: Annotated[int, "Maximum number of results"]
 Mark debugger operations or destructive actions as unsafe:
 ```python
 @unsafe           # Requires --unsafe flag
-@jsonrpc
+@tool
 @idawrite
 def dangerous_op():
     pass
@@ -172,7 +162,7 @@ return results
 ```python
 from .utils import paginate, Page
 
-@jsonrpc
+@tool
 @idaread
 def list_items(queries: Annotated[str, "offset:count or pattern"]) -> Page:
     all_items = get_all_items()
