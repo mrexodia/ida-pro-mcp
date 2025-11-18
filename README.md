@@ -297,47 +297,6 @@ uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
 
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
-## Manual Installation
-
-_Note_: This section is for LLMs and power users who need detailed installation instructions.
-
-<details>
-
-## Manual MCP Server Installation (Cline/Roo Code)
-
-To install the MCP server yourself, follow these steps:
-
-1. Install [uv](https://github.com/astral-sh/uv) globally:
-   - Windows: `pip install uv`
-   - Linux/Mac: `curl -LsSf https://astral.sh/uv/install.sh | sh`
-2. Clone this repository, for this example `C:\MCP\ida-pro-mcp`.
-3. Navigate to the Cline/Roo Code _MCP Servers_ configuration (see screenshot).
-4. Click on the _Installed_ tab.
-5. Click on _Configure MCP Servers_, which will open `cline_mcp_settings.json`.
-6. Add the `ida-pro-mcp` server:
-
-```json
-{
-	"mcpServers": {
-		"ida-pro-mcp": {
-			"command": "uv",
-			"args": ["--directory", "c:\\MCP\\ida-pro-mcp", "run", "server.py", "--install-plugin"],
-			"timeout": 1800,
-			"disabled": false
-		}
-	}
-}
-```
-
-## IDA Plugin installation
-
-The IDA Pro plugin will be installed automatically when the MCP server starts. If you disabled the `--install-plugin` option, use the following steps:
-
-1. Copy (**not move**) `src/ida_pro_mcp/ida_mcp.py` and `src/ida_mcp_mcp/ida_mcp/` in your plugins folder (`%appdata%\Hex-Rays\IDA Pro\plugins` on Windows).
-2. Open an IDB and click `Edit -> Plugins -> MCP` to start the server.
-
-</details>
-
 ## Comparison with other MCP servers
 
 There are a few IDA Pro MCP servers floating around, but I created my own for a few reasons:

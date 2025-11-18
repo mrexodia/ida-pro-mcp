@@ -80,7 +80,6 @@ mcp.registry.dispatch = dispatch_proxy
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 IDA_PLUGIN_PKG = os.path.join(SCRIPT_DIR, "ida_mcp")
 IDA_PLUGIN_LOADER = os.path.join(SCRIPT_DIR, "ida_mcp.py")
-GENERATED_PY = os.path.join(SCRIPT_DIR, "server_generated.py")
 
 # NOTE: This is in the global scope on purpose
 if not os.path.exists(IDA_PLUGIN_PKG):
@@ -145,16 +144,33 @@ def copy_python_env(env: dict[str, str]):
     return result
 
 
+def generate_mcp_config(*, stdio: bool):
+    if stdio:
+        mcp_config = {
+            "command": get_python_executable(),
+            "args": [
+                __file__,
+                "--ida-rpc",
+                f"http://{IDA_HOST}:{IDA_PORT}",
+            ],
+        }
+        env = {}
+        if copy_python_env(env):
+            print(f"[WARNING] Custom Python environment variables detected")
+            mcp_config["env"] = env
+        return mcp_config
+    else:
+        return {"type": "http", "url": f"http://{IDA_HOST}:{IDA_PORT}/mcp"}
+
+
 def print_mcp_config():
-    mcp_url = f"http://{IDA_HOST}:{IDA_PORT}/mcp"
-    print(
-        json.dumps(
-            {"mcpServers": {mcp.name: {"type": "http", "url": mcp_url}}}, indent=2
-        )
-    )
+    print("[HTTP MCP CONFIGURATION]")
+    print(json.dumps({"mcpServers": {mcp.name: generate_mcp_config(stdio=False)}}, indent=2))
+    print("\n[STDIO MCP CONFIGURATION]")
+    print(json.dumps({"mcpServers": {mcp.name: generate_mcp_config(stdio=True)}}, indent=2))
 
 
-def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
+def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
     if sys.platform == "win32":
         configs = {
             "Cline": (
@@ -392,11 +408,7 @@ def install_mcp_servers(*, uninstall=False, quiet=False, env={}):
                 continue
             del mcp_servers[mcp.name]
         else:
-            mcp_url = f"http://{IDA_HOST}:{IDA_PORT}/mcp"
-            mcp_servers[mcp.name] = {
-                "type": "http",
-                "url": mcp_url,
-            }
+            mcp_servers[mcp.name] = generate_mcp_config(stdio=stdio)
 
         # Atomic write: temp file + rename
         suffix = ".toml" if is_toml else ".json"
@@ -553,8 +565,6 @@ def main():
         action="store_true",
         help="Allow installation despite IDA Free being installed",
     )
-    parser.add_argument("--generate-docs", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--install-plugin", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--transport",
         type=str,
@@ -572,13 +582,20 @@ def main():
     )
     args = parser.parse_args()
 
+    # Parse IDA RPC server argument
+    ida_rpc = urlparse(args.ida_rpc)
+    if ida_rpc.hostname is None or ida_rpc.port is None:
+        raise Exception(f"Invalid IDA RPC server: {args.ida_rpc}")
+    IDA_HOST = ida_rpc.hostname
+    IDA_PORT = ida_rpc.port
+
     if args.install and args.uninstall:
         print("Cannot install and uninstall at the same time")
         return
 
     if args.install:
         install_ida_plugin(allow_ida_free=args.allow_ida_free)
-        install_mcp_servers()
+        install_mcp_servers(stdio=(args.transport == "stdio"))
         return
 
     if args.uninstall:
@@ -586,20 +603,9 @@ def main():
         install_mcp_servers(uninstall=True)
         return
 
-    # NOTE: This is silent for automated Cline installations
-    if args.install_plugin:
-        install_ida_plugin(quiet=True, allow_ida_free=args.allow_ida_free)
-
     if args.config:
         print_mcp_config()
         return
-
-    # Parse IDA RPC server argument
-    ida_rpc = urlparse(args.ida_rpc)
-    if ida_rpc.hostname is None or ida_rpc.port is None:
-        raise Exception(f"Invalid IDA RPC server: {args.ida_rpc}")
-    IDA_HOST = ida_rpc.hostname
-    IDA_PORT = ida_rpc.port
 
     try:
         if args.transport == "stdio":
