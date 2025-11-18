@@ -18,6 +18,7 @@ else:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ida_mcp"))
     from zeromcp import McpServer
     from zeromcp.jsonrpc import JsonRpcResponse, JsonRpcRequest
+
     sys.path.pop(0)  # Clean up
 
 IDA_HOST = "127.0.0.1"
@@ -26,15 +27,16 @@ IDA_PORT = 13337
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
 
+
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
     """Dispatch JSON-RPC requests to the MCP server registry"""
     if not isinstance(request, dict):
         request_obj: JsonRpcRequest = json.loads(request)
     else:
-        request_obj: JsonRpcRequest = request # type: ignore
+        request_obj: JsonRpcRequest = request  # type: ignore
 
     if request_obj["method"] == "initialize":
-            return dispatch_original(request)
+        return dispatch_original(request)
     elif request_obj["method"].startswith("notifications/"):
         return dispatch_original(request)
 
@@ -44,9 +46,7 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
             request = json.dumps(request)
         elif isinstance(request, str):
             request = request.encode("utf-8")
-        conn.request(
-            "POST", "/mcp", request, {"Content-Type": "application/json"}
-        )
+        conn.request("POST", "/mcp", request, {"Content-Type": "application/json"})
         response = conn.getresponse()
         data = response.read().decode()
         return json.loads(data)
@@ -59,15 +59,17 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
             shortcut = "Ctrl+Option+M"
         else:
             shortcut = "Ctrl+Alt+M"
-        return JsonRpcResponse({
-            "jsonrpc": "2.0",
-            "error": {
-                "code": -32000,
-                "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?",
-                "data": str(e),
-            },
-            "id": id,
-        })
+        return JsonRpcResponse(
+            {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32000,
+                    "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?",
+                    "data": str(e),
+                },
+                "id": id,
+            }
+        )
     finally:
         conn.close()
 
@@ -89,6 +91,7 @@ if not os.path.exists(IDA_PLUGIN_LOADER):
     raise RuntimeError(
         f"IDA plugin loader not found at {IDA_PLUGIN_LOADER} (did you move it?)"
     )
+
 
 def get_python_executable():
     """Get the path to the Python executable"""
