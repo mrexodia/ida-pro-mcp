@@ -229,6 +229,14 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 "mcp.json",
             ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
+            "Antigravity IDE": (
+                os.path.join(os.path.expanduser("~"), ".gemini", "antigravity"),
+                "mcp_config.json",
+            ),
+            "Gemini CLI": (
+                os.path.join(os.path.expanduser("~"), ".gemini"),
+                "settings.json",
+            ),
         }
     elif sys.platform == "darwin":
         configs = {
@@ -288,6 +296,14 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 "mcp.json",
             ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
+            "Antigravity IDE": (
+                os.path.join(os.path.expanduser("~"), ".gemini", "antigravity"),
+                "mcp_config.json",
+            ),
+            "Gemini CLI": (
+                os.path.join(os.path.expanduser("~"), ".gemini"),
+                "settings.json",
+            ),
         }
     elif sys.platform == "linux":
         configs = {
@@ -339,6 +355,14 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 "mcp.json",
             ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
+            "Antigravity IDE": (
+                os.path.join(os.path.expanduser("~"), ".gemini", "antigravity"),
+                "mcp_config.json",
+            ),
+            "Gemini CLI": (
+                os.path.join(os.path.expanduser("~"), ".gemini"),
+                "settings.json",
+            ),
         }
     else:
         print(f"Unsupported platform: {sys.platform}")
