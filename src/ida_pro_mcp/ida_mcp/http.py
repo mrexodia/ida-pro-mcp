@@ -1,4 +1,3 @@
-import cgi
 import html
 import json
 import ida_netnode
@@ -184,15 +183,15 @@ input[type="submit"]:hover {
 
     def _handle_config_post(self):
         """Handles the configuration form submission."""
+        # Validate Content-Type
+        content_type = self.headers.get("content-type", "").split(";")[0].strip()
+        if content_type and content_type != "application/x-www-form-urlencoded":
+            self.send_error(400, f"Unsupported Content-Type: {content_type}")
+            return
+
         # Parse the form data
-        ctype, pdict = cgi.parse_header(self.headers.get("content-type", ""))
-        if ctype == "multipart/form-data":
-            postvars = cgi.parse_multipart(self.rfile, pdict)
-        elif ctype == "application/x-www-form-urlencoded":
-            length = int(self.headers.get("content-length", "0"))
-            postvars = parse_qs(self.rfile.read(length).decode("utf-8"))
-        else:
-            postvars = {}  # Handle other content types if needed
+        length = int(self.headers.get("content-length", "0"))
+        postvars = parse_qs(self.rfile.read(length).decode("utf-8"))
 
         # Update the server's tools
         enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS.keys()}
