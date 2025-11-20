@@ -86,7 +86,7 @@ class JsonRpcRegistry:
 
     def _call(self, method: str, params: Any) -> Any:
         if method not in self.methods:
-            raise JsonRpcException(-32601, f"Method '{method}' not found")
+            raise JsonRpcException(-32601, f"Method not found: '{method}'")
 
         func = self.methods[method]
         sig = inspect.signature(func)

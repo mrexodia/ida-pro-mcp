@@ -68,7 +68,7 @@ class MCP(idaapi.plugin_t):
                 self.mcp = MCP_SERVER
                 break
             except OSError as e:
-                if e.errno in (98, 10048):  # Address already in use
+                if e.errno in (48, 98, 10048):  # Address already in use
                     if i == self.MAX_PORT_TRIES - 1:
                         print(
                             f"[MCP] Error: Could not find available port in range {self.BASE_PORT}-{self.BASE_PORT + self.MAX_PORT_TRIES - 1}"
