@@ -334,12 +334,12 @@ def rename(batch: RenameBatch) -> dict:
 
     # Process each category
     result = {}
-    if "func" in batch:
-        result["func"] = _rename_funcs(_normalize_items(batch["func"]))
-    if "data" in batch:
-        result["data"] = _rename_globals(_normalize_items(batch["data"]))
-    if "local" in batch:
-        result["local"] = _rename_locals(_normalize_items(batch["local"]))
+    if "functions" in batch:
+        result["functions"] = _rename_funcs(_normalize_items(batch["functions"]))
+    if "globals" in batch:
+        result["globals"] = _rename_globals(_normalize_items(batch["globals"]))
+    if "locals" in batch:
+        result["locals"] = _rename_locals(_normalize_items(batch["locals"]))
     if "stack" in batch:
         result["stack"] = _rename_stack(_normalize_items(batch["stack"]))
 
