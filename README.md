@@ -6,6 +6,146 @@ https://github.com/user-attachments/assets/6ebeaa92-a9db-43fa-b756-eececce2aca0
 
 The binaries and prompt for the video are available in the [mcp-reversing-dataset](https://github.com/mrexodia/mcp-reversing-dataset) repository.
 
+## Prerequisites
+
+- [Python](https://www.python.org/downloads/) (**3.11 or higher**)
+  - Use `idapyswitch` to switch to the newest Python version
+- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
+- Supported MCP Client (pick one you like)
+  - [Amazon Q Developer CLI](https://aws.amazon.com/q/developer/)
+  - [Augment Code](https://www.augmentcode.com/)
+  - [Claude](https://claude.ai/download)
+  - [Claude Code](https://www.anthropic.com/code)
+  - [Cline](https://cline.bot)
+  - [Codex](https://github.com/openai/codex)
+  - [Copilot CLI](https://docs.github.com/en/copilot)
+  - [Crush](https://github.com/charmbracelet/crush)
+  - [Cursor](https://cursor.com)
+  - [Gemini CLI](https://google-gemini.github.io/gemini-cli/)
+  - [Kilo Code](https://www.kilocode.com/)
+  - [Kiro](https://kiro.dev/)
+  - [LM Studio](https://lmstudio.ai/)
+  - [Opencode](https://opencode.ai/)
+  - [Qodo Gen](https://www.qodo.ai/)
+  - [Qwen Coder](https://qwenlm.github.io/qwen-code-docs/)
+  - [Roo Code](https://roocode.com)
+  - [Trae](https://trae.ai/)
+  - [VS Code](https://code.visualstudio.com/)
+  - [Warp](https://www.warp.dev/)
+  - [Windsurf](https://windsurf.com)
+  - [Zed](https://zed.dev/)
+  - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `ida-pro-mcp --config` to get the JSON config for your client.
+
+## Installation
+
+Install the latest version of the IDA Pro MCP package:
+
+```sh
+pip uninstall ida-pro-mcp
+pip install https://github.com/mrexodia/ida-pro-mcp/archive/refs/heads/main.zip
+```
+
+Configure the MCP servers and install the IDA Plugin:
+
+```
+ida-pro-mcp --install
+```
+
+**Important**: Make sure you completely restart IDA and your MCP client for the installation to take effect. Some clients (like Claude) run in the background and need to be quit from the tray icon.
+
+https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
+
+_Note_: You need to load a binary in IDA before the plugin menu will show up.
+
+## Prompt Engineering
+
+LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
+
+```md
+Your task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
+
+- Inspect the decompilation and add comments with your findings
+- Rename variables to more sensible names
+- Change the variable and argument types if necessary (especially pointer and array types)
+- Change function names to be more descriptive
+- If more details are necessary, disassemble the function and add comments with your findings
+- NEVER convert number bases yourself. Use the `int_convert` MCP tool if needed!
+- Do not attempt brute forcing, derive any solutions purely from the disassembly and simple python scripts
+- Create a report.md with your findings and steps taken at the end
+- When you find a solution, prompt to user for feedback with the password you found
+```
+
+This prompt was just the first experiment, please share if you found ways to improve the output!
+
+Another prompt by [@can1357](https://github.com/can1357):
+
+```md
+Your task is to create a complete and comprehensive reverse engineering analysis. Reference AGENTS.md to understand the project goals and ensure the analysis serves our purposes.
+
+Use the following systematic methodology:
+
+1. **Decompilation Analysis**
+   - Thoroughly inspect the decompiler output
+   - Add detailed comments documenting your findings
+   - Focus on understanding the actual functionality and purpose of each component (do not rely on old, incorrect comments)
+
+2. **Improve Readability in the Database**
+   - Rename variables to sensible, descriptive names
+   - Correct variable and argument types where necessary (especially pointers and array types)
+   - Update function names to be descriptive of their actual purpose
+
+3. **Deep Dive When Needed**
+   - If more details are necessary, examine the disassembly and add comments with findings
+   - Document any low-level behaviors that aren't clear from the decompilation alone
+   - Use sub-agents to perform detailed analysis
+
+4. **Important Constraints**
+   - NEVER convert number bases yourself - use the int_convert MCP tool if needed
+   - Use MCP tools to retrieve information as necessary
+   - Derive all conclusions from actual analysis, not assumptions
+
+5. **Documentation**
+   - Produce comprehensive RE/*.md files with your findings
+   - Document the steps taken and methodology used
+   - When asked by the user, ensure accuracy over previous analysis file
+   - Organize findings in a way that serves the project goals outlined in AGENTS.md or CLAUDE.md
+```
+
+Live stream discussing prompting and showing some real-world malware analysis:
+
+[![](https://img.youtube.com/vi/iFxNuk3kxhk/0.jpg)](https://www.youtube.com/watch?v=iFxNuk3kxhk)
+
+## Tips for Enhancing LLM Accuracy
+
+Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts). Make sure to tell the LLM to use the `int_convert` MCP tool and you might also need [math-mcp](https://github.com/EthanHenrickson/math-mcp) for certain operations.
+
+Another thing to keep in mind is that LLMs will not perform well on obfuscated code. Before trying to use an LLM to solve the problem, take a look around the binary and spend some time (automatically) removing the following things:
+
+- String encryption
+- Import hashing
+- Control flow flattening
+- Code encryption
+- Anti-decompilation tricks
+
+You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
+
+## SSE Transport & Headless MCP
+
+You can run an SSE server to connect to the user interface like this:
+
+```sh
+uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
+```
+
+After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can also run a headless SSE server:
+
+```sh
+uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
+```
+
+_Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
+
+
 ## MCP Resources
 
 **Resources** are browsable IDB state endpoints that provide read-only access to binary metadata, functions, strings, and types. Unlike tools (which perform actions), resources follow REST-like URI patterns for efficient data exploration.
@@ -171,129 +311,6 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 - **Consistent error handling**: All batch operations return `[{..., error: null|string}, ...]`
 - **Cursor-based pagination**: Search functions return `cursor: {next: offset}` or `{done: true}` (default limit: 1000, enforced max: 10000 to prevent token overflow)
 - **Performance**: Strings are cached with MD5-based invalidation to avoid repeated `build_strlist` calls in large projects
-
-## Prerequisites
-
-- [Python](https://www.python.org/downloads/) (**3.11 or higher**)
-  - Use `idapyswitch` to switch to the newest Python version
-- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
-- Supported MCP Client (pick one you like)
-  - [Cline](https://cline.bot)
-  - [Roo Code](https://roocode.com)
-  - [Claude](https://claude.ai/download)
-  - [Cursor](https://cursor.com)
-  - [VSCode Agent Mode](https://github.blog/news-insights/product-news/github-copilot-agent-mode-activated/)
-  - [Windsurf](https://windsurf.com)
-  - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `ida-pro-mcp --config` to get the JSON config for your client.
-
-## Installation
-
-Install the latest version of the IDA Pro MCP package:
-
-```sh
-pip uninstall ida-pro-mcp
-pip install https://github.com/mrexodia/ida-pro-mcp/archive/refs/heads/main.zip
-```
-
-Configure the MCP servers and install the IDA Plugin:
-
-```
-ida-pro-mcp --install
-```
-
-**Important**: Make sure you completely restart IDA/Visual Studio Code/Claude for the installation to take effect. Claude runs in the background and you need to quit it from the tray icon.
-
-https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
-
-_Note_: You need to load a binary in IDA before the plugin menu will show up.
-
-## Prompt Engineering
-
-LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
-
-```md
-Your task is to analyze a crackme in IDA Pro. You can use the MCP tools to retrieve information. In general use the following strategy:
-
-- Inspect the decompilation and add comments with your findings
-- Rename variables to more sensible names
-- Change the variable and argument types if necessary (especially pointer and array types)
-- Change function names to be more descriptive
-- If more details are necessary, disassemble the function and add comments with your findings
-- NEVER convert number bases yourself. Use the `int_convert` MCP tool if needed!
-- Do not attempt brute forcing, derive any solutions purely from the disassembly and simple python scripts
-- Create a report.md with your findings and steps taken at the end
-- When you find a solution, prompt to user for feedback with the password you found
-```
-
-This prompt was just the first experiment, please share if you found ways to improve the output!
-
-Another prompt by [@can1357](https://github.com/can1357):
-
-```md
-Your task is to create a complete and comprehensive reverse engineering analysis. Reference AGENTS.md to understand the project goals and ensure the analysis serves our purposes.
-
-Use the following systematic methodology:
-
-1. **Decompilation Analysis**
-   - Thoroughly inspect the decompiler output
-   - Add detailed comments documenting your findings
-   - Focus on understanding the actual functionality and purpose of each component (do not rely on old, incorrect comments)
-
-2. **Improve Readability in the Database**
-   - Rename variables to sensible, descriptive names
-   - Correct variable and argument types where necessary (especially pointers and array types)
-   - Update function names to be descriptive of their actual purpose
-
-3. **Deep Dive When Needed**
-   - If more details are necessary, examine the disassembly and add comments with findings
-   - Document any low-level behaviors that aren't clear from the decompilation alone
-   - Use sub-agents to perform detailed analysis
-
-4. **Important Constraints**
-   - NEVER convert number bases yourself - use the int_convert MCP tool if needed
-   - Use MCP tools to retrieve information as necessary
-   - Derive all conclusions from actual analysis, not assumptions
-
-5. **Documentation**
-   - Produce comprehensive RE/*.md files with your findings
-   - Document the steps taken and methodology used
-   - When asked by the user, ensure accuracy over previous analysis file
-   - Organize findings in a way that serves the project goals outlined in AGENTS.md or CLAUDE.md
-```
-
-Live stream discussing prompting and showing some real-world malware analysis:
-
-[![](https://img.youtube.com/vi/iFxNuk3kxhk/0.jpg)](https://www.youtube.com/watch?v=iFxNuk3kxhk)
-
-## Tips for Enhancing LLM Accuracy
-
-Large Language Models (LLMs) are powerful tools, but they can sometimes struggle with complex mathematical calculations or exhibit "hallucinations" (making up facts). Make sure to tell the LLM to use the `int_convert` MCP tool and you might also need [math-mcp](https://github.com/EthanHenrickson/math-mcp) for certain operations.
-
-Another thing to keep in mind is that LLMs will not perform well on obfuscated code. Before trying to use an LLM to solve the problem, take a look around the binary and spend some time (automatically) removing the following things:
-
-- String encryption
-- Import hashing
-- Control flow flattening
-- Code encryption
-- Anti-decompilation tricks
-
-You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
-
-## SSE Transport & Headless MCP
-
-You can run an SSE server to connect to the user interface like this:
-
-```sh
-uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
-```
-
-After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can also run a headless SSE server:
-
-```sh
-uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
-```
-
-_Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
 ## Comparison with other MCP servers
 

@@ -179,6 +179,14 @@ def print_mcp_config():
 
 
 def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
+    # Map client names to their JSON key paths for clients that don't use "mcpServers"
+    # Format: client_name -> (top_level_key, nested_key)
+    # None means use default "mcpServers" at top level
+    special_json_structures = {
+        "VS Code": ("mcp", "servers"),
+        "Visual Studio 2022": (None, "servers"),  # servers at top level
+    }
+
     if sys.platform == "win32":
         configs = {
             "Cline": (
@@ -229,12 +237,72 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 "mcp.json",
             ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
+            "Zed": (
+                os.path.join(os.getenv("APPDATA", ""), "Zed"),
+                "settings.json",
+            ),
+            "Gemini CLI": (
+                os.path.join(os.path.expanduser("~"), ".gemini"),
+                "settings.json",
+            ),
+            "Qwen Coder": (
+                os.path.join(os.path.expanduser("~"), ".qwen"),
+                "settings.json",
+            ),
+            "Copilot CLI": (
+                os.path.join(os.path.expanduser("~"), ".copilot"),
+                "mcp-config.json",
+            ),
+            "Crush": (
+                os.path.join(os.path.expanduser("~")),
+                "crush.json",
+            ),
+            "Augment Code": (
+                os.path.join(
+                    os.getenv("APPDATA", ""),
+                    "Code",
+                    "User",
+                ),
+                "settings.json",
+            ),
+            "Qodo Gen": (
+                os.path.join(
+                    os.getenv("APPDATA", ""),
+                    "Code",
+                    "User",
+                ),
+                "settings.json",
+            ),
             "Antigravity IDE": (
                 os.path.join(os.path.expanduser("~"), ".gemini", "antigravity"),
                 "mcp_config.json",
             ),
-            "Gemini CLI": (
-                os.path.join(os.path.expanduser("~"), ".gemini"),
+            "Warp": (
+                os.path.join(os.path.expanduser("~"), ".warp"),
+                "mcp_config.json",
+            ),
+            "Amazon Q": (
+                os.path.join(os.path.expanduser("~"), ".aws", "amazonq"),
+                "mcp_config.json",
+            ),
+            "Opencode": (
+                os.path.join(os.path.expanduser("~"), ".opencode"),
+                "mcp_config.json",
+            ),
+            "Kiro": (
+                os.path.join(os.path.expanduser("~"), ".kiro"),
+                "mcp_config.json",
+            ),
+            "Trae": (
+                os.path.join(os.path.expanduser("~"), ".trae"),
+                "mcp_config.json",
+            ),
+            "VS Code": (
+                os.path.join(
+                    os.getenv("APPDATA", ""),
+                    "Code",
+                    "User",
+                ),
                 "settings.json",
             ),
         }
@@ -300,8 +368,94 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 os.path.join(os.path.expanduser("~"), ".gemini", "antigravity"),
                 "mcp_config.json",
             ),
+            "Zed": (
+                os.path.join(
+                    os.path.expanduser("~"), "Library", "Application Support", "Zed"
+                ),
+                "settings.json",
+            ),
             "Gemini CLI": (
                 os.path.join(os.path.expanduser("~"), ".gemini"),
+                "settings.json",
+            ),
+            "Qwen Coder": (
+                os.path.join(os.path.expanduser("~"), ".qwen"),
+                "settings.json",
+            ),
+            "Copilot CLI": (
+                os.path.join(os.path.expanduser("~"), ".copilot"),
+                "mcp-config.json",
+            ),
+            "Crush": (
+                os.path.join(os.path.expanduser("~")),
+                "crush.json",
+            ),
+            "Augment Code": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    "Library",
+                    "Application Support",
+                    "Code",
+                    "User",
+                ),
+                "settings.json",
+            ),
+            "Qodo Gen": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    "Library",
+                    "Application Support",
+                    "Code",
+                    "User",
+                ),
+                "settings.json",
+            ),
+            "BoltAI": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    "Library",
+                    "Application Support",
+                    "BoltAI",
+                ),
+                "config.json",
+            ),
+            "Perplexity": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    "Library",
+                    "Application Support",
+                    "Perplexity",
+                ),
+                "mcp_config.json",
+            ),
+            "Warp": (
+                os.path.join(os.path.expanduser("~"), ".warp"),
+                "mcp_config.json",
+            ),
+            "Amazon Q": (
+                os.path.join(os.path.expanduser("~"), ".aws", "amazonq"),
+                "mcp_config.json",
+            ),
+            "Opencode": (
+                os.path.join(os.path.expanduser("~"), ".opencode"),
+                "mcp_config.json",
+            ),
+            "Kiro": (
+                os.path.join(os.path.expanduser("~"), ".kiro"),
+                "mcp_config.json",
+            ),
+            "Trae": (
+                os.path.join(os.path.expanduser("~"), ".trae"),
+                "mcp_config.json",
+            ),
+            "VS Code": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    "Library",
+                    "Application Support",
+                    "Code",
+                    "User",
+                ),
                 "settings.json",
             ),
         }
@@ -359,8 +513,71 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 os.path.join(os.path.expanduser("~"), ".gemini", "antigravity"),
                 "mcp_config.json",
             ),
+            "Zed": (
+                os.path.join(os.path.expanduser("~"), ".config", "zed"),
+                "settings.json",
+            ),
             "Gemini CLI": (
                 os.path.join(os.path.expanduser("~"), ".gemini"),
+                "settings.json",
+            ),
+            "Qwen Coder": (
+                os.path.join(os.path.expanduser("~"), ".qwen"),
+                "settings.json",
+            ),
+            "Copilot CLI": (
+                os.path.join(os.path.expanduser("~"), ".copilot"),
+                "mcp-config.json",
+            ),
+            "Crush": (
+                os.path.join(os.path.expanduser("~")),
+                "crush.json",
+            ),
+            "Augment Code": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    ".config",
+                    "Code",
+                    "User",
+                ),
+                "settings.json",
+            ),
+            "Qodo Gen": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    ".config",
+                    "Code",
+                    "User",
+                ),
+                "settings.json",
+            ),
+            "Warp": (
+                os.path.join(os.path.expanduser("~"), ".warp"),
+                "mcp_config.json",
+            ),
+            "Amazon Q": (
+                os.path.join(os.path.expanduser("~"), ".aws", "amazonq"),
+                "mcp_config.json",
+            ),
+            "Opencode": (
+                os.path.join(os.path.expanduser("~"), ".opencode"),
+                "mcp_config.json",
+            ),
+            "Kiro": (
+                os.path.join(os.path.expanduser("~"), ".kiro"),
+                "mcp_config.json",
+            ),
+            "Trae": (
+                os.path.join(os.path.expanduser("~"), ".trae"),
+                "mcp_config.json",
+            ),
+            "VS Code": (
+                os.path.join(
+                    os.path.expanduser("~"),
+                    ".config",
+                    "Code",
+                    "User",
+                ),
                 "settings.json",
             ),
         }
@@ -421,9 +638,26 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 config["mcp_servers"] = {}
             mcp_servers = config["mcp_servers"]
         else:
-            if "mcpServers" not in config:
-                config["mcpServers"] = {}
-            mcp_servers = config["mcpServers"]
+            # Check if this client uses a special JSON structure
+            if name in special_json_structures:
+                top_key, nested_key = special_json_structures[name]
+                if top_key is None:
+                    # servers at top level (e.g., Visual Studio 2022)
+                    if nested_key not in config:
+                        config[nested_key] = {}
+                    mcp_servers = config[nested_key]
+                else:
+                    # nested structure (e.g., VS Code uses mcp.servers)
+                    if top_key not in config:
+                        config[top_key] = {}
+                    if nested_key not in config[top_key]:
+                        config[top_key][nested_key] = {}
+                    mcp_servers = config[top_key][nested_key]
+            else:
+                # Default: mcpServers at top level
+                if "mcpServers" not in config:
+                    config["mcpServers"] = {}
+                mcp_servers = config["mcpServers"]
 
         # Migrate old name
         old_name = "github.com/mrexodia/ida-pro-mcp"
