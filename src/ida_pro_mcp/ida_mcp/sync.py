@@ -4,6 +4,7 @@ import functools
 from enum import IntEnum
 import idaapi
 import ida_kernwin
+import idc
 from .rpc import McpToolError
 
 # ============================================================================
@@ -38,7 +39,7 @@ class IDASafety(IntEnum):
 call_stack = queue.LifoQueue()
 
 
-def sync_wrapper(ff, safety_mode: IDASafety):
+def _sync_wrapper(ff, safety_mode: IDASafety):
     """Call a function ff with a specific IDA safety_mode."""
     if safety_mode not in [IDASafety.SAFE_READ, IDASafety.SAFE_WRITE]:
         error_str = f"Invalid safety mode {safety_mode} over function {ff.__name__}"
@@ -68,6 +69,13 @@ def sync_wrapper(ff, safety_mode: IDASafety):
         raise res
     return res
 
+def sync_wrapper(ff, safety_mode: IDASafety):
+    """Wrapper to enable batch mode during IDA synchronization."""
+    old_batch = idc.batch(1)
+    try:
+        return _sync_wrapper(ff, safety_mode)
+    finally:
+        idc.batch(old_batch)
 
 def idawrite(f):
     """Decorator for marking a function as modifying the IDB."""
