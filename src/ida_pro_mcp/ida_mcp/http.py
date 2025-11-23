@@ -60,9 +60,6 @@ ORIGINAL_TOOLS = handle_enabled_tools(MCP_SERVER.tools, "enabled_tools")
 
 
 class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
-    def __init__(self, request, client_address, server):
-        super().__init__(request, client_address, server)
-
     def do_POST(self):
         """Handles POST requests."""
         if urlparse(self.path).path == "/config":

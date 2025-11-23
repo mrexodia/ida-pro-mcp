@@ -60,6 +60,10 @@ class _McpSseConnection:
             return False
 
 class McpHttpRequestHandler(BaseHTTPRequestHandler):
+    server_version = "zeromcp/1.3.0"
+    error_message_format = "%(code)d - %(message)s"
+    error_content_type = "text/plain"
+
     def __init__(self, request, client_address, server):
         self.mcp_server: "McpServer" = getattr(server, "mcp_server")
         super().__init__(request, client_address, server)
@@ -311,6 +315,11 @@ class McpServer:
                 request = stdin.readline()
                 if not request: # EOF
                     break
+
+                # Strip whitespace (trailing newline) before parsing
+                request = request.strip()
+                if not request:
+                    continue
 
                 response = self.registry.dispatch(request)
                 if response is not None:
