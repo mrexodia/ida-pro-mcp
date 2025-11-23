@@ -841,13 +841,21 @@ def decompile_function_safe(ea: int) -> Optional[str]:
         return None
 
 
-def get_assembly_lines(ea: int) -> list[dict]:
-    """Get assembly lines for a function"""
+def get_assembly_lines(ea: int) -> str:
+    """Get assembly lines for a function in compact string format"""
     func = idaapi.get_func(ea)
     if not func:
-        return []
+        return ""
 
-    lines = []
+    func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
+
+    # Get segment from first instruction
+    first_seg = idaapi.getseg(func.start_ea)
+    segment_name = idaapi.get_segm_name(first_seg) if first_seg else "UNKNOWN"
+
+    # Build compact string format
+    lines_str = f"{func_name} ({segment_name} @ {hex(func.start_ea)}):"
+
     for item_ea in idautils.FuncItems(func.start_ea):
         mnem = idc.print_insn_mnem(item_ea) or ""
         ops = []
@@ -855,10 +863,10 @@ def get_assembly_lines(ea: int) -> list[dict]:
             if idc.get_operand_type(item_ea, n) == idaapi.o_void:
                 break
             ops.append(idc.print_operand(item_ea, n) or "")
-        lines.append(
-            {"addr": hex(item_ea), "instruction": f"{mnem} {', '.join(ops)}".rstrip()}
-        )
-    return lines
+        instruction = f"{mnem} {', '.join(ops)}".rstrip()
+        lines_str += f"\n{item_ea:x}  {instruction}"
+
+    return lines_str
 
 
 def get_all_xrefs(ea: int) -> dict:
