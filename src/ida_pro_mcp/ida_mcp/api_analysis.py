@@ -152,39 +152,69 @@ def disasm(
         try:
             start = parse_address(start_addr)
             func = idaapi.get_func(start)
-            if not func:
+
+            if is_window_active():
+                ida_kernwin.jumpto(start)
+
+            # Get segment info
+            seg = idaapi.getseg(start)
+            if not seg:
                 results.append(
                     {
                         "addr": start_addr,
                         "asm": None,
-                        "error": "No function found",
+                        "error": "No segment found",
                         "cursor": {"done": True},
                     }
                 )
                 continue
-            if is_window_active():
-                ida_kernwin.jumpto(start)
 
-            func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
+            segment_name = idaapi.get_segm_name(seg) if seg else "UNKNOWN"
 
-            # Get segment from first instruction
-            first_seg = idaapi.getseg(func.start_ea)
-            segment_name = idaapi.get_segm_name(first_seg) if first_seg else "UNKNOWN"
-
-            # Collect all instructions first
+            # Collect instructions
             all_instructions = []
-            for ea in idautils.FuncItems(func.start_ea):
-                if ea == idaapi.BADADDR:
-                    continue
 
-                mnem: str = idc.print_insn_mnem(ea) or ""
-                ops: list[str] = []
-                for n in range(8):
-                    if idc.get_operand_type(ea, n) == idaapi.o_void:
+            if func:
+                # Function exists: disassemble all function items
+                func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
+                header_addr = func.start_ea
+
+                for ea in idautils.FuncItems(func.start_ea):
+                    if ea == idaapi.BADADDR:
+                        continue
+
+                    mnem: str = idc.print_insn_mnem(ea) or ""
+                    ops: list[str] = []
+                    for n in range(8):
+                        if idc.get_operand_type(ea, n) == idaapi.o_void:
+                            break
+                        ops.append(idc.print_operand(ea, n) or "")
+                    instruction = f"{mnem} {', '.join(ops)}".rstrip()
+                    all_instructions.append((ea, instruction))
+            else:
+                # No function: disassemble sequentially from start address
+                func_name = f"<no function>"
+                header_addr = start
+
+                ea = start
+                while ea < seg.end_ea and len(all_instructions) < max_instructions + offset:
+                    if ea == idaapi.BADADDR:
                         break
-                    ops.append(idc.print_operand(ea, n) or "")
-                instruction = f"{mnem} {', '.join(ops)}".rstrip()
-                all_instructions.append((ea, instruction))
+
+                    insn = idaapi.insn_t()
+                    if idaapi.decode_insn(insn, ea) == 0:
+                        break
+
+                    mnem: str = idc.print_insn_mnem(ea) or ""
+                    ops: list[str] = []
+                    for n in range(8):
+                        if idc.get_operand_type(ea, n) == idaapi.o_void:
+                            break
+                        ops.append(idc.print_operand(ea, n) or "")
+                    instruction = f"{mnem} {', '.join(ops)}".rstrip()
+                    all_instructions.append((ea, instruction))
+
+                    ea = idc.next_head(ea, seg.end_ea)
 
             # Apply pagination
             total_insns = len(all_instructions)
@@ -192,28 +222,33 @@ def disasm(
             has_more = offset + max_instructions < total_insns
 
             # Build disassembly string from paginated instructions
-            lines_str = f"{func_name} ({segment_name} @ {hex(func.start_ea)}):"
+            lines_str = f"{func_name} ({segment_name} @ {hex(header_addr)}):"
             for ea, instruction in paginated_insns:
                 lines_str += f"\n{ea:x}  {instruction}"
 
             rettype = None
             args: Optional[list[Argument]] = None
-            tif = ida_typeinf.tinfo_t()
-            if ida_nalt.get_tinfo(tif, func.start_ea) and tif.is_func():
-                ftd = ida_typeinf.func_type_data_t()
-                if tif.get_func_details(ftd):
-                    rettype = str(ftd.rettype)
-                    args = [
-                        Argument(name=(a.name or f"arg{i}"), type=str(a.type))
-                        for i, a in enumerate(ftd)
-                    ]
+            stack_frame = None
+
+            if func:
+                tif = ida_typeinf.tinfo_t()
+                if ida_nalt.get_tinfo(tif, func.start_ea) and tif.is_func():
+                    ftd = ida_typeinf.func_type_data_t()
+                    if tif.get_func_details(ftd):
+                        rettype = str(ftd.rettype)
+                        args = [
+                            Argument(name=(a.name or f"arg{i}"), type=str(a.type))
+                            for i, a in enumerate(ftd)
+                        ]
+                stack_frame = get_stack_frame_variables_internal(func.start_ea, False)
 
             out: DisassemblyFunction = {
                 "name": func_name,
-                "start_ea": hex(func.start_ea),
-                "stack_frame": get_stack_frame_variables_internal(func.start_ea, False),
+                "start_ea": hex(header_addr),
                 "lines": lines_str,
             }
+            if stack_frame:
+                out["stack_frame"] = stack_frame
             if rettype:
                 out["return_type"] = rettype
             if args is not None:
