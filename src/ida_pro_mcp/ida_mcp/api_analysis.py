@@ -175,21 +175,20 @@ def disasm(
             all_instructions = []
 
             if func:
-                # Function exists: disassemble all function items
+                # Function exists: disassemble function items starting from requested address
                 func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
-                header_addr = func.start_ea
+                header_addr = start  # Use requested address, not function start
 
                 for ea in idautils.FuncItems(func.start_ea):
                     if ea == idaapi.BADADDR:
                         continue
+                    # Skip instructions before the requested start address
+                    if ea < start:
+                        continue
 
-                    mnem: str = idc.print_insn_mnem(ea) or ""
-                    ops: list[str] = []
-                    for n in range(8):
-                        if idc.get_operand_type(ea, n) == idaapi.o_void:
-                            break
-                        ops.append(idc.print_operand(ea, n) or "")
-                    instruction = f"{mnem} {', '.join(ops)}".rstrip()
+                    # Use generate_disasm_line to get full line with comments
+                    line = idc.generate_disasm_line(ea, 0)
+                    instruction = ida_lines.tag_remove(line) if line else ""
                     all_instructions.append((ea, instruction))
             else:
                 # No function: disassemble sequentially from start address
@@ -205,13 +204,9 @@ def disasm(
                     if idaapi.decode_insn(insn, ea) == 0:
                         break
 
-                    mnem: str = idc.print_insn_mnem(ea) or ""
-                    ops: list[str] = []
-                    for n in range(8):
-                        if idc.get_operand_type(ea, n) == idaapi.o_void:
-                            break
-                        ops.append(idc.print_operand(ea, n) or "")
-                    instruction = f"{mnem} {', '.join(ops)}".rstrip()
+                    # Use generate_disasm_line to get full line with comments
+                    line = idc.generate_disasm_line(ea, 0)
+                    instruction = ida_lines.tag_remove(line) if line else ""
                     all_instructions.append((ea, instruction))
 
                     ea = idc.next_head(ea, seg.end_ea)
