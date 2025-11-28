@@ -9,7 +9,7 @@ import ida_nalt
 import ida_typeinf
 import ida_segment
 
-from .rpc import tool
+from .rpc import tool, test
 from .sync import idaread
 from .utils import (
     Metadata,
@@ -97,6 +97,19 @@ def idb_meta() -> Metadata:
         crc32=hex(ida_nalt.retrieve_input_file_crc32()),
         filesize=hex(ida_nalt.retrieve_input_file_size()),
     )
+
+
+@test()
+def test_idb_meta():
+    meta = idb_meta()
+    assert "path" in meta
+    assert "module" in meta
+    assert "base" in meta
+    assert "size" in meta
+    assert "md5" in meta
+    assert "sha256" in meta
+    assert "crc32" in meta
+    assert "filesize" in meta
 
 
 @tool
