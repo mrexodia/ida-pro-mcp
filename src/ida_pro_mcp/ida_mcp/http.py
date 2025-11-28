@@ -2,7 +2,8 @@ import html
 import json
 import ida_netnode
 from urllib.parse import urlparse, parse_qs
-from typing import TypeVar
+from typing import TypeVar, cast
+from http.server import HTTPServer
 
 from .sync import idaread, idawrite
 from .rpc import McpRpcRegistry, McpHttpRequestHandler, MCP_SERVER, MCP_UNSAFE
@@ -63,6 +64,8 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
     def do_POST(self):
         """Handles POST requests."""
         if urlparse(self.path).path == "/config":
+            if not self._check_origin():
+                return
             self._handle_config_post()
         else:
             super().do_POST()
@@ -70,15 +73,54 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
     def do_GET(self):
         """Handles GET requests."""
         if urlparse(self.path).path == "/config.html":
+            if not self._check_host():
+                return
             self._handle_config_get()
         else:
             super().do_GET()
 
+    def _check_origin(self) -> bool:
+        """
+        Prevents CSRF and DNS rebinding attacks by ensuring POST requests
+        originate from pages served by this server, not external websites.
+        """
+        origin = self.headers.get("Origin")
+        port = cast(HTTPServer, self.server).server_port
+        if origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+            self.send_error(403, "Invalid Origin")
+            return False
+        return True
+
+    def _check_host(self) -> bool:
+        """
+        Prevents DNS rebinding attacks where an attacker's domain (e.g., evil.com)
+        resolves to 127.0.0.1, allowing their page to read localhost resources.
+        """
+        host = self.headers.get("Host")
+        port = cast(HTTPServer, self.server).server_port
+        if host not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+            self.send_error(403, "Invalid Host")
+            return False
+        return True
+
     def _send_html(self, status: int, text: str):
+        """
+        Prevents clickjacking by blocking iframes (X-Frame-Options for older
+        browsers, frame-ancestors for modern ones). Other CSP directives
+        provide defense-in-depth against content injection attacks.
+        """
         body = text.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "; ".join([
+            "frame-ancestors 'none'",
+            "script-src 'self' 'unsafe-inline'",
+            "style-src 'self' 'unsafe-inline'",
+            "default-src 'self'",
+            "form-action 'self'",
+        ]))
         self.end_headers()
         self.wfile.write(body)
 
@@ -182,7 +224,7 @@ input[type="submit"]:hover {
         """Handles the configuration form submission."""
         # Validate Content-Type
         content_type = self.headers.get("content-type", "").split(";")[0].strip()
-        if content_type and content_type != "application/x-www-form-urlencoded":
+        if content_type != "application/x-www-form-urlencoded":
             self.send_error(400, f"Unsupported Content-Type: {content_type}")
             return
 
