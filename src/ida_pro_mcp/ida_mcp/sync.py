@@ -69,6 +69,7 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
         raise res
     return res
 
+
 def sync_wrapper(ff, safety_mode: IDASafety):
     """Wrapper to enable batch mode during IDA synchronization."""
     old_batch = idc.batch(1)
@@ -76,6 +77,7 @@ def sync_wrapper(ff, safety_mode: IDASafety):
         return _sync_wrapper(ff, safety_mode)
     finally:
         idc.batch(old_batch)
+
 
 def idawrite(f):
     """Decorator for marking a function as modifying the IDB."""
