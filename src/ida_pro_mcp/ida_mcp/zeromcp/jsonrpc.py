@@ -33,6 +33,8 @@ class JsonRpcException(Exception):
 class JsonRpcRegistry:
     def __init__(self):
         self.methods: dict[str, Callable] = {}
+        self._cache: dict[Callable, tuple[inspect.Signature, dict, list[str]]] = {}
+        self.redact_exceptions = False
 
     def method(self, func: Callable, name: str | None = None) -> Callable:
         self.methods[name or func.__name__] = func # type: ignore
@@ -79,6 +81,11 @@ class JsonRpcRegistry:
             return self._error(request_id, error["code"], error["message"], error.get("data"))
 
     def map_exception(self, e: Exception) -> JsonRpcError:
+        if self.redact_exceptions:
+            return {
+                "code": -32603,
+                "message": f"Internal Error: {str(e)}",
+            }
         return {
             "code": -32603,
             "message": "\n".join(traceback.format_exception(e)).strip() + "\n\nPlease report a bug!",
@@ -86,18 +93,25 @@ class JsonRpcRegistry:
 
     def _call(self, method: str, params: Any) -> Any:
         if method not in self.methods:
-            raise JsonRpcException(-32601, f"Method not found: '{method}'")
+            raise JsonRpcException(-32601, f"Method '{method}' not found")
 
         func = self.methods[method]
-        sig = inspect.signature(func)
-        hints = get_type_hints(func)
-        hints.pop("return", None)
 
-        # Determine required vs optional parameters
-        required_params = []
-        for param_name, param in sig.parameters.items():
-            if param.default is inspect.Parameter.empty:
-                required_params.append(param_name)
+        # Check for cached reflection data
+        if func not in self._cache:
+            sig = inspect.signature(func)
+            hints = get_type_hints(func)
+            hints.pop("return", None)
+
+            # Determine required vs optional parameters
+            required_params = []
+            for param_name, param in sig.parameters.items():
+                if param.default is inspect.Parameter.empty:
+                    required_params.append(param_name)
+
+            self._cache[func] = (sig, hints, required_params)
+
+        sig, hints, required_params = self._cache[func]
 
         # Handle None params
         if params is None:
