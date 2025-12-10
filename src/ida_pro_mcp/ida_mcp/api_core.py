@@ -409,13 +409,21 @@ def segments() -> list[Segment]:
 
 @tool
 @idaread
-def local_types():
+def local_types(
+    offset: Annotated[int, "Starting ordinal (default: 0)"] = 0,
+    count: Annotated[int, "Maximum number of types (default: 50, 0 for all)"] = 50,
+    max_decl_chars: Annotated[int, "Max characters per declaration (default: 2000, 0 for unlimited)"] = 2000,
+):
     """List local types"""
     error = ida_hexrays.hexrays_failure_t()
     locals = []
     idati = ida_typeinf.get_idati()
     type_count = ida_typeinf.get_ordinal_limit(idati)
-    for ordinal in range(1, type_count):
+    
+    start_ordinal = 1 + offset
+    end_ordinal = type_count if count == 0 else min(start_ordinal + count, type_count)
+    
+    for ordinal in range(start_ordinal, end_ordinal):
         try:
             tif = ida_typeinf.tinfo_t()
             if tif.get_numbered_type(idati, ordinal):
@@ -434,6 +442,8 @@ def local_types():
                     )
                     c_decl_output = tif._print(None, c_decl_flags)
                     if c_decl_output:
+                        if max_decl_chars > 0 and len(c_decl_output) > max_decl_chars:
+                            c_decl_output = c_decl_output[:max_decl_chars] + "\n... [truncated]"
                         locals.append(f"  C declaration:\n{c_decl_output}")
                 else:
                     simple_decl = tif._print(
@@ -443,6 +453,8 @@ def local_types():
                         | ida_typeinf.PRTYPE_SEMI,
                     )
                     if simple_decl:
+                        if max_decl_chars > 0 and len(simple_decl) > max_decl_chars:
+                            simple_decl = simple_decl[:max_decl_chars] + "... [truncated]"
                         locals.append(f"  Simple declaration:\n{simple_decl}")
             else:
                 message = f"\nType #{ordinal}: Failed to retrieve information."
@@ -453,4 +465,4 @@ def local_types():
                 raise IDAError(message)
         except Exception:
             continue
-    return locals
+    return {"data": locals, "total_types": type_count - 1, "next_offset": end_ordinal - 1 if end_ordinal < type_count else None}

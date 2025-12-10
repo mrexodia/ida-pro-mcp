@@ -824,7 +824,7 @@ def decompile_checked(addr: int):
     return cfunc
 
 
-def decompile_function_safe(ea: int) -> Optional[str]:
+def decompile_function_safe(ea: int, max_chars: int = 0) -> Optional[str]:
     """Safely decompile a function, returning None on failure"""
     import ida_lines
 
@@ -836,12 +836,15 @@ def decompile_function_safe(ea: int) -> Optional[str]:
         if not cfunc:
             return None
         sv = cfunc.get_pseudocode()
-        return "\n".join(ida_lines.tag_remove(sl.line) for sl in sv)
+        result = "\n".join(ida_lines.tag_remove(sl.line) for sl in sv)
+        if max_chars > 0 and len(result) > max_chars:
+            result = result[:max_chars]
+        return result
     except Exception:
         return None
 
 
-def get_assembly_lines(ea: int) -> str:
+def get_assembly_lines(ea: int, max_chars: int = 0) -> str:
     """Get assembly lines for a function in compact string format"""
     func = idaapi.get_func(ea)
     if not func:
@@ -849,11 +852,9 @@ def get_assembly_lines(ea: int) -> str:
 
     func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
 
-    # Get segment from first instruction
     first_seg = idaapi.getseg(func.start_ea)
     segment_name = idaapi.get_segm_name(first_seg) if first_seg else "UNKNOWN"
 
-    # Build compact string format
     lines_str = f"{func_name} ({segment_name} @ {hex(func.start_ea)}):"
 
     for item_ea in idautils.FuncItems(func.start_ea):
@@ -864,21 +865,32 @@ def get_assembly_lines(ea: int) -> str:
                 break
             ops.append(idc.print_operand(item_ea, n) or "")
         instruction = f"{mnem} {', '.join(ops)}".rstrip()
-        lines_str += f"\n{item_ea:x}  {instruction}"
+        line = f"\n{item_ea:x}  {instruction}"
+        
+        if max_chars > 0 and len(lines_str) + len(line) > max_chars:
+            break
+        lines_str += line
 
     return lines_str
 
 
-def get_all_xrefs(ea: int) -> dict:
+def get_all_xrefs(ea: int, max_xrefs: int = 0) -> dict:
     """Get all xrefs to and from an address"""
+    xrefs_to = list(idautils.XrefsTo(ea, 0))
+    xrefs_from = list(idautils.XrefsFrom(ea, 0))
+    
+    if max_xrefs > 0:
+        xrefs_to = xrefs_to[:max_xrefs]
+        xrefs_from = xrefs_from[:max_xrefs]
+    
     return {
         "to": [
             {"addr": hex(x.frm), "type": "code" if x.iscode else "data"}
-            for x in idautils.XrefsTo(ea, 0)
+            for x in xrefs_to
         ],
         "from": [
             {"addr": hex(x.to), "type": "code" if x.iscode else "data"}
-            for x in idautils.XrefsFrom(ea, 0)
+            for x in xrefs_from
         ],
     }
 
@@ -965,10 +977,12 @@ def get_callers(addr: str) -> list[Function]:
         return []
 
 
-def get_xrefs_from_internal(ea: int) -> list[Xref]:
+def get_xrefs_from_internal(ea: int, max_xrefs: int = 0) -> list[Xref]:
     """Get all xrefs from an address"""
     xrefs = []
     for xref in idautils.XrefsFrom(ea, 0):
+        if max_xrefs > 0 and len(xrefs) >= max_xrefs:
+            break
         xrefs.append(
             Xref(
                 addr=hex(xref.to),
@@ -979,7 +993,7 @@ def get_xrefs_from_internal(ea: int) -> list[Xref]:
     return xrefs
 
 
-def extract_function_strings(ea: int) -> list[String]:
+def extract_function_strings(ea: int, max_strings: int = 0) -> list[String]:
     """Extract string references from a function"""
     func = idaapi.get_func(ea)
     if not func:
@@ -987,7 +1001,11 @@ def extract_function_strings(ea: int) -> list[String]:
 
     strings = []
     for item_ea in idautils.FuncItems(func.start_ea):
+        if max_strings > 0 and len(strings) >= max_strings:
+            break
         for xref in idautils.XrefsFrom(item_ea, 0):
+            if max_strings > 0 and len(strings) >= max_strings:
+                break
             if not xref.iscode:
                 # Check if target is a string
                 str_type = ida_nalt.get_str_type(xref.to)
@@ -1008,7 +1026,7 @@ def extract_function_strings(ea: int) -> list[String]:
     return strings
 
 
-def extract_function_constants(ea: int) -> list[dict]:
+def extract_function_constants(ea: int, max_constants: int = 0) -> list[dict]:
     """Extract immediate constants from a function"""
     func = idaapi.get_func(ea)
     if not func:
@@ -1016,9 +1034,13 @@ def extract_function_constants(ea: int) -> list[dict]:
 
     constants = []
     for item_ea in idautils.FuncItems(func.start_ea):
+        if max_constants > 0 and len(constants) >= max_constants:
+            break
         insn = idaapi.insn_t()
         if idaapi.decode_insn(insn, item_ea) > 0:
             for op in insn.ops:
+                if max_constants > 0 and len(constants) >= max_constants:
+                    break
                 if op.type == idaapi.o_imm:
                     constants.append(
                         {

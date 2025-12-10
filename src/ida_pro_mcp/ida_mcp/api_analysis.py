@@ -89,6 +89,8 @@ def _get_cached_strings_dict() -> list[dict]:
 @idaread
 def decompile(
     addrs: Annotated[list[str] | str, "Function addresses to decompile"],
+    max_chars: Annotated[int, "Max characters per function (default: 50000, 0 for unlimited)"] = 50000,
+    char_offset: Annotated[int, "Skip first N characters (default: 0)"] = 0,
 ) -> list[dict]:
     """Decompile functions to pseudocode"""
     addrs = normalize_list_input(addrs)
@@ -101,7 +103,8 @@ def decompile(
             if is_window_active():
                 ida_hexrays.open_pseudocode(start, ida_hexrays.OPF_REUSE)
             sv = cfunc.get_pseudocode()
-            code = ""
+            
+            full_code = ""
             for i, sl in enumerate(sv):
                 sl: ida_kernwin.simpleline_t
                 item = ida_hexrays.ctree_item_t()
@@ -116,14 +119,31 @@ def decompile(
                             except ValueError:
                                 pass
                 line = ida_lines.tag_remove(sl.line)
-                if len(code) > 0:
-                    code += "\n"
+                if len(full_code) > 0:
+                    full_code += "\n"
                 if not ea:
-                    code += f"/* line: {i} */ {line}"
+                    full_code += f"/* line: {i} */ {line}"
                 else:
-                    code += f"/* line: {i}, address: {hex(ea)} */ {line}"
+                    full_code += f"/* line: {i}, address: {hex(ea)} */ {line}"
 
-            results.append({"addr": addr, "code": code})
+            total_chars = len(full_code)
+            
+            if char_offset > 0:
+                full_code = full_code[char_offset:]
+            
+            truncated = False
+            if max_chars > 0 and len(full_code) > max_chars:
+                full_code = full_code[:max_chars]
+                truncated = True
+
+            result = {"addr": addr, "code": full_code, "total_chars": total_chars}
+            if truncated:
+                result["truncated"] = True
+            if char_offset > 0:
+                result["char_offset"] = char_offset
+            if truncated or char_offset > 0:
+                result["next_offset"] = char_offset + len(full_code) if char_offset + len(full_code) < total_chars else None
+            results.append(result)
         except Exception as e:
             results.append({"addr": addr, "code": None, "error": str(e)})
 
@@ -135,16 +155,16 @@ def decompile(
 def disasm(
     addrs: Annotated[list[str] | str, "Function addresses to disassemble"],
     max_instructions: Annotated[
-        int, "Max instructions per function (default: 5000, max: 50000)"
-    ] = 5000,
+        int, "Max instructions per function (default: 1000, max: 10000)"
+    ] = 1000,
     offset: Annotated[int, "Skip first N instructions (default: 0)"] = 0,
 ) -> list[dict]:
     """Disassemble functions to assembly instructions"""
     addrs = normalize_list_input(addrs)
 
     # Enforce max limit
-    if max_instructions <= 0 or max_instructions > 50000:
-        max_instructions = 50000
+    if max_instructions <= 0 or max_instructions > 10000:
+        max_instructions = 10000
 
     results = []
 
@@ -509,6 +529,12 @@ def entrypoints() -> list[Function]:
 @idaread
 def analyze_funcs(
     addrs: Annotated[list[str] | str, "Function addresses to comprehensively analyze"],
+    max_code_chars: Annotated[int, "Max pseudocode characters (default: 30000, 0 for unlimited)"] = 30000,
+    max_asm_chars: Annotated[int, "Max assembly characters (default: 30000, 0 for unlimited)"] = 30000,
+    max_xrefs: Annotated[int, "Max xrefs to/from (default: 100, 0 for unlimited)"] = 100,
+    max_strings: Annotated[int, "Max strings (default: 50, 0 for unlimited)"] = 50,
+    max_constants: Annotated[int, "Max constants (default: 50, 0 for unlimited)"] = 50,
+    max_blocks: Annotated[int, "Max basic blocks (default: 100, 0 for unlimited)"] = 100,
 ) -> list[FunctionAnalysis]:
     """Comprehensive function analysis: decompilation, xrefs, callees, strings, constants, blocks"""
     addrs = normalize_list_input(addrs)
@@ -541,6 +567,8 @@ def analyze_funcs(
             flowchart = idaapi.FlowChart(func)
             blocks = []
             for block in flowchart:
+                if max_blocks > 0 and len(blocks) >= max_blocks:
+                    break
                 blocks.append(
                     {
                         "start": hex(block.start_ea),
@@ -549,24 +577,27 @@ def analyze_funcs(
                     }
                 )
 
+            xto_all = list(idautils.XrefsTo(ea, 0))
+            xto = [
+                Xref(
+                    addr=hex(x.frm),
+                    type="code" if x.iscode else "data",
+                    fn=get_function(x.frm, raise_error=False),
+                )
+                for x in (xto_all[:max_xrefs] if max_xrefs > 0 else xto_all)
+            ]
+
             result = FunctionAnalysis(
                 addr=addr,
                 name=ida_funcs.get_func_name(func.start_ea),
-                code=decompile_function_safe(ea),
-                asm=get_assembly_lines(ea),
-                xto=[
-                    Xref(
-                        addr=hex(x.frm),
-                        type="code" if x.iscode else "data",
-                        fn=get_function(x.frm, raise_error=False),
-                    )
-                    for x in idautils.XrefsTo(ea, 0)
-                ],
-                xfrom=get_xrefs_from_internal(ea),
+                code=decompile_function_safe(ea, max_chars=max_code_chars),
+                asm=get_assembly_lines(ea, max_chars=max_asm_chars),
+                xto=xto,
+                xfrom=get_xrefs_from_internal(ea, max_xrefs=max_xrefs),
                 callees=get_callees(addr),
                 callers=get_callers(addr),
-                strings=extract_function_strings(ea),
-                constants=extract_function_constants(ea),
+                strings=extract_function_strings(ea, max_strings=max_strings),
+                constants=extract_function_constants(ea, max_constants=max_constants),
                 blocks=blocks,
                 error=None,
             )
@@ -1199,6 +1230,9 @@ def export_funcs(
     format: Annotated[
         str, "Export format: json (default), c_header, or prototypes"
     ] = "json",
+    max_asm_chars: Annotated[int, "Max assembly characters per function (default: 30000, 0 for unlimited)"] = 30000,
+    max_code_chars: Annotated[int, "Max pseudocode characters per function (default: 30000, 0 for unlimited)"] = 30000,
+    max_xrefs: Annotated[int, "Max xrefs per function (default: 100, 0 for unlimited)"] = 100,
 ) -> dict:
     """Export function data in various formats"""
     addrs = normalize_list_input(addrs)
@@ -1221,9 +1255,9 @@ def export_funcs(
             }
 
             if format == "json":
-                func_data["asm"] = get_assembly_lines(ea)
-                func_data["code"] = decompile_function_safe(ea)
-                func_data["xrefs"] = get_all_xrefs(ea)
+                func_data["asm"] = get_assembly_lines(ea, max_chars=max_asm_chars)
+                func_data["code"] = decompile_function_safe(ea, max_chars=max_code_chars)
+                func_data["xrefs"] = get_all_xrefs(ea, max_xrefs=max_xrefs)
 
             results.append(func_data)
 
@@ -1262,7 +1296,9 @@ def callgraph(
     roots: Annotated[
         list[str] | str, "Root function addresses to start call graph traversal from"
     ],
-    max_depth: Annotated[int, "Maximum depth for call graph traversal"] = 5,
+    max_depth: Annotated[int, "Maximum depth for call graph traversal (default: 3)"] = 3,
+    max_nodes: Annotated[int, "Maximum number of nodes (default: 100, 0 for unlimited)"] = 100,
+    max_edges: Annotated[int, "Maximum number of edges (default: 300, 0 for unlimited)"] = 300,
 ) -> list[dict]:
     """Build call graph starting from root functions"""
     roots = normalize_list_input(roots)
@@ -1286,8 +1322,18 @@ def callgraph(
             nodes = {}
             edges = []
             visited = set()
+            truncated = False
 
             def traverse(addr, depth):
+                nonlocal truncated
+                if truncated:
+                    return
+                if max_nodes > 0 and len(nodes) >= max_nodes:
+                    truncated = True
+                    return
+                if max_edges > 0 and len(edges) >= max_edges:
+                    truncated = True
+                    return
                 if depth > max_depth or addr in visited:
                     return
                 visited.add(addr)
@@ -1305,7 +1351,12 @@ def callgraph(
 
                 # Get callees
                 for item_ea in idautils.FuncItems(f.start_ea):
+                    if truncated:
+                        break
                     for xref in idautils.CodeRefsFrom(item_ea, 0):
+                        if max_edges > 0 and len(edges) >= max_edges:
+                            truncated = True
+                            break
                         callee_func = idaapi.get_func(xref)
                         if callee_func:
                             edges.append(
@@ -1319,15 +1370,16 @@ def callgraph(
 
             traverse(ea, 0)
 
-            results.append(
-                {
-                    "root": root,
-                    "nodes": list(nodes.values()),
-                    "edges": edges,
-                    "max_depth": max_depth,
-                    "error": None,
-                }
-            )
+            result = {
+                "root": root,
+                "nodes": list(nodes.values()),
+                "edges": edges,
+                "max_depth": max_depth,
+                "error": None,
+            }
+            if truncated:
+                result["truncated"] = True
+            results.append(result)
 
         except Exception as e:
             results.append({"root": root, "error": str(e), "nodes": [], "edges": []})
@@ -1388,6 +1440,7 @@ def analyze_strings(
     filters: list[StringFilter] | StringFilter,
     limit: Annotated[int, "Max matches per filter (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
+    max_xrefs_per_string: Annotated[int, "Max xrefs per string (default: 100, 0 for unlimited)"] = 100,
 ) -> list[dict]:
     """Analyze and filter strings in the binary"""
     if isinstance(filters, dict):
@@ -1416,8 +1469,18 @@ def analyze_strings(
 
             # Add xref info
             s_ea = parse_address(s["addr"])
-            xrefs = [hex(x.frm) for x in idautils.XrefsTo(s_ea, 0)]
-            all_matches.append({**s, "xrefs": xrefs, "xref_count": len(xrefs)})
+            xrefs_all = list(idautils.XrefsTo(s_ea, 0))
+            total_xrefs = len(xrefs_all)
+            
+            if max_xrefs_per_string > 0:
+                xrefs = [hex(x.frm) for x in xrefs_all[:max_xrefs_per_string]]
+            else:
+                xrefs = [hex(x.frm) for x in xrefs_all]
+            
+            match_data = {**s, "xrefs": xrefs, "xref_count": len(xrefs), "total_xrefs": total_xrefs}
+            if max_xrefs_per_string > 0 and total_xrefs > max_xrefs_per_string:
+                match_data["xrefs_truncated"] = True
+            all_matches.append(match_data)
 
         # Apply pagination
         if limit > 0:
