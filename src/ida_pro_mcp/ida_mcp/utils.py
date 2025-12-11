@@ -320,7 +320,7 @@ class FunctionAnalysis(TypedDict):
     addr: str
     name: Optional[str]
     code: Optional[str]
-    asm: Optional[list]
+    asm: Optional[str]
     xto: list[Xref]
     xfrom: list[Xref]
     callees: list[dict]
