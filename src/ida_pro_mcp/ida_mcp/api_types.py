@@ -63,17 +63,32 @@ def declare_type(
 
 @tool
 @idaread
-def structs() -> list[StructureDefinition]:
+def structs(
+    offset: Annotated[int, "Starting index (default: 0)"] = 0,
+    count: Annotated[int, "Maximum number of structures (default: 50, 0 for all)"] = 50,
+    max_members: Annotated[int, "Max members per structure (default: 50, 0 for all)"] = 50,
+) -> dict:
     """List all structures"""
     rv = []
     limit = ida_typeinf.get_ordinal_limit()
+    struct_count = 0
+    
     for ordinal in range(1, limit):
         tif = ida_typeinf.tinfo_t()
         tif.get_numbered_type(None, ordinal)
         if tif.is_udt():
+            if struct_count < offset:
+                struct_count += 1
+                continue
+            if count > 0 and len(rv) >= count:
+                break
+                
             udt = ida_typeinf.udt_type_data_t()
             members = []
+            total_members = 0
             if tif.get_udt_details(udt):
+                total_members = len(udt)
+                member_limit = total_members if max_members == 0 else min(max_members, total_members)
                 members = [
                     StructureMember(
                         name=x.name,
@@ -81,22 +96,26 @@ def structs() -> list[StructureDefinition]:
                         size=hex(x.size // 8),
                         type=str(x.type),
                     )
-                    for _, x in enumerate(udt)
+                    for i, x in enumerate(udt) if i < member_limit
                 ]
 
-            rv += [
-                StructureDefinition(
-                    name=tif.get_type_name(), size=hex(tif.get_size()), members=members
-                )
-            ]
+            struct_def = StructureDefinition(
+                name=tif.get_type_name(), size=hex(tif.get_size()), members=members
+            )
+            if max_members > 0 and total_members > max_members:
+                struct_def["total_members"] = total_members
+                struct_def["members_truncated"] = True
+            rv.append(struct_def)
+            struct_count += 1
 
-    return rv
+    return {"data": rv, "next_offset": offset + len(rv) if count > 0 and len(rv) == count else None}
 
 
 @tool
 @idaread
 def struct_info(
     names: Annotated[list[str] | str, "Structure names to query"],
+    max_members: Annotated[int, "Max members per structure (default: 100, 0 for all)"] = 100,
 ) -> list[dict]:
     """Get struct info"""
     names = normalize_list_input(names)
@@ -127,12 +146,16 @@ def struct_info(
                 results.append({"name": name, "info": result})
                 continue
 
-            result["cardinality"] = udt_data.size()
+            total_members = udt_data.size()
+            result["cardinality"] = total_members
             result["is_union"] = udt_data.is_union
             result["udt_type"] = "Union" if udt_data.is_union else "Struct"
 
             members = []
             for i, member in enumerate(udt_data):
+                if max_members > 0 and i >= max_members:
+                    break
+                    
                 offset = member.begin() // 8
                 size = member.size // 8 if member.size > 0 else member.type.get_size()
                 member_type = member.type._print()
@@ -154,6 +177,10 @@ def struct_info(
 
             result["members"] = members
             result["total_size"] = tif.get_size()
+            
+            if max_members > 0 and total_members > max_members:
+                result["members_truncated"] = True
+                result["total_members"] = total_members
 
             results.append({"name": name, "info": result})
         except Exception as e:

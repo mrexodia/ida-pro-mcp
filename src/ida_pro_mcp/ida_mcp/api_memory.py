@@ -18,6 +18,9 @@ from .utils import normalize_list_input, parse_address, MemoryRead, MemoryPatch
 # ============================================================================
 
 
+MAX_BYTES_SIZE = 64 * 1024
+
+
 @tool
 @idaread
 def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
@@ -31,9 +34,17 @@ def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
         size = item.get("size", 0)
 
         try:
+            if size > MAX_BYTES_SIZE:
+                results.append({
+                    "addr": addr, 
+                    "data": None, 
+                    "error": f"Size {size} exceeds maximum allowed {MAX_BYTES_SIZE} bytes"
+                })
+                continue
+                
             ea = parse_address(addr)
             data = " ".join(f"{x:#02x}" for x in ida_bytes.get_bytes(ea, size))
-            results.append({"addr": addr, "data": data})
+            results.append({"addr": addr, "data": data, "size": size})
         except Exception as e:
             results.append({"addr": addr, "data": None, "error": str(e)})
 
