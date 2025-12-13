@@ -64,6 +64,11 @@ class MCP(idaapi.plugin_t):
                 MCP_SERVER.serve(
                     self.HOST, port, request_handler=IdaMcpHttpRequestHandler
                 )
+                if TYPE_CHECKING:
+                    from .ida_mcp.rpc import set_download_base_url
+                else:
+                    from ida_mcp.rpc import set_download_base_url
+                set_download_base_url(f"http://{self.HOST}:{port}")
                 print(f"  Config: http://{self.HOST}:{port}/config.html")
                 self.mcp = MCP_SERVER
                 break

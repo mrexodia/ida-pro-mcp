@@ -74,6 +74,8 @@ def main():
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread (this one) does not fake any
     # work from @idaread, so we deadlock.
+    from ida_pro_mcp.ida_mcp.rpc import set_download_base_url
+    set_download_base_url(f"http://{args.host}:{args.port}")
     MCP_SERVER.serve(host=args.host, port=args.port, background=False)
 
 
