@@ -8,6 +8,7 @@ MCP_UNSAFE: set[str] = set()
 TESTS: dict[str, tuple[Callable, str]] = {}
 
 OUTPUT_LIMIT_MAX_CHARS = 50000
+OUTPUT_CACHE_MAX_SIZE = 100
 _output_cache: dict[str, Any] = {}
 _download_base_url: str = os.environ.get("IDA_MCP_URL", "http://127.0.0.1:13337")
 
@@ -73,40 +74,50 @@ def _add_download_info(result: Any, output_id: str, total_chars: int) -> Any:
     return {"_preview": result, **info}
 
 
-_original_mcp_tools_call = MCP_SERVER.registry.methods["tools/call"]
-
-
-def _patched_mcp_tools_call(name: str, arguments: Optional[dict] = None, _meta: Optional[dict] = None) -> dict:
-    response = _original_mcp_tools_call(name, arguments, _meta)
-
-    if response.get("isError"):
-        return response
-
-    structured = response.get("structuredContent")
-    if structured is None:
-        return response
-
-    serialized = json.dumps(structured)
-    if len(serialized) <= OUTPUT_LIMIT_MAX_CHARS:
-        return response
-    output_id = _generate_output_id()
-    _output_cache[output_id] = structured
-
-    preview = _truncate_value(structured)
-    preview = _add_download_info(preview, output_id, len(serialized))
-
-    return {
-        "content": [{"type": "text", "text": json.dumps(preview, indent=2)}],
-        "structuredContent": preview if isinstance(preview, dict) else {"result": preview},
-        "isError": False,
-    }
-
-
-MCP_SERVER.registry.methods["tools/call"] = _patched_mcp_tools_call
-
-
 def get_cached_output(output_id: str) -> Optional[Any]:
     return _output_cache.get(output_id)
+
+
+def _cache_output(output_id: str, data: Any) -> None:
+    if len(_output_cache) >= OUTPUT_CACHE_MAX_SIZE:
+        oldest_key = next(iter(_output_cache))
+        del _output_cache[oldest_key]
+    _output_cache[output_id] = data
+
+
+def _install_tools_call_patch() -> None:
+    original = MCP_SERVER.registry.methods["tools/call"]
+
+    def patched(name: str, arguments: Optional[dict] = None, _meta: Optional[dict] = None) -> dict:
+        response = original(name, arguments, _meta)
+
+        if response.get("isError"):
+            return response
+
+        structured = response.get("structuredContent")
+        if structured is None:
+            return response
+
+        serialized = json.dumps(structured)
+        if len(serialized) <= OUTPUT_LIMIT_MAX_CHARS:
+            return response
+
+        output_id = _generate_output_id()
+        _cache_output(output_id, structured)
+
+        preview = _truncate_value(structured)
+        preview = _add_download_info(preview, output_id, len(serialized))
+
+        return {
+            "content": [{"type": "text", "text": json.dumps(preview, indent=2)}],
+            "structuredContent": preview if isinstance(preview, dict) else {"result": preview},
+            "isError": False,
+        }
+
+    MCP_SERVER.registry.methods["tools/call"] = patched
+
+
+_install_tools_call_patch()
 
 
 def test(expression: str = "") -> Callable[[Callable], Callable]:
