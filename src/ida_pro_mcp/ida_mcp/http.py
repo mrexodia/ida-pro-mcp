@@ -38,7 +38,7 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
     """Changed to registry to enable configured tools, returns original tools."""
     original_tools = registry.methods.copy()
     enabled_tools = config_json_get(
-        config_key, {name: True for name in original_tools.keys()}
+        config_key, {name: name not in MCP_UNSAFE for name in original_tools.keys()}
     )
     new_tools = [name for name in original_tools if name not in enabled_tools]
 
@@ -48,7 +48,7 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
             enabled_tools.pop(name)
 
     if new_tools:
-        enabled_tools.update({name: True for name in new_tools})
+        enabled_tools.update({name: name not in MCP_UNSAFE for name in new_tools})
         config_json_set(config_key, enabled_tools)
 
     registry.methods = {
