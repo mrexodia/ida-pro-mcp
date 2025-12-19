@@ -1,12 +1,19 @@
 import html
 import json
+import re
 import ida_netnode
 from urllib.parse import urlparse, parse_qs
 from typing import TypeVar, cast
 from http.server import HTTPServer
 
 from .sync import idaread, idawrite
-from .rpc import McpRpcRegistry, McpHttpRequestHandler, MCP_SERVER, MCP_UNSAFE
+from .rpc import (
+    McpRpcRegistry,
+    McpHttpRequestHandler,
+    MCP_SERVER,
+    MCP_UNSAFE,
+    get_cached_output,
+)
 
 
 T = TypeVar("T")
@@ -101,12 +108,21 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
 
     def do_GET(self):
         """Handles GET requests."""
-        if urlparse(self.path).path == "/config.html":
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/config.html":
             if not self._check_host():
                 return
             self._handle_config_get()
-        else:
-            super().do_GET()
+            return
+
+        output_match = re.match(r"^/output/([a-f0-9-]+)\.(\w+)$", path)
+        if output_match:
+            self._handle_output_download(output_match.group(1), output_match.group(2))
+            return
+
+        super().do_GET()
 
     @property
     def server_port(self) -> int:
@@ -135,6 +151,44 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
             self.send_error(403, "Invalid Host")
             return False
         return True
+
+    def _handle_output_download(self, output_id: str, extension: str):
+        data = get_cached_output(output_id)
+        if data is None:
+            self.send_error(404, "Output not found or expired")
+            return
+
+        if extension == "json":
+            content = json.dumps(data, indent=2)
+        elif isinstance(data, dict) and "code" in data:
+            content = str(data["code"])
+        elif isinstance(data, list) and data and isinstance(data[0], dict):
+            content = "\n\n".join(
+                str(item.get("code", item.get("asm", item.get("lines", ""))))
+                for item in data
+            )
+        else:
+            content = json.dumps(data, indent=2)
+
+        body = content.encode("utf-8")
+
+        content_type_map = {
+            "json": "application/json",
+            "c": "text/x-c",
+            "asm": "text/plain",
+            "txt": "text/plain",
+        }
+        content_type = content_type_map.get(extension, "text/plain")
+
+        self.send_response(200)
+        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{output_id}.{extension}"'
+        )
+        self.send_cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_html(self, status: int, text: str):
         """
