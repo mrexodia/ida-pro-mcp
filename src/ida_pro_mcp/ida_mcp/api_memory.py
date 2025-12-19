@@ -138,7 +138,13 @@ def get_string(
     for addr in addrs:
         try:
             ea = parse_address(addr)
-            value = idaapi.get_strlit_contents(ea, -1, 0).decode("utf-8")
+            raw = idaapi.get_strlit_contents(ea, -1, 0)
+            if not raw:
+                results.append(
+                    {"addr": addr, "value": None, "error": "No string at address"}
+                )
+                continue
+            value = raw.decode("utf-8", errors="replace")
             results.append({"addr": addr, "value": value})
         except Exception as e:
             results.append({"addr": addr, "value": None, "error": str(e)})
@@ -164,7 +170,10 @@ def get_global_variable_value_internal(ea: int) -> str:
         size = tif.get_size()
 
     if size == 0 and tif.is_array() and tif.get_array_element().is_decl_char():
-        return_string = idaapi.get_strlit_contents(ea, -1, 0).decode("utf-8").strip()
+        raw = idaapi.get_strlit_contents(ea, -1, 0)
+        if not raw:
+            return "\"\""
+        return_string = raw.decode("utf-8", errors="replace").strip()
         return f'"{return_string}"'
     elif size == 1:
         return hex(ida_bytes.get_byte(ea))
