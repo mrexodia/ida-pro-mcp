@@ -35,6 +35,7 @@ from .utils import (
     get_xrefs_from_internal,
     extract_function_strings,
     extract_function_constants,
+    get_analysis_prompt,
     Function,
     Argument,
     DisassemblyFunction,
@@ -672,6 +673,7 @@ def analyze_funcs(
                         constants=[],
                         blocks=[],
                         error="Function not found",
+                        prompt=get_analysis_prompt(),
                     )
                 )
                 continue
@@ -708,6 +710,7 @@ def analyze_funcs(
                 constants=extract_function_constants(ea),
                 blocks=blocks,
                 error=None,
+                prompt=get_analysis_prompt(),
             )
             results.append(result)
         except Exception as e:
@@ -725,6 +728,7 @@ def analyze_funcs(
                     constants=[],
                     blocks=[],
                     error=str(e),
+                    prompt=get_analysis_prompt(),
                 )
             )
     return results
