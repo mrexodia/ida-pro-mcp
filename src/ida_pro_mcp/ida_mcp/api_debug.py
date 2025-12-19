@@ -18,7 +18,7 @@ import ida_idaapi
 import ida_name
 import idaapi
 
-from .rpc import tool, unsafe
+from .rpc import tool, unsafe, ext
 from .sync import idaread, IDAError
 from .utils import (
     RegisterValue,
@@ -157,9 +157,10 @@ def list_breakpoints():
 # ============================================================================
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
 def dbg_start():
     """Start debugger"""
     if len(list_breakpoints()) == 0:
@@ -176,9 +177,10 @@ def dbg_start():
     raise IDAError("Failed to start debugger")
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
 def dbg_exit():
     """Exit debugger"""
     dbg_ensure_running()
@@ -187,9 +189,10 @@ def dbg_exit():
     raise IDAError("Failed to exit debugger")
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
 def dbg_continue() -> str:
     """Continue debugger"""
     dbg_ensure_running()
@@ -200,9 +203,10 @@ def dbg_continue() -> str:
     raise IDAError("Failed to continue debugger")
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
 def dbg_run_to(
     addr: Annotated[str, "Address"],
 ):
@@ -216,9 +220,10 @@ def dbg_run_to(
     raise IDAError(f"Failed to run to address {hex(ea)}")
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
 def dbg_step_into():
     """Step into"""
     dbg_ensure_running()
@@ -229,9 +234,10 @@ def dbg_step_into():
     raise IDAError("Failed to step into")
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
 def dbg_step_over():
     """Step over"""
     dbg_ensure_running()
@@ -247,17 +253,19 @@ def dbg_step_over():
 # ============================================================================
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_list_bps():
+def dbg_bps():
     """List breakpoints"""
     return list_breakpoints()
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
 def dbg_add_bp(
     addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"],
 ) -> list[dict]:
@@ -284,9 +292,10 @@ def dbg_add_bp(
     return results
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
 def dbg_delete_bp(
     addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"],
 ) -> list[dict]:
@@ -307,10 +316,11 @@ def dbg_delete_bp(
     return results
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_enable_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
+def dbg_toggle_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
     """Enable/disable breakpoints"""
 
     items = normalize_dict_list(items)
@@ -342,10 +352,11 @@ def dbg_enable_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
 # ============================================================================
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_regs() -> list[ThreadRegisters]:
+def dbg_regs_all() -> list[ThreadRegisters]:
     """Get all registers"""
     result: list[ThreadRegisters] = []
     dbg = dbg_ensure_running()
@@ -355,10 +366,11 @@ def dbg_regs() -> list[ThreadRegisters]:
     return result
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_regs_thread(
+def dbg_regs_remote(
     tids: Annotated[list[int] | int, "Thread ID(s) to get registers for"],
 ) -> list[dict]:
     """Get thread registers"""
@@ -384,20 +396,22 @@ def dbg_regs_thread(
     return results
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_regs_cur() -> ThreadRegisters:
+def dbg_regs() -> ThreadRegisters:
     """Get current thread registers"""
     dbg = dbg_ensure_running()
     tid = ida_dbg.get_current_thread()
     return _get_registers_for_thread(dbg, tid)
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_gpregs_thread(
+def dbg_gpregs_remote(
     tids: Annotated[list[int] | int, "Thread ID(s) to get GP registers for"],
 ) -> list[dict]:
     """Get GP registers for threads"""
@@ -423,20 +437,22 @@ def dbg_gpregs_thread(
     return results
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_current_gpregs() -> ThreadRegisters:
+def dbg_gpregs() -> ThreadRegisters:
     """Get current thread GP registers"""
     dbg = dbg_ensure_running()
     tid = ida_dbg.get_current_thread()
     return _get_registers_general_for_thread(dbg, tid)
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_regs_for_thread(
+def dbg_regs_named_remote(
     thread_id: Annotated[int, "Thread ID"],
     register_names: Annotated[
         str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
@@ -452,10 +468,11 @@ def dbg_regs_for_thread(
     return _get_registers_specific_for_thread(dbg, thread_id, names)
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_current_regs(
+def dbg_regs_named(
     register_names: Annotated[
         str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
     ],
@@ -472,10 +489,11 @@ def dbg_current_regs(
 # ============================================================================
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_callstack() -> list[dict[str, str]]:
+def dbg_stacktrace() -> list[dict[str, str]]:
     """Get call stack"""
     callstack = []
     try:
@@ -523,10 +541,11 @@ def dbg_callstack() -> list[dict[str, str]]:
 # ============================================================================
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_read_mem(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
+def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     """Read debug memory"""
 
     regions = normalize_dict_list(regions)
@@ -566,10 +585,11 @@ def dbg_read_mem(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     return results
 
 
+@ext("dbg")
+@unsafe
 @tool
 @idaread
-@unsafe
-def dbg_write_mem(regions: list[MemoryPatch] | MemoryPatch) -> list[dict]:
+def dbg_write(regions: list[MemoryPatch] | MemoryPatch) -> list[dict]:
     """Write debug memory"""
 
     regions = normalize_dict_list(regions)

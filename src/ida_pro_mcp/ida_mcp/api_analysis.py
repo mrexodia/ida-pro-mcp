@@ -625,20 +625,6 @@ def callers(
     return results
 
 
-@tool
-@idaread
-def entrypoints() -> list[Function]:
-    """Get entry points"""
-    result = []
-    for i in range(ida_entry.get_entry_qty()):
-        ordinal = ida_entry.get_entry_ordinal(i)
-        addr = ida_entry.get_entry(ordinal)
-        func = get_function(addr, raise_error=False)
-        if func is not None:
-            result.append(func)
-    return result
-
-
 # ============================================================================
 # Comprehensive Function Analysis
 # ============================================================================
@@ -978,7 +964,7 @@ def find_paths(queries: list[PathQuery] | PathQuery) -> list[dict]:
 
 @tool
 @idaread
-def search(
+def find(
     type: Annotated[
         str, "Search type: 'string', 'immediate', 'data_ref', or 'code_ref'"
     ],
@@ -1213,7 +1199,7 @@ def search(
 
 @tool
 @idaread
-def find_insn_operands(
+def find_operands(
     patterns: list[InsnPattern] | InsnPattern,
     limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
@@ -1649,48 +1635,6 @@ def callgraph(
             results.append({"root": root, "error": str(e), "nodes": [], "edges": []})
 
     return results
-
-
-# ============================================================================
-# Cross-Reference Matrix
-# ============================================================================
-
-
-@tool
-@idaread
-def xref_matrix(
-    entities: Annotated[
-        list[str] | str, "Addresses to build cross-reference matrix for"
-    ],
-) -> dict:
-    """Build matrix showing cross-references between entities"""
-    entities = normalize_list_input(entities)
-    matrix = {}
-
-    for source in entities:
-        try:
-            source_ea = parse_address(source)
-            matrix[source] = {}
-
-            for target in entities:
-                if source == target:
-                    continue
-
-                target_ea = parse_address(target)
-
-                # Count references from source to target
-                count = 0
-                for xref in idautils.XrefsFrom(source_ea, 0):
-                    if xref.to == target_ea:
-                        count += 1
-
-                if count > 0:
-                    matrix[source][target] = count
-
-        except Exception:
-            matrix[source] = {"error": "Failed to process"}
-
-    return {"matrix": matrix, "entities": entities}
 
 
 # ============================================================================

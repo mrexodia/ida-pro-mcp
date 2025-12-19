@@ -68,6 +68,14 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.mcp_server: "McpServer" = getattr(server, "mcp_server")
         super().__init__(request, client_address, server)
 
+    def _parse_extensions(self, path: str) -> set[str]:
+        """Parse ?ext=dbg,foo query param into set of enabled extensions"""
+        query = parse_qs(urlparse(path).query)
+        ext_param = query.get("ext", [""])[0]
+        if not ext_param:
+            return set()
+        return {e.strip() for e in ext_param.split(",") if e.strip()}
+
     def log_message(self, format, *args):
         """Override to suppress default logging or customize"""
         pass
@@ -157,6 +165,10 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_error(400, "Missing ?session for SSE POST")
             return
 
+        # Parse extensions from query params and store in thread-local
+        extensions = self._parse_extensions(self.path)
+        setattr(self.mcp_server._enabled_extensions, "data", extensions)
+
         # Dispatch to MCP registry
         setattr(self.mcp_server._protocol_version, "data", "2024-11-05")
         response = self.mcp_server.registry.dispatch(body)
@@ -181,6 +193,10 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _handle_mcp_post(self, body: bytes):
+        # Parse extensions from query params and store in thread-local
+        extensions = self._parse_extensions(self.path)
+        setattr(self.mcp_server._enabled_extensions, "data", extensions)
+
         # Dispatch to MCP registry
         setattr(self.mcp_server._protocol_version, "data", "2025-06-18")
         response = self.mcp_server.registry.dispatch(body)
@@ -202,7 +218,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             send_response(200, json.dumps(response).encode("utf-8"))
 
 class McpServer:
-    def __init__(self, name: str, version = "1.0.0"):
+    def __init__(self, name: str, version = "1.0.0", *, extensions: dict[str, set[str]] | None = None):
         self.name = name
         self.version = version
         self.tools = McpRpcRegistry()
@@ -213,6 +229,8 @@ class McpServer:
         self._running = False
         self._sse_connections: dict[str, _McpSseConnection] = {}
         self._protocol_version = threading.local()
+        self._enabled_extensions = threading.local()  # set[str] per request
+        self._extensions_registry = extensions or {}  # group -> set of tool names
 
         # Register MCP protocol methods with correct names
         self.registry = JsonRpcRegistry()
@@ -353,15 +371,34 @@ class McpServer:
 
     def _mcp_tools_list(self, _meta: dict | None = None) -> dict:
         """MCP tools/list method"""
-        return {
-            "tools": [
-                self._generate_tool_schema(func_name, func)
-                for func_name, func in self.tools.methods.items()
-            ],
-        }
+        enabled = getattr(self._enabled_extensions, "data", set())
+        tools = []
+        for func_name, func in self.tools.methods.items():
+            # Check if tool belongs to an extension group
+            tool_group = self._get_tool_extension(func_name)
+            if tool_group and tool_group not in enabled:
+                continue  # Skip tools from disabled extension groups
+            tools.append(self._generate_tool_schema(func_name, func))
+        return {"tools": tools}
+
+    def _get_tool_extension(self, func_name: str) -> str | None:
+        """Return extension group name if tool belongs to one, else None"""
+        for group, tools in self._extensions_registry.items():
+            if func_name in tools:
+                return group
+        return None
 
     def _mcp_tools_call(self, name: str, arguments: dict | None = None, _meta: dict | None = None) -> dict:
         """MCP tools/call method"""
+        # Check if tool requires an extension that isn't enabled
+        enabled = getattr(self._enabled_extensions, "data", set())
+        tool_group = self._get_tool_extension(name)
+        if tool_group and tool_group not in enabled:
+            return {
+                "content": [{"type": "text", "text": f"Tool '{name}' requires extension '{tool_group}'. Enable with ?ext={tool_group}"}],
+                "isError": True,
+            }
+
         # Wrap tool call in JSON-RPC request
         tool_response = self.tools.dispatch({
             "jsonrpc": "2.0",

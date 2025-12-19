@@ -20,7 +20,7 @@ from .utils import (
     StructureMember,
     StructureDefinition,
     StructRead,
-    TypeApplication,
+    TypeEdit,
 )
 
 
@@ -59,107 +59,6 @@ def declare_type(
 # ============================================================================
 # Structure Operations
 # ============================================================================
-
-
-@tool
-@idaread
-def structs() -> list[StructureDefinition]:
-    """List all structures"""
-    rv = []
-    limit = ida_typeinf.get_ordinal_limit()
-    for ordinal in range(1, limit):
-        tif = ida_typeinf.tinfo_t()
-        tif.get_numbered_type(None, ordinal)
-        if tif.is_udt():
-            udt = ida_typeinf.udt_type_data_t()
-            members = []
-            if tif.get_udt_details(udt):
-                members = [
-                    StructureMember(
-                        name=x.name,
-                        offset=hex(x.offset // 8),
-                        size=hex(x.size // 8),
-                        type=str(x.type),
-                    )
-                    for _, x in enumerate(udt)
-                ]
-
-            rv += [
-                StructureDefinition(
-                    name=tif.get_type_name(), size=hex(tif.get_size()), members=members
-                )
-            ]
-
-    return rv
-
-
-@tool
-@idaread
-def struct_info(
-    names: Annotated[list[str] | str, "Structure names to query"],
-) -> list[dict]:
-    """Get struct info"""
-    names = normalize_list_input(names)
-    results = []
-
-    for name in names:
-        try:
-            tif = ida_typeinf.tinfo_t()
-            if not tif.get_named_type(None, name):
-                results.append({"name": name, "error": f"Struct '{name}' not found"})
-                continue
-
-            result = {
-                "name": name,
-                "type": str(tif._print()),
-                "size": tif.get_size(),
-                "is_udt": tif.is_udt(),
-            }
-
-            if not tif.is_udt():
-                result["error"] = "Not a user-defined type"
-                results.append({"name": name, "info": result})
-                continue
-
-            udt_data = ida_typeinf.udt_type_data_t()
-            if not tif.get_udt_details(udt_data):
-                result["error"] = "Failed to get struct details"
-                results.append({"name": name, "info": result})
-                continue
-
-            result["cardinality"] = udt_data.size()
-            result["is_union"] = udt_data.is_union
-            result["udt_type"] = "Union" if udt_data.is_union else "Struct"
-
-            members = []
-            for i, member in enumerate(udt_data):
-                offset = member.begin() // 8
-                size = member.size // 8 if member.size > 0 else member.type.get_size()
-                member_type = member.type._print()
-                member_name = member.name
-
-                member_info = {
-                    "index": i,
-                    "offset": f"0x{offset:08X}",
-                    "size": size,
-                    "type": member_type,
-                    "name": member_name,
-                    "is_nested_udt": member.type.is_udt(),
-                }
-
-                if member.type.is_udt():
-                    member_info["nested_size"] = member.type.get_size()
-
-                members.append(member_info)
-
-            result["members"] = members
-            result["total_size"] = tif.get_size()
-
-            results.append({"name": name, "info": result})
-        except Exception as e:
-            results.append({"name": name, "error": str(e)})
-
-    return results
 
 
 @tool
@@ -324,7 +223,7 @@ def search_structs(
 
 @tool
 @idawrite
-def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[dict]:
+def set_type(edits: list[TypeEdit] | TypeEdit) -> list[dict]:
     """Apply types (function/global/local/stack)"""
 
     def parse_addr_type(s: str) -> dict:
@@ -335,24 +234,24 @@ def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[d
         # Just typename without address (invalid)
         return {"ty": s.strip()}
 
-    applications = normalize_dict_list(applications, parse_addr_type)
+    edits = normalize_dict_list(edits, parse_addr_type)
     results = []
 
-    for app in applications:
+    for edit in edits:
         try:
             # Auto-detect kind if not provided
-            kind = app.get("kind")
+            kind = edit.get("kind")
             if not kind:
-                if "signature" in app:
+                if "signature" in edit:
                     kind = "function"
-                elif "variable" in app:
+                elif "variable" in edit:
                     kind = "local"
-                elif "addr" in app:
+                elif "addr" in edit:
                     # Check if address points to a function
                     try:
-                        addr = parse_address(app["addr"])
+                        addr = parse_address(edit["addr"])
                         func = idaapi.get_func(addr)
-                        if func and "name" in app and "ty" in app:
+                        if func and "name" in edit and "ty" in edit:
                             kind = "stack"
                         else:
                             kind = "global"
@@ -362,14 +261,14 @@ def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[d
                     kind = "global"
 
             if kind == "function":
-                func = idaapi.get_func(parse_address(app["addr"]))
+                func = idaapi.get_func(parse_address(edit["addr"]))
                 if not func:
-                    results.append({"edit": app, "error": "Function not found"})
+                    results.append({"edit": edit, "error": "Function not found"})
                     continue
 
-                tif = ida_typeinf.tinfo_t(app["signature"], None, ida_typeinf.PT_SIL)
+                tif = ida_typeinf.tinfo_t(edit["signature"], None, ida_typeinf.PT_SIL)
                 if not tif.is_func():
-                    results.append({"edit": app, "error": "Not a function type"})
+                    results.append({"edit": edit, "error": "Not a function type"})
                     continue
 
                 success = ida_typeinf.apply_tinfo(
@@ -377,58 +276,58 @@ def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[d
                 )
                 results.append(
                     {
-                        "edit": app,
+                        "edit": edit,
                         "ok": success,
                         "error": None if success else "Failed to apply type",
                     }
                 )
 
             elif kind == "global":
-                ea = idaapi.get_name_ea(idaapi.BADADDR, app.get("name", ""))
+                ea = idaapi.get_name_ea(idaapi.BADADDR, edit.get("name", ""))
                 if ea == idaapi.BADADDR:
-                    ea = parse_address(app["addr"])
+                    ea = parse_address(edit["addr"])
 
-                tif = get_type_by_name(app["ty"])
+                tif = get_type_by_name(edit["ty"])
                 success = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL)
                 results.append(
                     {
-                        "edit": app,
+                        "edit": edit,
                         "ok": success,
                         "error": None if success else "Failed to apply type",
                     }
                 )
 
             elif kind == "local":
-                func = idaapi.get_func(parse_address(app["addr"]))
+                func = idaapi.get_func(parse_address(edit["addr"]))
                 if not func:
-                    results.append({"edit": app, "error": "Function not found"})
+                    results.append({"edit": edit, "error": "Function not found"})
                     continue
 
-                new_tif = ida_typeinf.tinfo_t(app["ty"], None, ida_typeinf.PT_SIL)
-                modifier = my_modifier_t(app["variable"], new_tif)
+                new_tif = ida_typeinf.tinfo_t(edit["ty"], None, ida_typeinf.PT_SIL)
+                modifier = my_modifier_t(edit["variable"], new_tif)
                 success = ida_hexrays.modify_user_lvars(func.start_ea, modifier)
                 results.append(
                     {
-                        "edit": app,
+                        "edit": edit,
                         "ok": success,
                         "error": None if success else "Failed to apply type",
                     }
                 )
 
             elif kind == "stack":
-                func = idaapi.get_func(parse_address(app["addr"]))
+                func = idaapi.get_func(parse_address(edit["addr"]))
                 if not func:
-                    results.append({"edit": app, "error": "No function found"})
+                    results.append({"edit": edit, "error": "No function found"})
                     continue
 
                 frame_tif = ida_typeinf.tinfo_t()
                 if not ida_frame.get_func_frame(frame_tif, func):
-                    results.append({"edit": app, "error": "No frame"})
+                    results.append({"edit": edit, "error": "No frame"})
                     continue
 
-                idx, udm = frame_tif.get_udm(app["name"])
+                idx, udm = frame_tif.get_udm(edit["name"])
                 if not udm:
-                    results.append({"edit": app, "error": f"{app['name']} not found"})
+                    results.append({"edit": edit, "error": f"{edit['name']} not found"})
                     continue
 
                 tid = frame_tif.get_udm_tid(idx)
@@ -436,21 +335,21 @@ def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[d
                 frame_tif.get_udm_by_tid(udm, tid)
                 offset = udm.offset // 8
 
-                tif = get_type_by_name(app["ty"])
+                tif = get_type_by_name(edit["ty"])
                 success = ida_frame.set_frame_member_type(func, offset, tif)
                 results.append(
                     {
-                        "edit": app,
+                        "edit": edit,
                         "ok": success,
                         "error": None if success else "Failed to set type",
                     }
                 )
 
             else:
-                results.append({"edit": app, "error": f"Unknown kind: {kind}"})
+                results.append({"edit": edit, "error": f"Unknown kind: {kind}"})
 
         except Exception as e:
-            results.append({"edit": app, "error": str(e)})
+            results.append({"edit": edit, "error": str(e)})
 
     return results
 

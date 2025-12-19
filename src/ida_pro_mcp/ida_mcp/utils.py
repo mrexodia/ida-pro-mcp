@@ -60,6 +60,24 @@ class MemoryPatch(TypedDict):
     data: Annotated[str, "Hex data to write (space-separated bytes)"]
 
 
+class IntRead(TypedDict):
+    """Integer read request"""
+
+    addr: Annotated[str, "Address to read from (hex or decimal)"]
+    ty: Annotated[str, "Integer class (i8/u64/i16le/i16be/etc)"]
+
+
+class IntWrite(TypedDict):
+    """Integer write request"""
+
+    addr: Annotated[str, "Address to write to (hex or decimal)"]
+    ty: Annotated[str, "Integer class (i8/u64/i16le/i16be/etc)"]
+    value: Annotated[
+        str,
+        "Integer value as string (decimal or 0x..; negatives allowed for signed)",
+    ]
+
+
 class CommentOp(TypedDict):
     """Comment operation"""
 
@@ -193,7 +211,7 @@ class StructRead(TypedDict):
     struct: Annotated[str, "Structure name"]
 
 
-class TypeApplication(TypedDict, total=False):
+class TypeEdit(TypedDict, total=False):
     """Type application operation"""
 
     addr: Annotated[str, "Memory address"]

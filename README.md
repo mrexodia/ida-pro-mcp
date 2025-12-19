@@ -148,66 +148,40 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 
 ## MCP Resources
 
-**Resources** are browsable IDB state endpoints that provide read-only access to binary metadata, functions, strings, and types. Unlike tools (which perform actions), resources follow REST-like URI patterns for efficient data exploration.
+**Resources** represent browsable state (read-only data) following MCP's philosophy.
 
 **Core IDB State:**
 - `ida://idb/metadata` - IDB file info (path, arch, base, size, hashes)
 - `ida://idb/segments` - Memory segments with permissions
 - `ida://idb/entrypoints` - Entry points (main, TLS callbacks, etc.)
 
-**Code Browsing:**
-- `ida://functions` - List all functions (paginated, filterable)
-- `ida://function/{addr}` - Function details by address
-- `ida://globals` - List global variables (paginated, filterable)
-- `ida://global/{name_or_addr}` - Global variable details
-
-**Data Exploration:**
-- `ida://strings` - All strings (paginated, filterable)
-- `ida://string/{addr}` - String details at address
-- `ida://imports` - Imported functions (paginated)
-- `ida://import/{name}` - Import details by name
-- `ida://exports` - Exported functions (paginated)
-- `ida://export/{name}` - Export details by name
+**UI State:**
+- `ida://cursor` - Current cursor position and function
+- `ida://selection` - Current selection range
 
 **Type Information:**
 - `ida://types` - All local types
 - `ida://structs` - All structures/unions
 - `ida://struct/{name}` - Structure definition with fields
 
-**Analysis Context:**
-- `ida://xrefs/to/{addr}` - Cross-references to address
+**Lookups:**
+- `ida://import/{name}` - Import details by name
+- `ida://export/{name}` - Export details by name
 - `ida://xrefs/from/{addr}` - Cross-references from address
-- `ida://stack/{func_addr}` - Stack frame variables
-
-**UI State:**
-- `ida://cursor` - Current cursor position and function
-- `ida://selection` - Current selection range
-
-**Debug State (when debugger active):**
-- `ida://debug/breakpoints` - All breakpoints
-- `ida://debug/registers` - Current register values
-- `ida://debug/callstack` - Current call stack
 
 ## Core Functions
 
-- `idb_meta()`: Get IDB metadata (path, module, base address, size, hashes).
 - `lookup_funcs(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).
-- `cursor_addr()`: Get current cursor address.
-- `cursor_func()`: Get current function at cursor.
 - `int_convert(inputs)`: Convert numbers to different formats (decimal, hex, bytes, ASCII, binary).
 - `list_funcs(queries)`: List functions (paginated, filtered).
 - `list_globals(queries)`: List global variables (paginated, filtered).
 - `imports(offset, count)`: List all imported symbols with module names (paginated).
-- `strings(queries)`: List strings in the database (paginated, filtered).
-- `segments()`: List all memory segments with permissions.
-- `local_types()`: List all local types defined in the database.
 - `decompile(addrs)`: Decompile function(s) at given address(es).
 - `disasm(addrs)`: Disassemble function(s) with full details (arguments, stack frame, etc).
 - `xrefs_to(addrs)`: Get all cross-references to address(es).
 - `xrefs_to_field(queries)`: Get cross-references to specific struct field(s).
 - `callees(addrs)`: Get functions called by function(s) at address(es).
 - `callers(addrs)`: Get functions that call the function(s) at address(es).
-- `entrypoints()`: Get all program entry points.
 
 ## Modification Operations
 
@@ -218,10 +192,7 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 ## Memory Reading Operations
 
 - `get_bytes(addrs)`: Read raw bytes at address(es).
-- `get_u8(addrs)`: Read 8-bit unsigned integer(s).
-- `get_u16(addrs)`: Read 16-bit unsigned integer(s).
-- `get_u32(addrs)`: Read 32-bit unsigned integer(s).
-- `get_u64(addrs)`: Read 64-bit unsigned integer(s).
+- `get_int(queries)`: Read integer values using ty (i8/u64/i16le/i16be/etc).
 - `get_string(addrs)`: Read null-terminated string(s).
 - `get_global_value(queries)`: Read global variable value(s) by address or name (auto-detects, compile-time values).
 
@@ -233,33 +204,44 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 
 ## Structure Operations
 
-- `structs()`: List all defined structures with members.
-- `struct_info(names)`: Get detailed information about structure(s).
 - `read_struct(queries)`: Read structure field values at specific address(es).
 - `search_structs(filter)`: Search structures by name pattern.
 
-## Debugger Operations (Unsafe)
+## Debugger Operations (Extension)
 
-- `dbg_regs()`: Get all registers for all threads.
-- `dbg_regs_thread(tids)`: Get all registers for specific thread(s).
-- `dbg_regs_cur()`: Get all registers for current thread.
-- `dbg_gpregs_thread(tids)`: Get general-purpose registers for thread(s).
-- `dbg_current_gpregs()`: Get general-purpose registers for current thread.
-- `dbg_regs_for_thread(thread_id, register_names)`: Get specific registers for a thread.
-- `dbg_current_regs(register_names)`: Get specific registers for current thread.
-- `dbg_callstack()`: Get call stack with module and symbol information.
-- `dbg_list_bps()`: List all breakpoints with their status.
+Debugger tools are hidden by default. Enable with `?ext=dbg` query parameter:
+
+```
+http://127.0.0.1:13337/mcp?ext=dbg
+```
+
+**Control:**
 - `dbg_start()`: Start debugger process.
 - `dbg_exit()`: Exit debugger process.
-- `dbg_continue()`: Continue debugger execution.
-- `dbg_run_to(addr)`: Run debugger to specific address.
-- `dbg_add_bp(addrs)`: Add breakpoint(s) at address(es).
+- `dbg_continue()`: Continue execution.
+- `dbg_run_to(addr)`: Run to address.
 - `dbg_step_into()`: Step into instruction.
 - `dbg_step_over()`: Step over instruction.
-- `dbg_delete_bp(addrs)`: Delete breakpoint(s) at address(es).
-- `dbg_enable_bp(items)`: Enable or disable breakpoint(s).
-- `dbg_read_mem(regions)`: Read memory from debugged process.
-- `dbg_write_mem(regions)`: Write memory to debugged process.
+
+**Breakpoints:**
+- `dbg_bps()`: List all breakpoints.
+- `dbg_add_bp(addrs)`: Add breakpoint(s).
+- `dbg_delete_bp(addrs)`: Delete breakpoint(s).
+- `dbg_toggle_bp(items)`: Enable/disable breakpoint(s).
+
+**Registers:**
+- `dbg_regs()`: All registers, current thread.
+- `dbg_regs_all()`: All registers, all threads.
+- `dbg_regs_remote(tids)`: All registers, specific thread(s).
+- `dbg_gpregs()`: GP registers, current thread.
+- `dbg_gpregs_remote(tids)`: GP registers, specific thread(s).
+- `dbg_regs_named(names)`: Named registers, current thread.
+- `dbg_regs_named_remote(tid, names)`: Named registers, specific thread.
+
+**Stack & Memory:**
+- `dbg_stacktrace()`: Call stack with module/symbol info.
+- `dbg_read(regions)`: Read memory from debugged process.
+- `dbg_write(regions)`: Write memory to debugged process.
 
 ## Advanced Analysis Operations
 
@@ -268,10 +250,11 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 
 ## Pattern Matching & Search
 
-- `find_bytes(patterns, limit=1000, offset=0)`: Find byte pattern(s) in binary (e.g., "48 8B ?? ??"). Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
-- `find_insns(sequences, limit=1000, offset=0)`: Find instruction sequence(s) in code. Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
-- `find_insn_operands(patterns, limit=1000, offset=0)`: Find instructions with specific operand values. Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
-- `search(type, targets, limit=1000, offset=0)`: Advanced search (immediate values, strings, data/code references). Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
+- `find_regex(queries)`: Search strings with case-insensitive regex (paginated).
+- `find_bytes(patterns, limit=1000, offset=0)`: Find byte pattern(s) in binary (e.g., "48 8B ?? ??"). Max limit: 10000.
+- `find_insns(sequences, limit=1000, offset=0)`: Find instruction sequence(s) in code. Max limit: 10000.
+- `find_operands(patterns, limit=1000, offset=0)`: Find instructions with specific operand values. Max limit: 10000.
+- `find(type, targets, limit=1000, offset=0)`: Advanced search (immediate values, strings, data/code references). Max limit: 10000.
 
 ## Control Flow Analysis
 
@@ -280,7 +263,7 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 
 ## Type Operations
 
-- `apply_types(applications)`: Apply type(s) to functions, globals, locals, or stack variables.
+- `set_type(edits)`: Apply type(s) to functions, globals, locals, or stack variables.
 - `infer_types(addrs)`: Infer types at address(es) using Hex-Rays or heuristics.
 
 ## Export Operations
@@ -295,10 +278,7 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 
 - `rename(batch)`: Unified batch rename operation for functions, globals, locals, and stack variables (accepts dict with optional `func`, `data`, `local`, `stack` keys).
 - `patch(patches)`: Patch multiple byte sequences at once.
-
-## Cross-Reference Analysis
-
-- `xref_matrix(entities)`: Build cross-reference matrix between multiple addresses.
+- `put_int(items)`: Write integer values using ty (i8/u64/i16le/i16be/etc).
 
 ## String Analysis
 
