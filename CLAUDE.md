@@ -358,6 +358,6 @@ src/ida_pro_mcp/
 
 - **Server**: Python >=3.11 (uses vendored zeromcp MCP implementation)
 - **Plugin**: Python >=3.11
-- **IDA Pro**: 8.3+ (9.0 recommended), **IDA Free not supported** (no plugin API)
+- **IDA Pro**: 9.1+, **IDA Free not supported** (no plugin API)
 
 Use `idapyswitch` to upgrade IDA's Python interpreter if needed.

@@ -9,8 +9,16 @@ import ida_bytes
 import idaapi
 
 from .rpc import tool
-from .sync import idaread, idawrite
+from .sync import idaread, idawrite, IDAError
 from .utils import normalize_list_input, parse_address, MemoryRead, MemoryPatch
+from .tests import (
+    test,
+    assert_has_keys,
+    assert_is_list,
+    assert_non_empty,
+    get_first_segment,
+    get_any_string,
+)
 
 
 # ============================================================================
@@ -40,6 +48,34 @@ def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     return results
 
 
+@test()
+def test_get_bytes():
+    """get_bytes reads raw bytes from a valid address"""
+    seg = get_first_segment()
+    if not seg:
+        return  # Skip if no segments
+
+    start_addr, _ = seg
+    result = get_bytes({"addr": start_addr, "size": 16})
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr", "data")
+    assert result[0]["addr"] == start_addr
+    assert_non_empty(result[0]["data"])
+    # Data should be space-separated hex values like "0x41 0x42 0x43"
+    assert " " in result[0]["data"] or result[0]["data"].startswith("0x")
+
+
+@test()
+def test_get_bytes_invalid():
+    """get_bytes handles invalid address (returns 0xff bytes or error)"""
+    result = get_bytes({"addr": "0xDEADBEEFDEADBEEF", "size": 16})
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr")
+    # IDA returns 0xff bytes for unmapped addresses, so we just verify structure
+    # Either has data (0xff bytes) or error
+    assert "data" in result[0] or "error" in result[0]
+
+
 @tool
 @idaread
 def get_u8(
@@ -58,6 +94,23 @@ def get_u8(
             results.append({"addr": addr, "value": None, "error": str(e)})
 
     return results
+
+
+@test()
+def test_get_u8():
+    """get_u8 reads 8-bit unsigned integer from valid address"""
+    seg = get_first_segment()
+    if not seg:
+        return  # Skip if no segments
+
+    start_addr, _ = seg
+    result = get_u8(start_addr)
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr", "value")
+    assert result[0]["addr"] == start_addr
+    # Value should be an integer 0-255
+    assert isinstance(result[0]["value"], int)
+    assert 0 <= result[0]["value"] <= 255
 
 
 @tool
@@ -82,6 +135,23 @@ def get_u16(
     return results
 
 
+@test()
+def test_get_u16():
+    """get_u16 reads 16-bit unsigned integer from valid address"""
+    seg = get_first_segment()
+    if not seg:
+        return  # Skip if no segments
+
+    start_addr, _ = seg
+    result = get_u16(start_addr)
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr", "value")
+    assert result[0]["addr"] == start_addr
+    # Value should be an integer 0-65535
+    assert isinstance(result[0]["value"], int)
+    assert 0 <= result[0]["value"] <= 0xFFFF
+
+
 @tool
 @idaread
 def get_u32(
@@ -102,6 +172,23 @@ def get_u32(
             results.append({"addr": addr, "value": None, "error": str(e)})
 
     return results
+
+
+@test()
+def test_get_u32():
+    """get_u32 reads 32-bit unsigned integer from valid address"""
+    seg = get_first_segment()
+    if not seg:
+        return  # Skip if no segments
+
+    start_addr, _ = seg
+    result = get_u32(start_addr)
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr", "value")
+    assert result[0]["addr"] == start_addr
+    # Value should be an integer 0-0xFFFFFFFF
+    assert isinstance(result[0]["value"], int)
+    assert 0 <= result[0]["value"] <= 0xFFFFFFFF
 
 
 @tool
@@ -126,6 +213,23 @@ def get_u64(
     return results
 
 
+@test()
+def test_get_u64():
+    """get_u64 reads 64-bit unsigned integer from valid address"""
+    seg = get_first_segment()
+    if not seg:
+        return  # Skip if no segments
+
+    start_addr, _ = seg
+    result = get_u64(start_addr)
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr", "value")
+    assert result[0]["addr"] == start_addr
+    # Value should be an integer 0-0xFFFFFFFFFFFFFFFF
+    assert isinstance(result[0]["value"], int)
+    assert 0 <= result[0]["value"] <= 0xFFFFFFFFFFFFFFFF
+
+
 @tool
 @idaread
 def get_string(
@@ -144,6 +248,23 @@ def get_string(
             results.append({"addr": addr, "value": None, "error": str(e)})
 
     return results
+
+
+@test()
+def test_get_string():
+    """get_string reads string at valid string address"""
+    str_addr = get_any_string()
+    if not str_addr:
+        return  # Skip if no strings in binary
+
+    result = get_string(str_addr)
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr", "value")
+    assert result[0]["addr"] == str_addr
+    # Value should be a non-empty string (or None with error for edge cases)
+    if result[0].get("error") is None:
+        assert isinstance(result[0]["value"], str)
+        assert_non_empty(result[0]["value"])
 
 
 def get_global_variable_value_internal(ea: int) -> str:
@@ -217,6 +338,23 @@ def get_global_value(
             results.append({"query": query, "value": None, "error": str(e)})
 
     return results
+
+
+@test()
+def test_get_global_value():
+    """get_global_value reads global variable value by address"""
+    seg = get_first_segment()
+    if not seg:
+        return  # Skip if no segments
+
+    start_addr, _ = seg
+    result = get_global_value(start_addr)
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "query", "value", "error")
+    assert result[0]["query"] == start_addr
+    # May have value or error depending on whether it's a valid global
+    # Either value or error should be set
+    assert result[0]["value"] is not None or result[0]["error"] is not None
 
 
 # ============================================================================

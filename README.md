@@ -10,7 +10,7 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 
 - [Python](https://www.python.org/downloads/) (**3.11 or higher**)
   - Use `idapyswitch` to switch to the newest Python version
-- [IDA Pro](https://hex-rays.com/ida-pro) (8.3 or higher, 9 recommended), **IDA Free is not supported**
+- [IDA Pro](https://hex-rays.com/ida-pro) (9.1 or higher), **IDA Free is not supported**
 - Supported MCP Client (pick one you like)
   - [Amazon Q Developer CLI](https://aws.amazon.com/q/developer/)
   - [Augment Code](https://www.augmentcode.com/)

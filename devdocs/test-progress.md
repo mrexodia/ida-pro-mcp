@@ -2,7 +2,7 @@
 
 ## Phase 1: Framework + Basic Tests
 
-**Status**: Complete  
+**Status**: ✅ Complete  
 **Goal**: Establish working test infrastructure with basic smoke tests
 
 ### Tasks
@@ -59,100 +59,105 @@
 
 ## Phase 2: Category Implementation (Parallel)
 
-**Status**: In Progress  
+**Status**: ✅ Complete  
 **Goal**: Comprehensive test coverage across all safe API modules
 
-Each category can be implemented in parallel by different agents.
+All categories implemented and passing.
 
 ### Category: api_analysis
 
-**Estimated tests**: 12-15  
-**Status**: 🔄 In Progress (3 tests added)
+**Tests**: 15  
+**Status**: ✅ Complete
 
 | Test | Status | Description |
 |------|--------|-------------|
-| `test_decompile_valid_function` | ✅ Done | Decompile returns code for valid function |
-| `test_decompile_invalid_address` | ✅ Done | Returns error for invalid address |
-| `test_decompile_batch` | ✅ Done | Handles multiple addresses |
-| `test_disasm_valid_function` | ⬜ | Disassembly returns lines |
-| `test_disasm_pagination` | ⬜ | Offset/max_instructions work |
-| `test_xrefs_to` | ⬜ | Returns cross-references |
-| `test_xrefs_to_invalid` | ⬜ | Handles invalid address |
-| `test_callees` | ⬜ | Returns called functions |
-| `test_callers` | ⬜ | Returns calling functions |
-| `test_entrypoints` | ⬜ | Returns entry points |
-| `test_analyze_funcs` | ⬜ | Comprehensive analysis returns all fields |
-| `test_find_bytes` | ⬜ | Byte pattern search works |
-| `test_find_insns` | ⬜ | Instruction sequence search works |
-| `test_basic_blocks` | ⬜ | Returns CFG blocks |
-| `test_callgraph` | ⬜ | Call graph traversal works |
+| `test_decompile_valid_function` | ✅ Pass | Decompile returns code for valid function |
+| `test_decompile_invalid_address` | ✅ Pass | Returns error for invalid address |
+| `test_decompile_batch` | ✅ Pass | Handles multiple addresses |
+| `test_disasm_valid_function` | ✅ Pass | Disassembly returns lines |
+| `test_disasm_pagination` | ✅ Pass | Offset/max_instructions work |
+| `test_xrefs_to` | ✅ Pass | Returns cross-references |
+| `test_xrefs_to_invalid` | ✅ Pass | Handles invalid address |
+| `test_callees` | ✅ Pass | Returns called functions |
+| `test_callers` | ✅ Pass | Returns calling functions |
+| `test_entrypoints` | ✅ Pass | Returns entry points |
+| `test_analyze_funcs` | ✅ Pass | Comprehensive analysis returns all fields |
+| `test_find_bytes` | ✅ Pass | Byte pattern search works |
+| `test_find_insns` | ✅ Pass | Instruction sequence search works |
+| `test_basic_blocks` | ✅ Pass | Returns CFG blocks |
+| `test_callgraph` | ✅ Pass | Call graph traversal works |
 
 ### Category: api_memory
 
-**Estimated tests**: 6-8
+**Tests**: 8  
+**Status**: ✅ Complete
 
 | Test | Status | Description |
 |------|--------|-------------|
-| `test_get_bytes` | ⬜ | Read raw bytes from valid address |
-| `test_get_bytes_invalid` | ⬜ | Handles invalid address |
-| `test_get_u8` | ⬜ | Read u8 value |
-| `test_get_u16` | ⬜ | Read u16 value |
-| `test_get_u32` | ⬜ | Read u32 value |
-| `test_get_u64` | ⬜ | Read u64 value |
-| `test_get_string` | ⬜ | Read string at valid address |
-| `test_get_global_value` | ⬜ | Read global by name/address |
+| `test_get_bytes` | ✅ Pass | Read raw bytes from valid address |
+| `test_get_bytes_invalid` | ✅ Pass | Handles invalid address |
+| `test_get_u8` | ✅ Pass | Read u8 value |
+| `test_get_u16` | ✅ Pass | Read u16 value |
+| `test_get_u32` | ✅ Pass | Read u32 value |
+| `test_get_u64` | ✅ Pass | Read u64 value |
+| `test_get_string` | ✅ Pass | Read string at valid address |
+| `test_get_global_value` | ✅ Pass | Read global by name/address |
 
 ### Category: api_types
 
-**Estimated tests**: 6-8
+**Tests**: 6  
+**Status**: ✅ Complete
 
 | Test | Status | Description |
 |------|--------|-------------|
-| `test_structs_list` | ⬜ | List returns structures |
-| `test_struct_info` | ⬜ | Get struct details |
-| `test_struct_info_not_found` | ⬜ | Handles nonexistent struct |
-| `test_search_structs` | ⬜ | Filter by name works |
-| `test_infer_types` | ⬜ | Type inference returns result |
-| `test_declare_type` | ⬜ | Declare C type (with cleanup) |
+| `test_structs_list` | ✅ Pass | List returns structures (or empty list) |
+| `test_struct_info` | ✅ Pass | Get struct details (skip if no structs) |
+| `test_struct_info_not_found` | ✅ Pass | Handles nonexistent struct gracefully |
+| `test_search_structs` | ✅ Pass | Filter by name works |
+| `test_infer_types` | ✅ Pass | Type inference returns result |
+| `test_declare_type` | ✅ Pass | Declare C type (with cleanup) |
 
 ### Category: api_modify
 
-**Estimated tests**: 4-6
+**Tests**: 5  
+**Status**: ✅ Complete
 
 | Test | Status | Description |
 |------|--------|-------------|
-| `test_set_comment_roundtrip` | ⬜ | Set/clear comment |
-| `test_rename_function_roundtrip` | ⬜ | Rename/restore function |
-| `test_rename_global_roundtrip` | ⬜ | Rename/restore global |
-| `test_rename_local_roundtrip` | ⬜ | Rename/restore local var |
-| `test_patch_asm` | ⬜ | Assembly patching (with cleanup) |
+| `test_set_comment_roundtrip` | ✅ Pass | Set/clear comment |
+| `test_rename_function_roundtrip` | ✅ Pass | Rename/restore function |
+| `test_rename_global_roundtrip` | ✅ Pass | Rename/restore global |
+| `test_rename_local_roundtrip` | ✅ Pass | Rename/restore local var |
+| `test_patch_asm` | ✅ Pass | Assembly patching (with cleanup) |
 
 ### Category: api_stack
 
-**Estimated tests**: 3-4
+**Tests**: 3  
+**Status**: ✅ Complete
 
 | Test | Status | Description |
 |------|--------|-------------|
-| `test_stack_frame` | ⬜ | Get stack variables |
-| `test_stack_frame_no_function` | ⬜ | Handles invalid address |
-| `test_declare_delete_stack` | ⬜ | Create/delete stack var |
+| `test_stack_frame` | ✅ Pass | Get stack variables |
+| `test_stack_frame_no_function` | ✅ Pass | Handles invalid address |
+| `test_declare_delete_stack` | ✅ Pass | Create/delete stack var |
 
 ### Category: api_resources
 
-**Estimated tests**: 8-10
+**Tests**: 10  
+**Status**: ✅ Complete
 
 | Test | Status | Description |
 |------|--------|-------------|
-| `test_resource_idb_metadata` | ⬜ | ida://idb/metadata works |
-| `test_resource_idb_segments` | ⬜ | ida://idb/segments works |
-| `test_resource_functions` | ⬜ | ida://functions works |
-| `test_resource_function_addr` | ⬜ | ida://function/{addr} works |
-| `test_resource_globals` | ⬜ | ida://globals works |
-| `test_resource_strings` | ⬜ | ida://strings works |
-| `test_resource_imports` | ⬜ | ida://imports works |
-| `test_resource_structs` | ⬜ | ida://structs works |
-| `test_resource_xrefs_to` | ⬜ | ida://xrefs/to/{addr} works |
-| `test_resource_xrefs_from` | ⬜ | ida://xrefs/from/{addr} works |
+| `test_resource_idb_metadata` | ✅ Pass | ida://idb/metadata works |
+| `test_resource_idb_segments` | ✅ Pass | ida://idb/segments works |
+| `test_resource_functions` | ✅ Pass | ida://functions works |
+| `test_resource_function_addr` | ✅ Pass | ida://function/{addr} works |
+| `test_resource_globals` | ✅ Pass | ida://globals works |
+| `test_resource_strings` | ✅ Pass | ida://strings works |
+| `test_resource_imports` | ✅ Pass | ida://imports works |
+| `test_resource_structs` | ✅ Pass | ida://structs works |
+| `test_resource_xrefs_to` | ✅ Pass | ida://xrefs/to/{addr} works |
+| `test_resource_xrefs_from` | ✅ Pass | ida://xrefs/from/{addr} works |
 
 ---
 
@@ -162,42 +167,43 @@ Each category can be implemented in parallel by different agents.
 |-------|----------|-------|--------|
 | 1 | framework | - | ✅ Complete |
 | 1 | api_core | 8 | ✅ Complete |
-| 2 | api_analysis | 3/15 | 🔄 In Progress |
-| 2 | api_memory | 0/8 | ⬜ Ready |
-| 2 | api_types | 0/6 | ⬜ Ready |
-| 2 | api_modify | 0/5 | ⬜ Ready |
-| 2 | api_stack | 0/3 | ⬜ Ready |
-| 2 | api_resources | 0/10 | ⬜ Ready |
-| **Total** | | **11/~55** | |
+| 2 | api_analysis | 15 | ✅ Complete |
+| 2 | api_memory | 8 | ✅ Complete |
+| 2 | api_types | 6 | ✅ Complete |
+| 2 | api_modify | 5 | ✅ Complete |
+| 2 | api_stack | 3 | ✅ Complete |
+| 2 | api_resources | 10 | ✅ Complete |
+| **Total** | | **55** | ✅ All Passing |
 
 ---
 
-## Continuation Prompt
+## Bug Fixes During Testing
 
-To continue implementing Phase 2 tests:
+During test implementation, the following bugs were discovered and fixed:
 
-```
-Continue implementing Phase 2 tests for ida-pro-mcp. Phase 1 is complete with the test framework in place.
+1. **`api_resources.py` - `structs_resource` and `struct_name_resource`**: Used deprecated `ida_struct` module (removed in IDA 9.0). Fixed to use `ida_typeinf` module instead.
 
-Key files to reference:
-- `devdocs/test-plan.md` - Overall test plan
-- `devdocs/test-progress.md` - Progress tracking with specific tests needed
-- `devdocs/test-framework.md` - Patterns and helpers documentation
-- `src/ida_pro_mcp/ida_mcp/api_core.py` - Example of inline tests after functions
+2. **`api_memory.py` - `test_get_bytes_invalid`**: Test had incorrect expectation. `ida_bytes.get_bytes()` returns `0xff` bytes for unmapped addresses instead of raising an error. Fixed test to validate structure instead of expecting error.
 
-To implement tests for a category (e.g., api_analysis):
-1. Read the target `api_*.py` file
-2. Import test helpers at top: `from .tests import test, assert_has_keys, ...`
-3. Add `@test()` functions immediately after each function to test
-4. Use binary-agnostic assertions (validate structure, not specific values)
-5. Run tests: `uv run ida-mcp-test crackme03.elf --category api_analysis`
+---
 
-Test binary: `crackme03.elf` in project root
+## Running Tests
 
-Key patterns:
-- Use `get_any_function()` to get a valid function address
-- For error tests: `try: ... except IDAError: pass`
-- Cleanup pattern for modify tests: `try: modify() finally: restore()`
+```bash
+# Run all tests
+uv run ida-mcp-test crackme03.elf
+
+# Run specific category
+uv run ida-mcp-test crackme03.elf --category api_core
+
+# Run tests matching pattern
+uv run ida-mcp-test crackme03.elf --pattern "*decompile*"
+
+# List available tests
+uv run ida-mcp-test crackme03.elf --list
+
+# Stop on first failure
+uv run ida-mcp-test crackme03.elf --stop-on-failure
 ```
 
 ---

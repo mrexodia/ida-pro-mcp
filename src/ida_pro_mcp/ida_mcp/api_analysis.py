@@ -316,6 +316,38 @@ def disasm(
     return results
 
 
+@test()
+def test_disasm_valid_function():
+    """Disassembly returns lines for valid function"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = disasm(func_addr)
+    assert len(result) == 1, f"Expected 1 result, got {len(result)}"
+    assert_has_keys(result[0], "addr", "asm", "instruction_count", "cursor")
+    assert result[0]["asm"] is not None, "asm should not be None"
+    assert_has_keys(result[0]["asm"], "name", "start_ea", "lines")
+    assert_non_empty(result[0]["asm"]["lines"])
+
+
+@test()
+def test_disasm_pagination():
+    """Disassembly offset/max_instructions work"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    # Get first 5 instructions
+    result1 = disasm(func_addr, max_instructions=5, offset=0)
+    assert len(result1) == 1
+    assert result1[0]["instruction_count"] <= 5
+
+    # Get next 5 with offset
+    result2 = disasm(func_addr, max_instructions=5, offset=5)
+    assert len(result2) == 1
+    # Either we have more instructions or we're done
+    assert "cursor" in result2[0]
+
+
 # ============================================================================
 # Cross-Reference Analysis
 # ============================================================================
@@ -347,6 +379,28 @@ def xrefs_to(
             results.append({"addr": addr, "xrefs": None, "error": str(e)})
 
     return results
+
+
+@test()
+def test_xrefs_to():
+    """xrefs_to returns cross-references"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = xrefs_to(func_addr)
+    assert len(result) == 1, f"Expected 1 result, got {len(result)}"
+    assert_has_keys(result[0], "addr", "xrefs")
+    # xrefs is a list (may be empty for functions with no callers)
+    assert_is_list(result[0]["xrefs"])
+
+
+@test()
+def test_xrefs_to_invalid():
+    """xrefs_to handles invalid address gracefully"""
+    result = xrefs_to("0xDEADBEEFDEADBEEF")
+    assert len(result) == 1
+    # Should either return empty xrefs or an error, not crash
+    assert "xrefs" in result[0] or "error" in result[0]
 
 
 @tool
@@ -494,6 +548,19 @@ def callees(
     return results
 
 
+@test()
+def test_callees():
+    """callees returns called functions"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = callees(func_addr)
+    assert len(result) == 1, f"Expected 1 result, got {len(result)}"
+    assert_has_keys(result[0], "addr", "callees")
+    # callees is a list (may be empty for leaf functions)
+    assert_is_list(result[0]["callees"])
+
+
 @tool
 @idaread
 def callers(
@@ -527,6 +594,19 @@ def callers(
     return results
 
 
+@test()
+def test_callers():
+    """callers returns calling functions"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = callers(func_addr)
+    assert len(result) == 1, f"Expected 1 result, got {len(result)}"
+    assert_has_keys(result[0], "addr", "callers")
+    # callers is a list (may be empty for entry points)
+    assert_is_list(result[0]["callers"])
+
+
 @tool
 @idaread
 def entrypoints() -> list[Function]:
@@ -539,6 +619,17 @@ def entrypoints() -> list[Function]:
         if func is not None:
             result.append(func)
     return result
+
+
+@test()
+def test_entrypoints():
+    """entrypoints returns entry points list"""
+    result = entrypoints()
+    # Result is a list of Function dicts (may be empty for some binaries)
+    assert_is_list(result)
+    # If there are entry points, they should have proper structure
+    if len(result) > 0:
+        assert_has_keys(result[0], "addr", "name")
 
 
 # ============================================================================
@@ -632,6 +723,39 @@ def analyze_funcs(
     return results
 
 
+@test()
+def test_analyze_funcs():
+    """analyze_funcs returns comprehensive analysis with all fields"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = analyze_funcs(func_addr)
+    assert len(result) == 1, f"Expected 1 result, got {len(result)}"
+    # Check all expected fields are present
+    assert_has_keys(
+        result[0],
+        "addr",
+        "name",
+        "code",
+        "asm",
+        "xto",
+        "xfrom",
+        "callees",
+        "callers",
+        "strings",
+        "constants",
+        "blocks",
+    )
+    # Lists should be lists (may be empty)
+    assert_is_list(result[0]["xto"])
+    assert_is_list(result[0]["xfrom"])
+    assert_is_list(result[0]["callees"])
+    assert_is_list(result[0]["callers"])
+    assert_is_list(result[0]["strings"])
+    assert_is_list(result[0]["constants"])
+    assert_is_list(result[0]["blocks"])
+
+
 # ============================================================================
 # Pattern Matching & Signature Tools
 # ============================================================================
@@ -702,6 +826,18 @@ def find_bytes(
             }
         )
     return results
+
+
+@test()
+def test_find_bytes():
+    """find_bytes byte pattern search works"""
+    # Search for a common byte sequence (0x00 0x00) that should exist in most binaries
+    result = find_bytes("00 00")
+    assert len(result) == 1, f"Expected 1 result, got {len(result)}"
+    assert_has_keys(result[0], "pattern", "matches", "count", "cursor")
+    assert_is_list(result[0]["matches"])
+    # Should find at least some matches in most binaries
+    # (but we don't require it since it's binary-agnostic)
 
 
 @tool
@@ -794,6 +930,17 @@ def find_insns(
     return results
 
 
+@test()
+def test_find_insns():
+    """find_insns instruction sequence search works"""
+    # Search for a common instruction (ret) - architecture independent name check
+    result = find_insns(["ret"])
+    assert len(result) == 1, f"Expected 1 result, got {len(result)}"
+    assert_has_keys(result[0], "sequence", "matches", "count", "cursor")
+    assert_is_list(result[0]["matches"])
+    # Most binaries have at least one ret instruction
+
+
 # ============================================================================
 # Control Flow Analysis
 # ============================================================================
@@ -873,6 +1020,29 @@ def basic_blocks(
                 }
             )
     return results
+
+
+@test()
+def test_basic_blocks():
+    """basic_blocks returns CFG blocks"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = basic_blocks(func_addr)
+    assert len(result) == 1, f"Expected 1 result, got {len(result)}"
+    assert_has_keys(result[0], "addr", "blocks", "count", "cursor")
+    assert_is_list(result[0]["blocks"])
+    # Every function has at least one basic block
+    if result[0]["count"] > 0:
+        assert_has_keys(
+            result[0]["blocks"][0],
+            "start",
+            "end",
+            "size",
+            "type",
+            "successors",
+            "predecessors",
+        )
 
 
 @tool
@@ -1374,6 +1544,22 @@ def callgraph(
             results.append({"root": root, "error": str(e), "nodes": [], "edges": []})
 
     return results
+
+
+@test()
+def test_callgraph():
+    """callgraph call graph traversal works"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = callgraph(func_addr, max_depth=2)
+    assert len(result) == 1, f"Expected 1 result, got {len(result)}"
+    assert_has_keys(result[0], "root", "nodes", "edges", "max_depth")
+    assert_is_list(result[0]["nodes"])
+    assert_is_list(result[0]["edges"])
+    # Root node should at least contain itself
+    if len(result[0]["nodes"]) > 0:
+        assert_has_keys(result[0]["nodes"][0], "addr", "name", "depth")
 
 
 # ============================================================================
