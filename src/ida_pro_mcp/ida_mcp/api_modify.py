@@ -5,6 +5,7 @@ import ida_hexrays
 import ida_bytes
 import ida_typeinf
 import ida_frame
+import ida_dirtree
 
 from .rpc import tool
 from .sync import idawrite, IDAError
@@ -162,22 +163,73 @@ def rename(batch: RenameBatch) -> dict:
             return []
         return [items] if isinstance(items, dict) else items
 
+    def _has_user_name(ea: int) -> bool:
+        flags = idaapi.get_flags(ea)
+        checker = getattr(idaapi, "has_user_name", None)
+        if checker is not None:
+            return checker(flags)
+        try:
+            import ida_name
+
+            checker = getattr(ida_name, "has_user_name", None)
+            if checker is not None:
+                return checker(flags)
+        except Exception:
+            pass
+        return False
+
+    def _place_func_in_vibe_dir(ea: int) -> tuple[bool, str | None]:
+        tree = ida_dirtree.get_std_dirtree(ida_dirtree.DIRTREE_FUNCS)
+        if tree is None:
+            return False, "Function dirtree not available"
+
+        if not tree.load():
+            return False, "Failed to load function dirtree"
+
+        vibe_path = "/vibe/"
+        if not tree.isdir(vibe_path):
+            err = tree.mkdir(vibe_path)
+            if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):
+                return False, f"mkdir failed: {err}"
+
+        old_cwd = tree.getcwd()
+        try:
+            if tree.chdir(vibe_path) != ida_dirtree.DTE_OK:
+                return False, "Failed to chdir to vibe"
+            err = tree.link(ea)
+            if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):
+                return False, f"link failed: {err}"
+            if not tree.save():
+                return False, "Failed to save function dirtree"
+        finally:
+            if old_cwd:
+                tree.chdir(old_cwd)
+
+        return True, None
+
     def _rename_funcs(items: list[FunctionRename]) -> list[dict]:
         results = []
         for item in items:
             try:
                 ea = parse_address(item["addr"])
+                had_user_name = _has_user_name(ea)
                 success = idaapi.set_name(ea, item["name"], idaapi.SN_CHECK)
                 if success:
                     func = idaapi.get_func(ea)
                     if func:
                         refresh_decompiler_ctext(func.start_ea)
+                    if not had_user_name and func:
+                        placed, place_error = _place_func_in_vibe_dir(func.start_ea)
+                    else:
+                        placed, place_error = None, None
                 results.append(
                     {
                         "addr": item["addr"],
                         "name": item["name"],
                         "ok": success,
                         "error": None if success else "Rename failed",
+                        "dir": "vibe" if success and placed else None,
+                        "dir_error": place_error if success else None,
                     }
                 )
             except Exception as e:
