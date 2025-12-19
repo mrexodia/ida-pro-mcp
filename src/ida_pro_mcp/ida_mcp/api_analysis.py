@@ -17,6 +17,7 @@ import ida_xref
 import ida_ua
 import ida_name
 from .rpc import tool
+from .fast_str import get_entries
 from .sync import idaread, is_window_active, tool_timeout
 from .utils import (
     parse_address,
@@ -135,114 +136,6 @@ def _resolve_immediate_insn_start(
                     continue
                 return start
     return None
-
-# ============================================================================
-# String Cache
-# ============================================================================
-
-_strings_cache: Optional[list[dict]] = None
-_strings_cache_md5: Optional[str] = None
-_strings_dump: str = ""  # All strings concatenated with delimiter
-_strings_map: dict[str, list[int]] = {}  # string_lower -> list of cache indices
-_DELIM = "\x00\x01\x02XDELIMX\x02\x01\x00"
-
-
-def _get_cached_strings_dict() -> list[dict]:
-    """Get cached strings as dicts, rebuilding if IDB changed"""
-    global _strings_cache, _strings_cache_md5, _strings_dump, _strings_map
-
-    # Get current IDB modification hash
-    current_md5 = ida_nalt.retrieve_input_file_md5()
-
-    # Rebuild cache if needed
-    if _strings_cache is None or _strings_cache_md5 != current_md5:
-        _strings_cache = []
-        _strings_map = {}
-        dump_parts = [_DELIM]
-
-        for s in idautils.Strings():
-            try:
-                string = str(s)
-                string_lower = string.lower()
-                idx = len(_strings_cache)
-                _strings_cache.append(
-                    {
-                        "addr": hex(s.ea),
-                        "length": s.length,
-                        "string": string,
-                        "string_lower": string_lower,
-                        "type": s.strtype,
-                    }
-                )
-                # Build map for exact lookups
-                if string_lower not in _strings_map:
-                    _strings_map[string_lower] = []
-                _strings_map[string_lower].append(idx)
-                # Build concatenated dump for regex search
-                dump_parts.append(string_lower)
-                dump_parts.append(_DELIM)
-            except Exception:
-                pass
-
-        _strings_dump = "".join(dump_parts)
-        _strings_cache_md5 = current_md5
-
-    return _strings_cache
-
-
-def _search_strings_regex(pattern: str, limit: int, offset: int) -> tuple[list[str], bool]:
-    """Search strings using C-accelerated regex on concatenated dump"""
-    import re
-
-    # Ensure cache is built
-    _get_cached_strings_dict()
-
-    pattern_lower = pattern.lower()
-
-    # Fast path: exact match via map lookup (O(1) instead of O(n) regex)
-    if pattern_lower in _strings_map:
-        indices = _strings_map[pattern_lower]
-        matches = []
-        more = False
-        for i, idx in enumerate(indices):
-            if i < offset:
-                continue
-            matches.append(_strings_cache[idx]["addr"])
-            if len(matches) >= limit:
-                more = i + 1 < len(indices)
-                break
-        return matches, more
-
-    # Substring search: use C-accelerated regex on concatenated dump
-    escaped = re.escape(pattern_lower)
-    # Match: DELIM + (stuff containing pattern) + lookahead(DELIM)
-    # Use lookahead so ending delimiter isn't consumed (allows consecutive matches)
-    delim_escaped = re.escape(_DELIM)
-    regex = re.compile(
-        f"{delim_escaped}([^\\x00]*?{escaped}[^\\x00]*?)(?={delim_escaped})",
-        re.IGNORECASE,
-    )
-
-    matches = []
-    skipped = 0
-    more = False
-
-    for m in regex.finditer(_strings_dump):
-        matched_str = m.group(1)
-        # Look up indices for this string
-        indices = _strings_map.get(matched_str, [])
-        for idx in indices:
-            if skipped < offset:
-                skipped += 1
-                continue
-            matches.append(_strings_cache[idx]["addr"])
-            if len(matches) >= limit:
-                more = True
-                break
-        if more:
-            break
-
-    return matches, more
 
 # ============================================================================
 # Code Analysis & Decompilation
@@ -1081,39 +974,51 @@ def search(
     results = []
 
     if type == "string":
-        # Binary search for string bytes in the binary
+        # Raw byte search for UTF-8 substrings across the binary
         for pattern in targets:
             pattern_str = str(pattern)
-            # Convert string to byte pattern (hex format for bin_search)
-            byte_pattern = " ".join(f"{b:02X}" for b in pattern_str.encode("utf-8"))
+            pattern_bytes = pattern_str.encode("utf-8")
+            if not pattern_bytes:
+                results.append(
+                    {
+                        "query": pattern_str,
+                        "matches": [],
+                        "count": 0,
+                        "cursor": {"done": True},
+                        "error": "Empty pattern",
+                    }
+                )
+                continue
 
             matches = []
             skipped = 0
             more = False
             try:
-                compiled = ida_bytes.compiled_binpat_vec_t()
-                err = ida_bytes.parse_binpat_str(
-                    compiled, ida_ida.inf_get_min_ea(), byte_pattern, 16
-                )
-                if not err:
-                    ea = ida_ida.inf_get_min_ea()
-                    max_ea = ida_ida.inf_get_max_ea()
-                    while ea != idaapi.BADADDR:
-                        ea = ida_bytes.bin_search(
-                            ea, max_ea, compiled, ida_bytes.BIN_SEARCH_FORWARD
-                        )
-                        if ea != idaapi.BADADDR:
-                            if skipped < offset:
-                                skipped += 1
-                            else:
-                                matches.append(hex(ea))
-                                if len(matches) >= limit:
-                                    next_ea = ida_bytes.bin_search(
-                                        ea + 1, max_ea, compiled, ida_bytes.BIN_SEARCH_FORWARD
-                                    )
-                                    more = next_ea != idaapi.BADADDR
-                                    break
-                            ea += 1
+                ea = ida_ida.inf_get_min_ea()
+                max_ea = ida_ida.inf_get_max_ea()
+                mask = b"\xFF" * len(pattern_bytes)
+                flags = ida_bytes.BIN_SEARCH_FORWARD | ida_bytes.BIN_SEARCH_NOSHOW
+                while ea != idaapi.BADADDR:
+                    ea = ida_bytes.bin_search(
+                        ea, max_ea, pattern_bytes, mask, len(pattern_bytes), flags
+                    )
+                    if ea != idaapi.BADADDR:
+                        if skipped < offset:
+                            skipped += 1
+                        else:
+                            matches.append(hex(ea))
+                            if len(matches) >= limit:
+                                next_ea = ida_bytes.bin_search(
+                                    ea + 1,
+                                    max_ea,
+                                    pattern_bytes,
+                                    mask,
+                                    len(pattern_bytes),
+                                    flags,
+                                )
+                                more = next_ea != idaapi.BADADDR
+                                break
+                        ea += 1
             except Exception:
                 pass
 
@@ -1803,7 +1708,7 @@ def analyze_strings(
         limit = 10000
 
     # Use cached strings to avoid rebuilding on every call
-    all_strings = _get_cached_strings_dict()
+    all_strings = get_entries()
 
     results = []
 

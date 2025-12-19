@@ -31,106 +31,7 @@ from .utils import (
     pattern_filter,
 )
 from .sync import IDAError
-
-
-# ============================================================================
-# String Cache (with C-accelerated regex search)
-# ============================================================================
-
-_strings_cache: Optional[list[String]] = None
-_strings_cache_md5: Optional[str] = None
-_strings_dump: str = ""  # All strings concatenated with delimiter for fast regex
-_strings_map: dict[str, list[int]] = {}  # string_lower -> list of cache indices
-_DELIM: str = "\x00\x01\x02XDELIMX\x02\x01\x00"
-
-
-def _get_cached_strings() -> list[String]:
-    """Get cached strings, rebuilding if IDB changed. Also builds regex search index."""
-    global _strings_cache, _strings_cache_md5, _strings_dump, _strings_map
-
-    current_md5 = ida_nalt.retrieve_input_file_md5()
-
-    if _strings_cache is None or _strings_cache_md5 != current_md5:
-        _strings_cache = []
-        _strings_map = {}
-        dump_parts: list[str] = [_DELIM]
-
-        for item in idautils.Strings():
-            if item is None:
-                continue
-            try:
-                string = str(item)
-                if string:
-                    string_lower = string.lower()
-                    idx = len(_strings_cache)
-                    _strings_cache.append(
-                        String(addr=hex(item.ea), length=item.length, string=string)
-                    )
-                    # Map for exact lookups
-                    if string_lower not in _strings_map:
-                        _strings_map[string_lower] = []
-                    _strings_map[string_lower].append(idx)
-                    # Concatenated dump for regex
-                    dump_parts.append(string_lower)
-                    dump_parts.append(_DELIM)
-            except Exception:
-                continue
-
-        _strings_dump = "".join(dump_parts)
-        _strings_cache_md5 = current_md5
-
-    return _strings_cache
-
-
-def _search_strings(pattern: str, limit: int, offset: int) -> tuple[list[String], bool]:
-    """C-accelerated string search using regex on concatenated dump."""
-    import re
-
-    _get_cached_strings()  # Ensure cache built
-
-    pattern_lower = pattern.lower()
-
-    # Fast path: exact match via O(1) map lookup
-    if pattern_lower in _strings_map:
-        indices = _strings_map[pattern_lower]
-        results: list[String] = []
-        more = False
-        for i, idx in enumerate(indices):
-            if i < offset:
-                continue
-            results.append(_strings_cache[idx])
-            if len(results) >= limit:
-                more = i + 1 < len(indices)
-                break
-        return results, more
-
-    # Substring search: C-accelerated regex on concatenated dump
-    escaped = re.escape(pattern_lower)
-    delim_escaped = re.escape(_DELIM)
-    regex = re.compile(
-        f"{delim_escaped}([^\\x00]*?{escaped}[^\\x00]*?)(?={delim_escaped})",
-        re.IGNORECASE,
-    )
-
-    results = []
-    skipped = 0
-    more = False
-
-    for m in regex.finditer(_strings_dump):
-        matched_str = m.group(1)
-        indices = _strings_map.get(matched_str, [])
-        for idx in indices:
-            if skipped < offset:
-                skipped += 1
-                continue
-            results.append(_strings_cache[idx])
-            if len(results) >= limit:
-                more = True
-                break
-        if more:
-            break
-
-    return results, more
+from .fast_str import get_core_strings, search_indices
 
 
 # ============================================================================
@@ -402,13 +303,13 @@ def imports(
 
 @tool
 @idaread
-def strings(
+def regex_find(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
-        "Search/list strings (C-accelerated regex)",
+        "Search/list strings (case-insensitive regex; matches substrings of strings)",
     ],
 ) -> list[Page[String]]:
-    """Search strings using C-accelerated regex. Fast for both exact and substring matches."""
+    """Search strings with a case-insensitive regex; matches any substring of a string."""
     queries = normalize_dict_list(
         queries, lambda s: {"offset": 0, "count": 50, "filter": s}
     )
@@ -421,14 +322,16 @@ def strings(
 
         # No filter: simple pagination of all strings
         if not filter_pattern or filter_pattern == "*":
-            all_strings = _get_cached_strings()
+            all_strings = get_core_strings()
             end = offset + count
             data = all_strings[offset:end]
             next_offset = end if end < len(all_strings) else None
             results.append({"data": data, "next_offset": next_offset})
         else:
             # Use C-accelerated regex search
-            data, more = _search_strings(filter_pattern, count, offset)
+            indices, more = search_indices(filter_pattern, count, offset)
+            all_strings = get_core_strings()
+            data = [all_strings[i] for i in indices]
             next_offset = offset + count if more else None
             results.append({"data": data, "next_offset": next_offset})
 
