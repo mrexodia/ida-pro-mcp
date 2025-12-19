@@ -32,7 +32,7 @@ class TestInfo:
     """Information about a registered test."""
 
     func: Callable
-    expression: str  # For future binary-specific tests
+    binary: str  # Specific binary this test applies to
     module: str  # Auto-extracted category: "api_core", "api_analysis", etc.
     skip: bool = False
 
@@ -41,11 +41,11 @@ class TestInfo:
 TESTS: dict[str, TestInfo] = {}
 
 
-def test(expression: str = "", skip: bool = False) -> Callable:
+def test(*, binary: str = "", skip: bool = False) -> Callable:
     """Decorator to register a test function.
 
     Args:
-        expression: Future use - expression to evaluate for binary-specific tests
+        binary: Name of the specific binary this test applies to
         skip: If True, test will be skipped
 
     Example:
@@ -59,9 +59,9 @@ def test(expression: str = "", skip: bool = False) -> Callable:
             # This test is skipped
             pass
 
-        @test(expression="meta['module'] == 'notepad.exe'")
-        def test_notepad_specific():
-            # Future: only runs when expression is True
+        @test(binary="crackme03.elf")
+        def test_crackme_specific():
+            # Only runs for crackme03.elf
             pass
     """
 
@@ -77,7 +77,7 @@ def test(expression: str = "", skip: bool = False) -> Callable:
         # Register the test
         TESTS[func.__name__] = TestInfo(
             func=func,
-            expression=expression,
+            binary=binary,
             module=category,
             skip=skip,
         )
@@ -224,6 +224,17 @@ def get_first_segment() -> Optional[tuple[str, str]]:
 # ============================================================================
 
 
+def get_current_binary_name() -> str:
+    """Get the name of the currently loaded binary.
+
+    Returns:
+        The filename of the current IDB (e.g., "crackme03.elf")
+    """
+    import idaapi
+
+    return idaapi.get_root_filename()
+
+
 def run_tests(
     pattern: str = "*",
     category: str = "*",
@@ -244,6 +255,9 @@ def run_tests(
     results = TestResults()
     start_time = time.time()
 
+    # Get current binary name for filtering binary-specific tests
+    current_binary = get_current_binary_name()
+
     # Group tests by category
     tests_by_category: dict[str, list[tuple[str, TestInfo]]] = {}
     for name, info in sorted(TESTS.items()):
@@ -252,6 +266,9 @@ def run_tests(
             continue
         # Filter by category
         if category != "*" and info.module != category:
+            continue
+        # Filter by binary - skip tests for other binaries
+        if info.binary and info.binary != current_binary:
             continue
 
         if info.module not in tests_by_category:

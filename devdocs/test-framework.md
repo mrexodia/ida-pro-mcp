@@ -48,7 +48,7 @@ def test_idb_meta():
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `expression` | `str` | `""` | Future: expression for binary-specific tests (NOT IMPLEMENTED) |
+| `binary` | `str` | `""` | Specific binary this test runs for |
 | `skip` | `bool` | `False` | Skip this test |
 
 #### Examples

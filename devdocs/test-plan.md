@@ -58,7 +58,7 @@ Tests are auto-categorized by their source module (extracted from `func.__module
 @dataclass
 class TestInfo:
     func: Callable
-    expression: str  # For future binary-specific tests
+    binary: str
     module: str      # Auto-extracted: "api_core", "api_analysis", etc.
 
 TESTS: dict[str, TestInfo] = {}  # name -> TestInfo
@@ -70,11 +70,11 @@ TESTS: dict[str, TestInfo] = {}  # name -> TestInfo
 
 ```python
 # Decorator
-def test(expression: str = "", skip: bool = False) -> Callable:
+def test(binary: str = "", skip: bool = False) -> Callable:
     """Register a test function.
 
     Args:
-        expression: Future use - expression to evaluate for binary-specific tests
+        binary: Specific binary to run for
         skip: If True, test will be skipped
     """
 
@@ -443,12 +443,12 @@ open htmlcov/index.html
 
 ## Future Extensions
 
-### Expression-Based Tests (Future)
+### Binary-specific tests
 
 ```python
-@test(expression="meta['module'] == 'notepad.exe'")
+@test(binary="notepad.exe")
 def test_notepad_specific():
-    """Test specific to notepad.exe - only runs when expression is True"""
+    """Test specific to notepad.exe"""
     ...
 ```
 
