@@ -1,4 +1,5 @@
 from itertools import islice
+import struct
 from typing import Annotated, Optional
 import ida_hexrays
 import ida_kernwin
@@ -6,15 +7,15 @@ import ida_lines
 import ida_funcs
 import idaapi
 import idautils
-import idc
 import ida_typeinf
 import ida_nalt
 import ida_bytes
 import ida_ida
 import ida_entry
-import ida_search
 import ida_idaapi
 import ida_xref
+import ida_ua
+import ida_name
 from .rpc import tool
 from .sync import idaread, is_window_active, tool_timeout
 from .utils import (
@@ -44,6 +45,204 @@ from .utils import (
     StringFilter,
     InsnPattern,
 )
+
+# ============================================================================
+# Instruction Helpers
+# ============================================================================
+
+_IMM_SCAN_BACK_MAX = 15
+
+
+def _decode_insn_at(ea: int) -> ida_ua.insn_t | None:
+    insn = ida_ua.insn_t()
+    if ida_ua.decode_insn(insn, ea) == 0:
+        return None
+    return insn
+
+
+def _next_head(ea: int, end_ea: int) -> int:
+    return ida_bytes.next_head(ea, end_ea)
+
+
+def _operand_value(insn: ida_ua.insn_t, i: int) -> int | None:
+    op = insn.ops[i]
+    if op.type == ida_ua.o_void:
+        return None
+    if op.type in (ida_ua.o_mem, ida_ua.o_far, ida_ua.o_near):
+        return op.addr
+    return op.value
+
+
+def _operand_type(insn: ida_ua.insn_t, i: int) -> int:
+    return insn.ops[i].type
+
+
+def _insn_mnem(insn: ida_ua.insn_t) -> str:
+    try:
+        return insn.get_canon_mnem().lower()
+    except Exception:
+        return ""
+
+
+def _value_to_le_bytes(value: int) -> tuple[bytes, int, int] | None:
+    if value < 0:
+        if value >= -0x80000000:
+            size = 4
+            value &= 0xFFFFFFFF
+        elif value >= -0x8000000000000000:
+            size = 8
+            value &= 0xFFFFFFFFFFFFFFFF
+        else:
+            return None
+    else:
+        if value <= 0xFFFFFFFF:
+            size = 4
+        elif value <= 0xFFFFFFFFFFFFFFFF:
+            size = 8
+        else:
+            return None
+
+    fmt = "<I" if size == 4 else "<Q"
+    return struct.pack(fmt, value), size, value
+
+
+def _resolve_immediate_insn_start(
+    match_ea: int,
+    value: int,
+    seg_start: int,
+    alt_value: int | None = None,
+) -> int | None:
+    start_min = max(seg_start, match_ea - _IMM_SCAN_BACK_MAX)
+    for start in range(match_ea, start_min - 1, -1):
+        insn = _decode_insn_at(start)
+        if insn is None:
+            continue
+        end_ea = start + insn.size
+        if not (start <= match_ea < end_ea):
+            continue
+        for i in range(8):
+            op_type = _operand_type(insn, i)
+            if op_type == ida_ua.o_void:
+                break
+            if op_type != ida_ua.o_imm:
+                continue
+            op_val = _operand_value(insn, i)
+            if op_val is None:
+                continue
+            if op_val == value or (alt_value is not None and op_val == alt_value):
+                offb = getattr(insn.ops[i], "offb", 0)
+                if offb and start + offb != match_ea:
+                    continue
+                return start
+    return None
+
+# ============================================================================
+# String Cache
+# ============================================================================
+
+_strings_cache: Optional[list[dict]] = None
+_strings_cache_md5: Optional[str] = None
+_strings_dump: str = ""  # All strings concatenated with delimiter
+_strings_map: dict[str, list[int]] = {}  # string_lower -> list of cache indices
+_DELIM = "\x00\x01\x02XDELIMX\x02\x01\x00"
+
+
+def _get_cached_strings_dict() -> list[dict]:
+    """Get cached strings as dicts, rebuilding if IDB changed"""
+    global _strings_cache, _strings_cache_md5, _strings_dump, _strings_map
+
+    # Get current IDB modification hash
+    current_md5 = ida_nalt.retrieve_input_file_md5()
+
+    # Rebuild cache if needed
+    if _strings_cache is None or _strings_cache_md5 != current_md5:
+        _strings_cache = []
+        _strings_map = {}
+        dump_parts = [_DELIM]
+
+        for s in idautils.Strings():
+            try:
+                string = str(s)
+                string_lower = string.lower()
+                idx = len(_strings_cache)
+                _strings_cache.append(
+                    {
+                        "addr": hex(s.ea),
+                        "length": s.length,
+                        "string": string,
+                        "string_lower": string_lower,
+                        "type": s.strtype,
+                    }
+                )
+                # Build map for exact lookups
+                if string_lower not in _strings_map:
+                    _strings_map[string_lower] = []
+                _strings_map[string_lower].append(idx)
+                # Build concatenated dump for regex search
+                dump_parts.append(string_lower)
+                dump_parts.append(_DELIM)
+            except Exception:
+                pass
+
+        _strings_dump = "".join(dump_parts)
+        _strings_cache_md5 = current_md5
+
+    return _strings_cache
+
+
+def _search_strings_regex(pattern: str, limit: int, offset: int) -> tuple[list[str], bool]:
+    """Search strings using C-accelerated regex on concatenated dump"""
+    import re
+
+    # Ensure cache is built
+    _get_cached_strings_dict()
+
+    pattern_lower = pattern.lower()
+
+    # Fast path: exact match via map lookup (O(1) instead of O(n) regex)
+    if pattern_lower in _strings_map:
+        indices = _strings_map[pattern_lower]
+        matches = []
+        more = False
+        for i, idx in enumerate(indices):
+            if i < offset:
+                continue
+            matches.append(_strings_cache[idx]["addr"])
+            if len(matches) >= limit:
+                more = i + 1 < len(indices)
+                break
+        return matches, more
+
+    # Substring search: use C-accelerated regex on concatenated dump
+    escaped = re.escape(pattern_lower)
+    # Match: DELIM + (stuff containing pattern) + lookahead(DELIM)
+    # Use lookahead so ending delimiter isn't consumed (allows consecutive matches)
+    delim_escaped = re.escape(_DELIM)
+    regex = re.compile(
+        f"{delim_escaped}([^\\x00]*?{escaped}[^\\x00]*?)(?={delim_escaped})",
+        re.IGNORECASE,
+    )
+
+    matches = []
+    skipped = 0
+    more = False
+
+    for m in regex.finditer(_strings_dump):
+        matched_str = m.group(1)
+        # Look up indices for this string
+        indices = _strings_map.get(matched_str, [])
+        for idx in indices:
+            if skipped < offset:
+                skipped += 1
+                continue
+            matches.append(_strings_cache[idx]["addr"])
+            if len(matches) >= limit:
+                more = True
+                break
+        if more:
+            break
+
+    return matches, more
 
 # ============================================================================
 # Code Analysis & Decompilation
@@ -105,6 +304,9 @@ def disasm(
         int, "Max instructions per function (default: 5000, max: 50000)"
     ] = 5000,
     offset: Annotated[int, "Skip first N instructions (default: 0)"] = 0,
+    include_total: Annotated[
+        bool, "Compute total instruction count (default: false)"
+    ] = False,
 ) -> list[dict]:
     """Disassemble functions to assembly instructions"""
     addrs = normalize_list_input(addrs)
@@ -112,6 +314,8 @@ def disasm(
     # Enforce max limit
     if max_instructions <= 0 or max_instructions > 50000:
         max_instructions = 50000
+    if offset < 0:
+        offset = 0
 
     results = []
 
@@ -138,55 +342,64 @@ def disasm(
 
             segment_name = idaapi.get_segm_name(seg) if seg else "UNKNOWN"
 
-            # Collect instructions
-            all_instructions = []
-
             if func:
                 # Function exists: disassemble function items starting from requested address
                 func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
                 header_addr = start  # Use requested address, not function start
-
-                for ea in idautils.FuncItems(func.start_ea):
-                    if ea == idaapi.BADADDR:
-                        continue
-                    # Skip instructions before the requested start address
-                    if ea < start:
-                        continue
-
-                    # Use generate_disasm_line to get full line with comments
-                    line = idc.generate_disasm_line(ea, 0)
-                    instruction = ida_lines.tag_remove(line) if line else ""
-                    all_instructions.append((ea, instruction))
             else:
                 # No function: disassemble sequentially from start address
                 func_name = f"<no function>"
                 header_addr = start
 
+            lines = []
+            seen = 0
+            total_count = 0
+            more = False
+
+            def _maybe_add(ea: int) -> bool:
+                nonlocal seen, total_count, more
+                if include_total:
+                    total_count += 1
+                if seen < offset:
+                    seen += 1
+                    return True
+                if len(lines) < max_instructions:
+                    line = ida_lines.generate_disasm_line(ea, 0)
+                    instruction = ida_lines.tag_remove(line) if line else ""
+                    lines.append(f"{ea:x}  {instruction}")
+                    seen += 1
+                    return True
+                more = True
+                seen += 1
+                return include_total
+
+            if func:
+                for ea in idautils.FuncItems(func.start_ea):
+                    if ea == idaapi.BADADDR:
+                        continue
+                    if ea < start:
+                        continue
+                    if not _maybe_add(ea):
+                        break
+            else:
                 ea = start
-                while ea < seg.end_ea and len(all_instructions) < max_instructions + offset:
+                while ea < seg.end_ea:
+                    if ea == idaapi.BADADDR:
+                        break
+                    if _decode_insn_at(ea) is None:
+                        break
+                    if not _maybe_add(ea):
+                        break
+                    ea = _next_head(ea, seg.end_ea)
                     if ea == idaapi.BADADDR:
                         break
 
-                    insn = idaapi.insn_t()
-                    if idaapi.decode_insn(insn, ea) == 0:
-                        break
+            if include_total and not more:
+                more = total_count > offset + max_instructions
 
-                    # Use generate_disasm_line to get full line with comments
-                    line = idc.generate_disasm_line(ea, 0)
-                    instruction = ida_lines.tag_remove(line) if line else ""
-                    all_instructions.append((ea, instruction))
-
-                    ea = idc.next_head(ea, seg.end_ea)
-
-            # Apply pagination
-            total_insns = len(all_instructions)
-            paginated_insns = all_instructions[offset : offset + max_instructions]
-            more = offset + max_instructions < total_insns
-
-            # Build disassembly string from paginated instructions
             lines_str = f"{func_name} ({segment_name} @ {hex(header_addr)}):"
-            for ea, instruction in paginated_insns:
-                lines_str += f"\n{ea:x}  {instruction}"
+            if lines:
+                lines_str += "\n" + "\n".join(lines)
 
             rettype = None
             args: Optional[list[Argument]] = None
@@ -220,8 +433,8 @@ def disasm(
                 {
                     "addr": start_addr,
                     "asm": out,
-                    "instruction_count": len(paginated_insns),
-                    "total_instructions": total_insns,
+                    "instruction_count": len(lines),
+                    "total_instructions": total_count if include_total else None,
                     "cursor": (
                         {"next": offset + max_instructions}
                         if more
@@ -398,7 +611,7 @@ def callees(
                     {"addr": fn_addr, "callees": None, "error": "No function found"}
                 )
                 continue
-            func_end = idc.find_func_end(func_start)
+            func_end = func.end_ea
             callees_dict = {}
             more = False
             current_ea = func_start
@@ -406,26 +619,38 @@ def callees(
                 if len(callees_dict) >= limit:
                     more = True
                     break
-                insn = idaapi.insn_t()
-                idaapi.decode_insn(insn, current_ea)
+                insn = _decode_insn_at(current_ea)
+                if insn is None:
+                    next_ea = _next_head(current_ea, func_end)
+                    if next_ea == idaapi.BADADDR:
+                        break
+                    current_ea = next_ea
+                    continue
                 if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
-                    target = idc.get_operand_value(current_ea, 0)
-                    target_type = idc.get_operand_type(current_ea, 0)
-                    if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
-                        if target not in callees_dict:
-                            func_type = (
-                                "internal"
-                                if idaapi.get_func(target) is not None
-                                else "external"
-                            )
-                            func_name = idc.get_name(target)
-                            if func_name is not None:
-                                callees_dict[target] = {
-                                    "addr": hex(target),
-                                    "name": func_name,
-                                    "type": func_type,
-                                }
-                current_ea = idc.next_head(current_ea, func_end)
+                    op0 = insn.ops[0]
+                    if op0.type in (ida_ua.o_mem, ida_ua.o_near, ida_ua.o_far):
+                        target = op0.addr
+                    elif op0.type == ida_ua.o_imm:
+                        target = op0.value
+                    else:
+                        target = None
+                    if target is not None and target not in callees_dict:
+                        func_type = (
+                            "internal"
+                            if idaapi.get_func(target) is not None
+                            else "external"
+                        )
+                        func_name = ida_name.get_name(target)
+                        if func_name is not None:
+                            callees_dict[target] = {
+                                "addr": hex(target),
+                                "name": func_name,
+                                "type": func_type,
+                            }
+                next_ea = _next_head(current_ea, func_end)
+                if next_ea == idaapi.BADADDR:
+                    break
+                current_ea = next_ea
 
             results.append({
                 "addr": fn_addr,
@@ -463,8 +688,9 @@ def callers(
                 func = get_function(caller_addr, raise_error=False)
                 if not func:
                     continue
-                insn = idaapi.insn_t()
-                idaapi.decode_insn(insn, caller_addr)
+                insn = _decode_insn_at(caller_addr)
+                if insn is None:
+                    continue
                 if insn.itype not in [
                     idaapi.NN_call,
                     idaapi.NN_callfi,
@@ -914,24 +1140,68 @@ def search(
             skipped = 0
             more = False
             try:
-                ea = ida_ida.inf_get_min_ea()
-                max_ea = ida_ida.inf_get_max_ea()
-                while ea < max_ea:
-                    result = ida_search.find_imm(ea, ida_search.SEARCH_DOWN, value)
-                    if result[0] == idaapi.BADADDR:
-                        break
-                    if skipped < offset:
-                        skipped += 1
-                    else:
-                        matches.append(hex(result[0]))
-                        if len(matches) >= limit:
-                            # Check if there's at least one more match
-                            next_result = ida_search.find_imm(
-                                result[0] + 1, ida_search.SEARCH_DOWN, value
-                            )
-                            more = next_result[0] != idaapi.BADADDR
+                packed = _value_to_le_bytes(value)
+                if packed is None:
+                    results.append(
+                        {
+                            "query": value,
+                            "matches": [],
+                            "count": 0,
+                            "cursor": {"done": True},
+                            "error": "Immediate out of range",
+                        }
+                    )
+                    continue
+
+                pattern_bytes, _, normalized = packed
+                alt_value = normalized if normalized != value else None
+                pattern_str = " ".join(f"{b:02X}" for b in pattern_bytes)
+                compiled = ida_bytes.compiled_binpat_vec_t()
+                err = ida_bytes.parse_binpat_str(
+                    compiled, ida_ida.inf_get_min_ea(), pattern_str, 16
+                )
+                if err:
+                    results.append(
+                        {
+                            "query": value,
+                            "matches": [],
+                            "count": 0,
+                            "cursor": {"done": True},
+                            "error": f"Failed to compile pattern: {pattern_str}",
+                        }
+                    )
+                    continue
+
+                seen_insn = set()
+                for seg_ea in idautils.Segments():
+                    seg = idaapi.getseg(seg_ea)
+                    if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
+                        continue
+                    ea = seg.start_ea
+                    while ea != idaapi.BADADDR and ea < seg.end_ea:
+                        ea = ida_bytes.bin_search(
+                            ea, seg.end_ea, compiled, ida_bytes.BIN_SEARCH_FORWARD
+                        )
+                        if ea == idaapi.BADADDR:
                             break
-                    ea = result[0] + 1
+
+                        insn_start = _resolve_immediate_insn_start(
+                            ea, value, seg.start_ea, alt_value
+                        )
+                        if insn_start is not None and insn_start not in seen_insn:
+                            seen_insn.add(insn_start)
+                            if skipped < offset:
+                                skipped += 1
+                            else:
+                                matches.append(hex(insn_start))
+                                if len(matches) >= limit:
+                                    more = True
+                                    break
+
+                        ea += 1
+
+                    if more:
+                        break
             except Exception:
                 pass
 
@@ -1220,26 +1490,33 @@ def _scan_insn_ranges(
 
             scanned += 1
 
-            if mnem and idc.print_insn_mnem(ea).lower() != mnem:
-                ea = idc.next_head(ea, end_ea)
+            insn = _decode_insn_at(ea)
+            if insn is None:
+                ea = _next_head(ea, end_ea)
+                if ea == idaapi.BADADDR:
+                    break
+                continue
+
+            if mnem and _insn_mnem(insn) != mnem:
+                ea = _next_head(ea, end_ea)
                 if ea == idaapi.BADADDR:
                     break
                 continue
 
             match = True
-            if op0_val is not None and idc.get_operand_value(ea, 0) != op0_val:
+            if op0_val is not None and _operand_value(insn, 0) != op0_val:
                 match = False
-            if op1_val is not None and idc.get_operand_value(ea, 1) != op1_val:
+            if op1_val is not None and _operand_value(insn, 1) != op1_val:
                 match = False
-            if op2_val is not None and idc.get_operand_value(ea, 2) != op2_val:
+            if op2_val is not None and _operand_value(insn, 2) != op2_val:
                 match = False
 
             if any_val is not None and match:
                 found_any = False
                 for i in range(8):
-                    if idc.get_operand_type(ea, i) == idaapi.o_void:
+                    if _operand_type(insn, i) == ida_ua.o_void:
                         break
-                    if idc.get_operand_value(ea, i) == any_val:
+                    if _operand_value(insn, i) == any_val:
                         found_any = True
                         break
                 if not found_any:
@@ -1255,7 +1532,7 @@ def _scan_insn_ranges(
                         matches = matches[:limit]
                         break
 
-            ea = idc.next_head(ea, end_ea)
+            ea = _next_head(ea, end_ea)
             if ea == idaapi.BADADDR:
                 break
 
@@ -1343,6 +1620,9 @@ def callgraph(
     max_depth: Annotated[int, "Maximum depth for call graph traversal"] = 5,
     max_nodes: Annotated[int, "Max nodes across the graph (default: 1000, max: 100000)"] = 1000,
     max_edges: Annotated[int, "Max edges across the graph (default: 5000, max: 200000)"] = 5000,
+    max_edges_per_func: Annotated[
+        int, "Max edges per function (default: 200, max: 5000)"
+    ] = 200,
 ) -> list[dict]:
     """Build call graph starting from root functions"""
     roots = normalize_list_input(roots)
@@ -1352,6 +1632,8 @@ def callgraph(
         max_nodes = 100000
     if max_edges <= 0 or max_edges > 200000:
         max_edges = 200000
+    if max_edges_per_func <= 0 or max_edges_per_func > 5000:
+        max_edges_per_func = 5000
     results = []
 
     for root in roots:
@@ -1373,6 +1655,7 @@ def callgraph(
             edges = []
             visited = set()
             truncated = False
+            per_func_capped = False
             limit_reason = None
 
             def hit_limit(reason: str):
@@ -1381,6 +1664,7 @@ def callgraph(
                 limit_reason = reason
 
             def traverse(addr, depth):
+                nonlocal per_func_capped
                 if truncated:
                     return
                 if depth > max_depth or addr in visited:
@@ -1402,11 +1686,15 @@ def callgraph(
                 }
 
                 # Get callees
+                edges_added = 0
                 for item_ea in idautils.FuncItems(f.start_ea):
                     if truncated:
                         break
                     for xref in idautils.CodeRefsFrom(item_ea, 0):
                         if truncated:
+                            break
+                        if edges_added >= max_edges_per_func:
+                            per_func_capped = True
                             break
                         callee_func = idaapi.get_func(xref)
                         if callee_func:
@@ -1420,7 +1708,10 @@ def callgraph(
                                     "type": "call",
                                 }
                             )
+                            edges_added += 1
                             traverse(callee_func.start_ea, depth + 1)
+                    if edges_added >= max_edges_per_func:
+                        break
 
             traverse(ea, 0)
 
@@ -1434,6 +1725,8 @@ def callgraph(
                     "limit_reason": limit_reason,
                     "max_nodes": max_nodes,
                     "max_edges": max_edges,
+                    "max_edges_per_func": max_edges_per_func,
+                    "per_func_capped": per_func_capped,
                     "error": None,
                 }
             )
