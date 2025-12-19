@@ -515,3 +515,170 @@ for r in results.results:
    ```
 
 6. **Error handling**: Use `try/except IDAError` for expected errors
+
+## Coverage-Guided Test Development
+
+Tests should be **coverage-guided**: use coverage data to identify gaps in our wrapper code, then write tests that exercise those specific code paths.
+
+### Methodology
+
+**Key Principle**: We're testing *our wrapper code*, not IDA's correctness. Don't write tests that verify IDA returns expected values - IDA works. Instead, write tests that trigger edge cases and error paths in our code.
+
+#### Workflow
+
+1. **Run coverage**:
+   ```bash
+   uv run coverage run -m ida_pro_mcp.test tests/crackme03.elf
+   uv run coverage report --show-missing --include="src/ida_pro_mcp/ida_mcp/api_*.py"
+   ```
+
+2. **Identify uncovered lines** and understand what conditions trigger them
+
+3. **Determine test type**:
+   - **Generic test**: If the gap can be triggered with invalid/edge-case inputs (preferred)
+   - **Binary-specific test**: Only if the gap requires specific binary properties
+
+4. **Write minimal test** that triggers the specific code path
+
+5. **Re-run coverage** to verify the gap is closed
+
+#### Example: Coverage-Guided Test Development
+
+Coverage shows lines 252-256 in `api_core.py` are uncovered:
+```python
+except ValueError:
+    results.append(
+        {"input": text, "result": None, "error": f"Invalid number: {text}"}
+    )
+```
+
+This is an error path for invalid input. Write a generic test:
+```python
+@test()
+def test_int_convert_invalid_text():
+    """int_convert handles invalid number text (covers lines 252-256)"""
+    result = int_convert({"text": "not_a_number"})
+    assert result[0]["result"] is None
+    assert "Invalid number" in result[0]["error"]
+```
+
+### Deterministic Sampling
+
+For broader test coverage, test on multiple items rather than just one. The framework provides helpers that select a deterministic sample based on binary name.
+
+#### Sample Size Configuration
+
+Sample size is configured via command line:
+```bash
+# Default: 5 items
+uv run ida-mcp-test tests/crackme03.elf
+
+# More thorough testing with 10 items
+uv run ida-mcp-test tests/crackme03.elf --sample-size 10
+
+# Quick smoke test with 2 items
+uv run ida-mcp-test tests/crackme03.elf --sample-size 2
+```
+
+#### Sampling Helpers
+
+```python
+from .tests import get_n_functions, get_n_strings, get_functions_with_calls
+
+@test()
+def test_decompile_multiple():
+    """decompile works on multiple functions (sampling test)"""
+    addrs = get_n_functions()  # Uses configured sample size
+    if len(addrs) < 2:
+        return
+    
+    results = decompile(addrs)
+    assert len(results) == len(addrs)
+    # At least some should succeed
+    successes = [r for r in results if r.get("code")]
+    assert len(successes) > 0
+```
+
+#### Available Helpers
+
+| Helper | Description |
+|--------|-------------|
+| `get_n_functions(n=None)` | N deterministically-selected function addresses |
+| `get_n_strings(n=None)` | N deterministically-selected string addresses |
+| `get_functions_with_calls()` | Functions that contain call instructions |
+| `get_functions_with_callers()` | Functions that are called by others |
+| `get_data_address()` | Address in a data (non-code) segment |
+| `get_unmapped_address()` | Invalid address for error path testing |
+
+### Test Categories
+
+#### 1. Schema Tests
+Verify return structure matches expected schema:
+```python
+@test()
+def test_idb_meta_schema():
+    result = idb_meta()
+    assert_has_keys(result, "path", "module", "base", "size")
+```
+
+#### 2. Error Path Tests
+Verify error handling for invalid inputs:
+```python
+@test()
+def test_decompile_invalid_address():
+    """Covers error handling path"""
+    result = decompile(get_unmapped_address())
+    assert result[0].get("error") is not None
+```
+
+#### 3. Edge Case Tests
+Cover specific code paths identified by coverage:
+```python
+@test()
+def test_lookup_funcs_wildcard():
+    """lookup_funcs with '*' returns all functions (covers lines 132-134)"""
+    result = lookup_funcs("*")
+    assert len(result) > 0
+    assert result[0]["query"] == "*"
+```
+
+#### 4. Sampling Tests
+Test on multiple items for broader coverage:
+```python
+@test()
+def test_callees_multiple():
+    """callees works on multiple functions (sampling test)"""
+    addrs = get_n_functions()
+    result = callees(addrs)
+    assert len(result) == len(addrs)
+```
+
+### Binary-Specific Tests (Use Sparingly)
+
+Binary-specific tests should only be used when:
+1. A code path requires specific binary properties (e.g., C++ mangled names)
+2. The edge case cannot be triggered with generic inputs
+
+```python
+@test(binary="crackme03.elf")
+def test_crackme_specific_edge_case():
+    """Tests a code path that requires specific binary structure"""
+    # Only runs when crackme03.elf is loaded
+    ...
+```
+
+**Do NOT use binary-specific tests to verify IDA correctness** (e.g., "main is at 0x123e").
+
+### Coverage Targets
+
+| Module | Target | Notes |
+|--------|--------|-------|
+| api_core | 90%+ | Core functionality |
+| api_analysis | 85%+ | Complex decompilation paths |
+| api_memory | 85%+ | Read/write operations |
+| api_types | 80%+ | Type system edge cases |
+| api_modify | 70%+ | Modification operations |
+| api_resources | 85%+ | Resource URIs |
+| api_stack | 80%+ | Stack frame operations |
+| api_debug | Skip | Requires active debugger |
+| api_python | Skip | Requires special setup |

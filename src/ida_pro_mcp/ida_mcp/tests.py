@@ -174,6 +174,29 @@ def assert_all_have_keys(items: list[dict], *keys: str) -> None:
 
 
 # ============================================================================
+# Test Configuration
+# ============================================================================
+
+# Default sample size for deterministic sampling helpers
+# Can be overridden by test runner via set_sample_size()
+_sample_size: int = 5
+
+
+def set_sample_size(n: int) -> None:
+    """Set the sample size for deterministic sampling helpers.
+
+    Called by test runner to configure how many items to sample.
+    """
+    global _sample_size
+    _sample_size = max(1, n)
+
+
+def get_sample_size() -> int:
+    """Get the current sample size."""
+    return _sample_size
+
+
+# ============================================================================
 # Test Data Helpers
 # ============================================================================
 
@@ -217,6 +240,146 @@ def get_first_segment() -> Optional[tuple[str, str]]:
         if seg:
             return (hex(seg.start_ea), hex(seg.end_ea))
     return None
+
+
+def _deterministic_sample(items: list, n: int) -> list:
+    """Select n items deterministically based on binary name.
+
+    Uses hash of (binary_name, item_index) for reproducible but varied selection.
+    """
+    import hashlib
+
+    if len(items) <= n:
+        return items
+
+    binary_name = get_current_binary_name()
+
+    # Create (hash, item) pairs for sorting
+    def item_hash(idx: int) -> int:
+        key = f"{binary_name}:{idx}".encode()
+        return int(hashlib.md5(key).hexdigest(), 16)
+
+    indexed = [(item_hash(i), item) for i, item in enumerate(items)]
+    indexed.sort(key=lambda x: x[0])
+
+    return [item for _, item in indexed[:n]]
+
+
+def get_n_functions(n: Optional[int] = None) -> list[str]:
+    """Get N function addresses, deterministically selected.
+
+    Selection is based on binary name for reproducibility across runs.
+    Returns up to N addresses (fewer if binary has fewer functions).
+
+    Args:
+        n: Number of functions to return. Defaults to global sample_size.
+    """
+    import idautils
+
+    if n is None:
+        n = _sample_size
+
+    all_funcs = [hex(ea) for ea in idautils.Functions()]
+    return _deterministic_sample(all_funcs, n)
+
+
+def get_n_strings(n: Optional[int] = None) -> list[str]:
+    """Get N string addresses, deterministically selected.
+
+    Args:
+        n: Number of strings to return. Defaults to global sample_size.
+    """
+    import idaapi
+
+    if n is None:
+        n = _sample_size
+
+    all_strings = []
+    for i in range(idaapi.get_strlist_qty()):
+        si = idaapi.string_info_t()
+        if idaapi.get_strlist_item(si, i):
+            all_strings.append(hex(si.ea))
+
+    return _deterministic_sample(all_strings, n)
+
+
+def get_data_address() -> Optional[str]:
+    """Get an address in a data segment (not code).
+
+    Useful for testing error paths when code address is expected.
+    """
+    import idaapi
+    import idautils
+
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if seg and not (seg.perm & idaapi.SEGPERM_EXEC):
+            # Return first address in non-executable segment
+            return hex(seg.start_ea)
+    return None
+
+
+def get_unmapped_address() -> str:
+    """Get an address that is not mapped in the binary.
+
+    Useful for testing error paths for invalid addresses.
+    """
+    return "0xDEADBEEFDEADBEEF"
+
+
+def get_functions_with_calls() -> list[str]:
+    """Get functions that contain call instructions (have callees).
+
+    Useful for testing callees() on functions that actually call others.
+    """
+    import idaapi
+    import idautils
+    import idc
+
+    result = []
+    for func_ea in idautils.Functions():
+        func = idaapi.get_func(func_ea)
+        if not func:
+            continue
+
+        # Check if function contains any call instructions
+        has_call = False
+        for head in idautils.Heads(func.start_ea, func.end_ea):
+            insn = idaapi.insn_t()
+            if idaapi.decode_insn(insn, head) > 0:
+                if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+                    has_call = True
+                    break
+
+        if has_call:
+            result.append(hex(func_ea))
+
+    return _deterministic_sample(result, _sample_size)
+
+
+def get_functions_with_callers() -> list[str]:
+    """Get functions that are called by other functions (have callers).
+
+    Useful for testing callers() on functions that are actually called.
+    """
+    import idaapi
+    import idautils
+
+    result = []
+    for func_ea in idautils.Functions():
+        # Check if this function has any code references to it
+        has_caller = False
+        for xref in idautils.XrefsTo(func_ea, 0):
+            if xref.iscode:
+                caller_func = idaapi.get_func(xref.frm)
+                if caller_func and caller_func.start_ea != func_ea:
+                    has_caller = True
+                    break
+
+        if has_caller:
+            result.append(hex(func_ea))
+
+    return _deterministic_sample(result, _sample_size)
 
 
 # ============================================================================

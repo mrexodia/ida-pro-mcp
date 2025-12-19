@@ -75,6 +75,13 @@ With coverage:
         action="store_true",
         help="Show IDA console messages",
     )
+    parser.add_argument(
+        "--sample-size",
+        "-n",
+        type=int,
+        default=5,
+        help="Number of items for sampling-based tests (default: 5)",
+    )
 
     args = parser.parse_args()
 
@@ -103,7 +110,10 @@ With coverage:
     try:
         # Import test framework and API modules AFTER idalib is initialized
         # This triggers the @test decorators to register tests
-        from ida_pro_mcp.ida_mcp.tests import run_tests, TESTS
+        from ida_pro_mcp.ida_mcp.tests import run_tests, TESTS, set_sample_size
+
+        # Configure sample size for deterministic sampling helpers
+        set_sample_size(args.sample_size)
 
         # Handle --list
         if args.list:

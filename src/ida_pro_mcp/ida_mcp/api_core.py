@@ -194,6 +194,53 @@ def test_lookup_funcs_invalid():
     assert result[0]["error"] is not None
 
 
+@test()
+def test_lookup_funcs_wildcard():
+    """lookup_funcs with '*' returns all functions (covers lines 132-134)"""
+    result = lookup_funcs("*")
+    assert_is_list(result, min_length=1)
+    # All results should have query="*" and a function
+    for r in result:
+        assert r["query"] == "*"
+        assert r["fn"] is not None
+
+
+@test()
+def test_lookup_funcs_empty():
+    """lookup_funcs with empty string returns all functions (covers lines 132-134)"""
+    result = lookup_funcs("")
+    assert_is_list(result, min_length=1)
+    assert result[0]["query"] == "*"
+
+
+@test()
+def test_lookup_funcs_malformed_hex():
+    """lookup_funcs handles malformed hex address (covers lines 148-149)"""
+    # This looks like an address but isn't valid hex
+    result = lookup_funcs("0xZZZZ")
+    assert_is_list(result, min_length=1)
+    # Should return error since it's not a valid address or name
+    assert result[0]["error"] is not None
+
+
+@test()
+def test_lookup_funcs_data_address():
+    """lookup_funcs with valid address but not a function (covers lines 162-164)"""
+    from .tests import get_data_address
+
+    data_addr = get_data_address()
+    if not data_addr:
+        return  # Skip if no data segments
+
+    result = lookup_funcs(data_addr)
+    assert_is_list(result, min_length=1)
+    # Should return "Not a function" error
+    assert result[0]["fn"] is None
+    assert "Not a function" in str(result[0]["error"]) or "Not found" in str(
+        result[0]["error"]
+    )
+
+
 @tool
 @idaread
 def cursor_addr() -> str:
@@ -313,6 +360,38 @@ def test_int_convert():
     assert conv["decimal"] == "65"
     assert conv["hexadecimal"] == "0x41"
     assert conv["ascii"] == "A"
+
+
+@test()
+def test_int_convert_invalid_text():
+    """int_convert handles invalid number text (covers lines 252-256)"""
+    result = int_convert({"text": "not_a_number"})
+    assert_is_list(result, min_length=1)
+    assert result[0]["result"] is None
+    assert result[0]["error"] is not None
+    assert "Invalid number" in result[0]["error"]
+
+
+@test()
+def test_int_convert_overflow():
+    """int_convert handles overflow with small size (covers lines 269-277)"""
+    # Try to fit a large number into 1 byte
+    result = int_convert({"text": "0xFFFF", "size": 1})
+    assert_is_list(result, min_length=1)
+    assert result[0]["result"] is None
+    assert result[0]["error"] is not None
+    assert "too big" in result[0]["error"]
+
+
+@test()
+def test_int_convert_non_ascii():
+    """int_convert handles non-ASCII bytes (covers lines 283-285)"""
+    # 0x01 is not a printable ASCII character (control char)
+    result = int_convert({"text": "0x01"})
+    assert_is_list(result, min_length=1)
+    assert result[0]["error"] is None
+    # ascii should be None for non-printable bytes
+    assert result[0]["result"]["ascii"] is None
 
 
 @tool

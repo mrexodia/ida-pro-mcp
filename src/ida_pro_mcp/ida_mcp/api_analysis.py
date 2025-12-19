@@ -347,6 +347,32 @@ def test_disasm_pagination():
     assert "cursor" in result2[0]
 
 
+@test()
+def test_disasm_unmapped_address():
+    """disasm handles unmapped address gracefully (covers lines 199-207)"""
+    from .tests import get_unmapped_address
+
+    result = disasm(get_unmapped_address())
+    assert len(result) == 1
+    # Should either have error or empty asm
+    assert result[0].get("error") is not None or result[0]["asm"] is None
+
+
+@test()
+def test_disasm_data_segment():
+    """disasm handles address in data segment (covers lines 232-252)"""
+    from .tests import get_data_address
+
+    data_addr = get_data_address()
+    if not data_addr:
+        return
+
+    result = disasm(data_addr)
+    assert len(result) == 1
+    # Should succeed but show "<no function>" or similar
+    # The key is it doesn't crash on non-code
+
+
 # ============================================================================
 # Cross-Reference Analysis
 # ============================================================================
@@ -582,6 +608,35 @@ def test_callees():
     assert_has_keys(result[0], "addr", "callees")
     # callees is a list (may be empty for leaf functions)
     assert_is_list(result[0]["callees"])
+
+
+@test()
+def test_callees_multiple():
+    """callees works on multiple functions (sampling test)"""
+    from .tests import get_n_functions
+
+    addrs = get_n_functions()
+    if len(addrs) < 2:
+        return
+
+    result = callees(addrs)
+    assert len(result) == len(addrs)
+    for r in result:
+        assert_has_keys(r, "addr", "callees")
+        # Each should have a callees list (may be empty) or error
+        if r.get("error") is None:
+            assert_is_list(r["callees"])
+
+
+@test()
+def test_callees_invalid_address():
+    """callees handles invalid address (covers error path)"""
+    from .tests import get_unmapped_address
+
+    result = callees(get_unmapped_address())
+    assert len(result) == 1
+    # Should return error or empty callees
+    assert result[0].get("error") is not None or result[0]["callees"] is None
 
 
 @tool

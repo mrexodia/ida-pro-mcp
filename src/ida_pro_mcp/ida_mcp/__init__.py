@@ -32,7 +32,7 @@ from . import api_resources
 # Re-export key components for external use
 from .sync import idaread, idawrite, IDAError, IDASyncError
 from .rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, resource
-from .tests import run_tests, test
+from .tests import run_tests, test, set_sample_size, get_sample_size
 from .http import IdaMcpHttpRequestHandler
 
 __all__ = [
@@ -63,5 +63,7 @@ __all__ = [
     "resource",
     "run_tests",
     "test",
+    "set_sample_size",
+    "get_sample_size",
     "IdaMcpHttpRequestHandler",
 ]
