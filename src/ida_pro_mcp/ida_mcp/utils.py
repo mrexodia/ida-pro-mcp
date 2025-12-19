@@ -140,13 +140,6 @@ class RenameBatch(TypedDict, total=False):
     ]
 
 
-class PathQuery(TypedDict):
-    """Path finding query"""
-
-    source: Annotated[str, "Source address (hex or decimal)"]
-    target: Annotated[str, "Target address (hex or decimal)"]
-
-
 class StructFieldQuery(TypedDict):
     """Struct field query for xrefs"""
 
@@ -160,13 +153,6 @@ class ListQuery(TypedDict, total=False):
     filter: Annotated[str, "Optional glob pattern to filter results"]
     offset: Annotated[int, "Starting index (default: 0)"]
     count: Annotated[int, "Maximum number of results (default: 50, 0 for all)"]
-
-
-class StringFilter(TypedDict, total=False):
-    """String analysis filter"""
-
-    pattern: Annotated[str, "Optional pattern to match in strings"]
-    min_length: Annotated[int, "Optional minimum string length"]
 
 
 class BreakpointOp(TypedDict):
@@ -984,11 +970,16 @@ def get_callees(addr: str) -> list[dict]:
         return []
 
 
-def get_callers(addr: str) -> list[Function]:
+def get_callers(addr: str, limit: int = 50) -> list[Function]:
     """Get callers for a single function address"""
     try:
         callers = {}
+        iterations = 0
+        max_iterations = limit * 100
         for caller_addr in idautils.CodeRefsTo(parse_address(addr), 0):
+            iterations += 1
+            if len(callers) >= limit or iterations >= max_iterations:
+                break
             func = get_function(caller_addr, raise_error=False)
             if not func:
                 continue

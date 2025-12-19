@@ -45,21 +45,12 @@ def _get_tool_timeout_seconds() -> float:
         return _DEFAULT_TOOL_TIMEOUT_SEC
 
 
-class IDASafety(IntEnum):
-    SAFE_NONE = ida_kernwin.MFF_FAST
-    SAFE_READ = ida_kernwin.MFF_READ
-    SAFE_WRITE = ida_kernwin.MFF_WRITE
-
 
 call_stack = queue.LifoQueue()
 
 
-def _sync_wrapper(ff, safety_mode: IDASafety):
+def _sync_wrapper(ff):
     """Call a function ff with a specific IDA safety_mode."""
-    if safety_mode not in [IDASafety.SAFE_READ, IDASafety.SAFE_WRITE]:
-        error_str = f"Invalid safety mode {safety_mode} over function {ff.__name__}"
-        logger.error(error_str)
-        raise IDASyncError(error_str)
 
     res_container = queue.Queue()
 
@@ -77,7 +68,7 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
         finally:
             call_stack.get()
 
-    idaapi.execute_sync(runned, safety_mode)
+    idaapi.execute_sync(runned, idaapi.MFF_WRITE)
     res = res_container.get()
     if isinstance(res, Exception):
         raise res
@@ -92,7 +83,7 @@ def _normalize_timeout(value: object) -> float | None:
         return None
 
 
-def sync_wrapper(ff, safety_mode: IDASafety, timeout_override: float | None = None):
+def sync_wrapper(ff, timeout_override: float | None = None):
     """Wrapper to enable batch mode during IDA synchronization."""
     old_batch = idc.batch(1)
     try:
@@ -116,8 +107,8 @@ def sync_wrapper(ff, safety_mode: IDASafety, timeout_override: float | None = No
                     sys.settrace(old_trace)
 
             timed_ff.__name__ = ff.__name__
-            return _sync_wrapper(timed_ff, safety_mode)
-        return _sync_wrapper(ff, safety_mode)
+            return _sync_wrapper(timed_ff)
+        return _sync_wrapper(ff)
     finally:
         idc.batch(old_batch)
 
@@ -131,7 +122,7 @@ def idawrite(f):
         timeout_override = _normalize_timeout(
             getattr(f, "__ida_mcp_timeout_sec__", None)
         )
-        return sync_wrapper(ff, idaapi.MFF_WRITE, timeout_override)
+        return sync_wrapper(ff, timeout_override)
 
     return wrapper
 
@@ -146,38 +137,25 @@ def idaread(f):
         timeout_override = _normalize_timeout(
             getattr(f, "__ida_mcp_timeout_sec__", None)
         )
-        return sync_wrapper(ff, idaapi.MFF_READ, timeout_override)
+        return sync_wrapper(ff, timeout_override)
 
     return wrapper
 
 
 def tool_timeout(seconds: float):
-    """Decorator to override per-tool timeout (seconds)."""
+    """Decorator to override per-tool timeout (seconds).
+
+    IMPORTANT: Must be applied BEFORE @idaread/@idawrite (i.e., listed AFTER them)
+    so the attribute exists when they capture the function in closure.
+
+    Correct order:
+        @tool
+        @idaread  # or @idawrite
+        @tool_timeout(90.0)  # innermost
+        def my_func(...):
+    """
     def decorator(func):
         setattr(func, "__ida_mcp_timeout_sec__", seconds)
         return func
     return decorator
 
-
-def is_window_active():
-    """Returns whether IDA is currently active"""
-    # Source: https://github.com/OALabs/hexcopy-ida/blob/8b0b2a3021d7dc9010c01821b65a80c47d491b61/hexcopy.py#L30
-    using_pyside6 = (ida_major > 9) or (ida_major == 9 and ida_minor >= 2)
-
-    try:
-        if using_pyside6:
-            import PySide6.QtWidgets as QApplication
-        else:
-            import PyQt5.QtWidgets as QApplication
-
-        app = QApplication.instance()
-        if app is None:
-            return False
-
-        for widget in app.topLevelWidgets():
-            if widget.isActiveWindow():
-                return True
-    except Exception:
-        # Headless mode or other error (this is not a critical feature)
-        pass
-    return False

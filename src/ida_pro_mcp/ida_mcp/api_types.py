@@ -355,7 +355,7 @@ def set_type(edits: list[TypeEdit] | TypeEdit) -> list[dict]:
 
 
 @tool
-@idaread
+@idawrite
 def infer_types(
     addrs: Annotated[list[str] | str, "Addresses to infer types for"],
 ) -> list[dict]:

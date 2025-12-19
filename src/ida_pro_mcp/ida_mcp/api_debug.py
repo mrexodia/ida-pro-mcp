@@ -19,7 +19,7 @@ import ida_name
 import idaapi
 
 from .rpc import tool, unsafe, ext
-from .sync import idaread, IDAError
+from .sync import idaread, idawrite, IDAError
 from .utils import (
     RegisterValue,
     ThreadRegisters,
@@ -160,7 +160,7 @@ def list_breakpoints():
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idawrite
 def dbg_start():
     """Start debugger"""
     if len(list_breakpoints()) == 0:
@@ -265,7 +265,7 @@ def dbg_bps():
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idawrite
 def dbg_add_bp(
     addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"],
 ) -> list[dict]:
@@ -295,7 +295,7 @@ def dbg_add_bp(
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idawrite
 def dbg_delete_bp(
     addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"],
 ) -> list[dict]:
@@ -319,7 +319,7 @@ def dbg_delete_bp(
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idawrite
 def dbg_toggle_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
     """Enable/disable breakpoints"""
 
@@ -588,7 +588,7 @@ def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idawrite
 def dbg_write(regions: list[MemoryPatch] | MemoryPatch) -> list[dict]:
     """Write debug memory"""
 

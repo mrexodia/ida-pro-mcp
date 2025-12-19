@@ -176,12 +176,11 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 - `list_funcs(queries)`: List functions (paginated, filtered).
 - `list_globals(queries)`: List global variables (paginated, filtered).
 - `imports(offset, count)`: List all imported symbols with module names (paginated).
-- `decompile(addrs)`: Decompile function(s) at given address(es).
-- `disasm(addrs)`: Disassemble function(s) with full details (arguments, stack frame, etc).
+- `decompile(addr)`: Decompile function at the given address.
+- `disasm(addr)`: Disassemble function with full details (arguments, stack frame, etc).
 - `xrefs_to(addrs)`: Get all cross-references to address(es).
 - `xrefs_to_field(queries)`: Get cross-references to specific struct field(s).
 - `callees(addrs)`: Get functions called by function(s) at address(es).
-- `callers(addrs)`: Get functions that call the function(s) at address(es).
 
 ## Modification Operations
 
@@ -253,13 +252,11 @@ http://127.0.0.1:13337/mcp?ext=dbg
 - `find_regex(queries)`: Search strings with case-insensitive regex (paginated).
 - `find_bytes(patterns, limit=1000, offset=0)`: Find byte pattern(s) in binary (e.g., "48 8B ?? ??"). Max limit: 10000.
 - `find_insns(sequences, limit=1000, offset=0)`: Find instruction sequence(s) in code. Max limit: 10000.
-- `find_operands(patterns, limit=1000, offset=0)`: Find instructions with specific operand values. Max limit: 10000.
 - `find(type, targets, limit=1000, offset=0)`: Advanced search (immediate values, strings, data/code references). Max limit: 10000.
 
 ## Control Flow Analysis
 
 - `basic_blocks(addrs)`: Get basic blocks with successors and predecessors.
-- `find_paths(queries)`: Find execution paths between source and target addresses.
 
 ## Type Operations
 
@@ -279,10 +276,6 @@ http://127.0.0.1:13337/mcp?ext=dbg
 - `rename(batch)`: Unified batch rename operation for functions, globals, locals, and stack variables (accepts dict with optional `func`, `data`, `local`, `stack` keys).
 - `patch(patches)`: Patch multiple byte sequences at once.
 - `put_int(items)`: Write integer values using ty (i8/u64/i16le/i16be/etc).
-
-## String Analysis
-
-- `analyze_strings(filters, limit=1000, offset=0)`: Analyze strings with pattern matching, length filtering, and xref information. Max limit: 10000. Returns `cursor: {next: N}` or `{done: true}`.
 
 **Key Features:**
 

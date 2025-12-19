@@ -19,7 +19,7 @@ import ida_typeinf
 import ida_xref
 
 from .rpc import tool, unsafe
-from .sync import idaread
+from .sync import idawrite
 from .utils import parse_address, get_function
 
 # ============================================================================
@@ -28,7 +28,7 @@ from .utils import parse_address, get_function
 
 
 @tool
-@idaread
+@idawrite
 @unsafe
 def py_eval(
     code: Annotated[str, "Python code"],

@@ -1,5 +1,6 @@
 """Core API Functions - IDB metadata and basic queries"""
 
+import re
 from typing import Annotated, Optional
 
 import ida_hexrays
@@ -31,7 +32,6 @@ from .utils import (
     pattern_filter,
 )
 from .sync import IDAError
-from .fast_str import get_core_strings, search_indices
 
 
 # ============================================================================
@@ -267,78 +267,36 @@ def imports(
 @tool
 @idaread
 def find_regex(
-    patterns: Annotated[list[str] | str, "Regex patterns to search for in strings"],
-    limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
+    pattern: Annotated[str, "Regex pattern to search for in strings"],
+    limit: Annotated[int, "Max matches (default: 30, max: 500)"] = 30,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
-) -> list[dict]:
+) -> dict:
     """Search strings with case-insensitive regex patterns"""
-    patterns = normalize_list_input(patterns)
+    if limit <= 0:
+        limit = 30
+    if limit > 500:
+        limit = 500
 
-    if limit <= 0 or limit > 10000:
-        limit = 10000
+    matches = []
+    regex = re.compile(pattern, re.IGNORECASE)
+    skipped = 0
+    more = False
+    for s in idautils.Strings():
+        if s is None:
+            continue
+        text = str(s)
+        if regex.search(text):
+            if skipped < offset:
+                skipped += 1
+                continue
+            if len(matches) >= limit:
+                more = True
+                break
+            matches.append({"addr": hex(s.ea), "string": text})
 
-    all_strings = get_core_strings()
-    results = []
+    return {
+        "n": len(matches),
+        "matches": matches,
+        "cursor": {"next": offset + limit} if more else {"done": True},
+    }
 
-    for pattern in patterns:
-        if not pattern or pattern == "*":
-            # No filter: simple pagination
-            end = offset + limit
-            data = all_strings[offset:end]
-            more = end < len(all_strings)
-        else:
-            # Use fast string index search
-            indices, more = search_indices(pattern, limit, offset)
-            data = [all_strings[i] for i in indices]
-
-        results.append({
-            "pattern": pattern,
-            "matches": data,
-            "count": len(data),
-            "cursor": {"next": offset + limit} if more else {"done": True},
-        })
-
-    return results
-
-
-def _build_pattern_matcher(pattern: str):
-    """Build a matcher function for pattern filtering with early exit support"""
-    import fnmatch
-    import re
-
-    if not pattern:
-        return lambda s: True
-
-    regex = None
-    use_glob = False
-
-    # Regex pattern: /pattern/flags
-    if pattern.startswith("/") and pattern.count("/") >= 2:
-        last_slash = pattern.rfind("/")
-        body = pattern[1:last_slash]
-        flag_str = pattern[last_slash + 1:]
-
-        flags = 0
-        for ch in flag_str:
-            if ch == "i":
-                flags |= re.IGNORECASE
-            elif ch == "m":
-                flags |= re.MULTILINE
-            elif ch == "s":
-                flags |= re.DOTALL
-
-        try:
-            regex = re.compile(body, flags or re.IGNORECASE)
-        except re.error:
-            regex = None
-    # Glob pattern: contains * or ?
-    elif "*" in pattern or "?" in pattern:
-        use_glob = True
-
-    if regex is not None:
-        return lambda s: bool(regex.search(s))
-    if use_glob:
-        pattern_lower = pattern.lower()
-        return lambda s: fnmatch.fnmatch(s.lower(), pattern_lower)
-    pattern_lower = pattern.lower()
-    return lambda s: pattern_lower in s.lower()

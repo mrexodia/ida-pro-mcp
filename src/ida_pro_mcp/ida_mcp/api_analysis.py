@@ -17,8 +17,7 @@ import ida_xref
 import ida_ua
 import ida_name
 from .rpc import tool
-from .fast_str import get_entries, search_indices
-from .sync import idaread, is_window_active, tool_timeout
+from .sync import idaread, idawrite, tool_timeout
 from .utils import (
     parse_address,
     normalize_list_input,
@@ -42,9 +41,7 @@ from .utils import (
     Xref,
     FunctionAnalysis,
     BasicBlock,
-    PathQuery,
     StructFieldQuery,
-    StringFilter,
     InsnPattern,
 )
 
@@ -164,57 +161,49 @@ def _resolve_immediate_insn_start(
 # ============================================================================
 
 
-@tool_timeout(90.0)
 @tool
-@idaread
+@idawrite
+@tool_timeout(90.0)
 def decompile(
-    addrs: Annotated[list[str] | str, "Function addresses to decompile"],
-) -> list[dict]:
-    """Decompile functions to pseudocode"""
-    addrs = normalize_list_input(addrs)
-    results = []
+    addr: Annotated[str, "Function address to decompile"],
+) -> dict:
+    """Decompile function to pseudocode"""
+    try:
+        start = parse_address(addr)
+        cfunc = decompile_checked(start)
+        sv = cfunc.get_pseudocode()
+        code = ""
+        for i, sl in enumerate(sv):
+            sl: ida_kernwin.simpleline_t
+            item = ida_hexrays.ctree_item_t()
+            ea = None if i > 0 else cfunc.entry_ea
+            if cfunc.get_line_item(sl.line, 0, False, None, item, None):
+                dstr: str | None = item.dstr()
+                if dstr:
+                    ds = dstr.split(": ")
+                    if len(ds) == 2:
+                        try:
+                            ea = int(ds[0], 16)
+                        except ValueError:
+                            pass
+            line = ida_lines.tag_remove(sl.line)
+            if len(code) > 0:
+                code += "\n"
+            if not ea:
+                code += f"/* line: {i} */ {line}"
+            else:
+                code += f"/* line: {i}, address: {hex(ea)} */ {line}"
 
-    for addr in addrs:
-        try:
-            start = parse_address(addr)
-            cfunc = decompile_checked(start)
-            if is_window_active():
-                ida_hexrays.open_pseudocode(start, ida_hexrays.OPF_REUSE)
-            sv = cfunc.get_pseudocode()
-            code = ""
-            for i, sl in enumerate(sv):
-                sl: ida_kernwin.simpleline_t
-                item = ida_hexrays.ctree_item_t()
-                ea = None if i > 0 else cfunc.entry_ea
-                if cfunc.get_line_item(sl.line, 0, False, None, item, None):
-                    dstr: str | None = item.dstr()
-                    if dstr:
-                        ds = dstr.split(": ")
-                        if len(ds) == 2:
-                            try:
-                                ea = int(ds[0], 16)
-                            except ValueError:
-                                pass
-                line = ida_lines.tag_remove(sl.line)
-                if len(code) > 0:
-                    code += "\n"
-                if not ea:
-                    code += f"/* line: {i} */ {line}"
-                else:
-                    code += f"/* line: {i}, address: {hex(ea)} */ {line}"
-
-            results.append({"addr": addr, "code": code})
-        except Exception as e:
-            results.append({"addr": addr, "code": None, "error": str(e)})
-
-    return results
+        return {"addr": addr, "code": code}
+    except Exception as e:
+        return {"addr": addr, "code": None, "error": str(e)}
 
 
-@tool_timeout(90.0)
 @tool
 @idaread
+@tool_timeout(90.0)
 def disasm(
-    addrs: Annotated[list[str] | str, "Function addresses to disassemble"],
+    addr: Annotated[str, "Function address to disassemble"],
     max_instructions: Annotated[
         int, "Max instructions per function (default: 5000, max: 50000)"
     ] = 5000,
@@ -222,9 +211,8 @@ def disasm(
     include_total: Annotated[
         bool, "Compute total instruction count (default: false)"
     ] = False,
-) -> list[dict]:
-    """Disassemble functions to assembly instructions"""
-    addrs = normalize_list_input(addrs)
+) -> dict:
+    """Disassemble function to assembly instructions"""
 
     # Enforce max limit
     if max_instructions <= 0 or max_instructions > 50000:
@@ -232,142 +220,128 @@ def disasm(
     if offset < 0:
         offset = 0
 
-    results = []
 
-    for start_addr in addrs:
-        try:
-            start = parse_address(start_addr)
-            func = idaapi.get_func(start)
+    try:
+        start = parse_address(addr)
+        func = idaapi.get_func(start)
 
-            if is_window_active():
-                ida_kernwin.jumpto(start)
-
-            # Get segment info
-            seg = idaapi.getseg(start)
-            if not seg:
-                results.append(
-                    {
-                        "addr": start_addr,
-                        "asm": None,
-                        "error": "No segment found",
-                        "cursor": {"done": True},
-                    }
-                )
-                continue
-
-            segment_name = idaapi.get_segm_name(seg) if seg else "UNKNOWN"
-
-            if func:
-                # Function exists: disassemble function items starting from requested address
-                func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
-                header_addr = start  # Use requested address, not function start
-            else:
-                # No function: disassemble sequentially from start address
-                func_name = f"<no function>"
-                header_addr = start
-
-            lines = []
-            seen = 0
-            total_count = 0
-            more = False
-
-            def _maybe_add(ea: int) -> bool:
-                nonlocal seen, total_count, more
-                if include_total:
-                    total_count += 1
-                if seen < offset:
-                    seen += 1
-                    return True
-                if len(lines) < max_instructions:
-                    line = ida_lines.generate_disasm_line(ea, 0)
-                    instruction = ida_lines.tag_remove(line) if line else ""
-                    lines.append(f"{ea:x}  {instruction}")
-                    seen += 1
-                    return True
-                more = True
-                seen += 1
-                return include_total
-
-            if func:
-                for ea in idautils.FuncItems(func.start_ea):
-                    if ea == idaapi.BADADDR:
-                        continue
-                    if ea < start:
-                        continue
-                    if not _maybe_add(ea):
-                        break
-            else:
-                ea = start
-                while ea < seg.end_ea:
-                    if ea == idaapi.BADADDR:
-                        break
-                    if _decode_insn_at(ea) is None:
-                        break
-                    if not _maybe_add(ea):
-                        break
-                    ea = _next_head(ea, seg.end_ea)
-                    if ea == idaapi.BADADDR:
-                        break
-
-            if include_total and not more:
-                more = total_count > offset + max_instructions
-
-            lines_str = f"{func_name} ({segment_name} @ {hex(header_addr)}):"
-            if lines:
-                lines_str += "\n" + "\n".join(lines)
-
-            rettype = None
-            args: Optional[list[Argument]] = None
-            stack_frame = None
-
-            if func:
-                tif = ida_typeinf.tinfo_t()
-                if ida_nalt.get_tinfo(tif, func.start_ea) and tif.is_func():
-                    ftd = ida_typeinf.func_type_data_t()
-                    if tif.get_func_details(ftd):
-                        rettype = str(ftd.rettype)
-                        args = [
-                            Argument(name=(a.name or f"arg{i}"), type=str(a.type))
-                            for i, a in enumerate(ftd)
-                        ]
-                stack_frame = get_stack_frame_variables_internal(func.start_ea, False)
-
-            out: DisassemblyFunction = {
-                "name": func_name,
-                "start_ea": hex(header_addr),
-                "lines": lines_str,
+        # Get segment info
+        seg = idaapi.getseg(start)
+        if not seg:
+            return {
+                "addr": addr,
+                "asm": None,
+                "error": "No segment found",
+                "cursor": {"done": True},
             }
-            if stack_frame:
-                out["stack_frame"] = stack_frame
-            if rettype:
-                out["return_type"] = rettype
-            if args is not None:
-                out["arguments"] = args
 
-            results.append(
-                {
-                    "addr": start_addr,
-                    "asm": out,
-                    "instruction_count": len(lines),
-                    "total_instructions": total_count if include_total else None,
-                    "cursor": (
-                        {"next": offset + max_instructions}
-                        if more
-                        else {"done": True}
-                    ),
-                }
-            )
-        except Exception as e:
-            results.append(
-                {
-                    "addr": start_addr,
-                    "asm": None,
-                    "error": str(e),
-                    "cursor": {"done": True},
-                }
-            )
+        segment_name = idaapi.get_segm_name(seg) if seg else "UNKNOWN"
 
-    return results
+        if func:
+            # Function exists: disassemble function items starting from requested address
+            func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
+            header_addr = start  # Use requested address, not function start
+        else:
+            # No function: disassemble sequentially from start address
+            func_name = "<no function>"
+            header_addr = start
+
+        lines = []
+        seen = 0
+        total_count = 0
+        more = False
+
+        def _maybe_add(ea: int) -> bool:
+            nonlocal seen, total_count, more
+            if include_total:
+                total_count += 1
+            if seen < offset:
+                seen += 1
+                return True
+            if len(lines) < max_instructions:
+                line = ida_lines.generate_disasm_line(ea, 0)
+                instruction = ida_lines.tag_remove(line) if line else ""
+                lines.append(f"{ea:x}  {instruction}")
+                seen += 1
+                return True
+            more = True
+            seen += 1
+            return include_total
+
+        if func:
+            for ea in idautils.FuncItems(func.start_ea):
+                if ea == idaapi.BADADDR:
+                    continue
+                if ea < start:
+                    continue
+                if not _maybe_add(ea):
+                    break
+        else:
+            ea = start
+            while ea < seg.end_ea:
+                if ea == idaapi.BADADDR:
+                    break
+                if _decode_insn_at(ea) is None:
+                    break
+                if not _maybe_add(ea):
+                    break
+                ea = _next_head(ea, seg.end_ea)
+                if ea == idaapi.BADADDR:
+                    break
+
+        if include_total and not more:
+            more = total_count > offset + max_instructions
+
+        lines_str = f"{func_name} ({segment_name} @ {hex(header_addr)}):"
+        if lines:
+            lines_str += "\n" + "\n".join(lines)
+
+        rettype = None
+        args: Optional[list[Argument]] = None
+        stack_frame = None
+
+        if func:
+            tif = ida_typeinf.tinfo_t()
+            if ida_nalt.get_tinfo(tif, func.start_ea) and tif.is_func():
+                ftd = ida_typeinf.func_type_data_t()
+                if tif.get_func_details(ftd):
+                    rettype = str(ftd.rettype)
+                    args = [
+                        Argument(name=(a.name or f"arg{i}"), type=str(a.type))
+                        for i, a in enumerate(ftd)
+                    ]
+            stack_frame = get_stack_frame_variables_internal(func.start_ea, False)
+
+        out: DisassemblyFunction = {
+            "name": func_name,
+            "start_ea": hex(header_addr),
+            "lines": lines_str,
+        }
+        if stack_frame:
+            out["stack_frame"] = stack_frame
+        if rettype:
+            out["return_type"] = rettype
+        if args is not None:
+            out["arguments"] = args
+
+        return {
+            "addr": addr,
+            "asm": out,
+            "instruction_count": len(lines),
+            "total_instructions": total_count if include_total else None,
+            "cursor": (
+                {"next": offset + max_instructions}
+                if more
+                else {"done": True}
+            ),
+        }
+    except Exception as e:
+        return {
+            "addr": addr,
+            "asm": None,
+            "error": str(e),
+            "cursor": {"done": True},
+        }
 
 
 # ============================================================================
@@ -578,61 +552,14 @@ def callees(
     return results
 
 
-@tool
-@idaread
-def callers(
-    addrs: Annotated[list[str] | str, "Function addresses to get callers for"],
-    limit: Annotated[int, "Max callers per function (default: 20, max: 500)"] = 20,
-) -> list[dict]:
-    """Get functions that call the specified functions"""
-    addrs = normalize_list_input(addrs)
-
-    if limit <= 0 or limit > 500:
-        limit = 500
-
-    results = []
-
-    for fn_addr in addrs:
-        try:
-            callers = {}
-            more = False
-            for caller_addr in idautils.CodeRefsTo(parse_address(fn_addr), 0):
-                if len(callers) >= limit:
-                    more = True
-                    break
-                func = get_function(caller_addr, raise_error=False)
-                if not func:
-                    continue
-                insn = _decode_insn_at(caller_addr)
-                if insn is None:
-                    continue
-                if insn.itype not in [
-                    idaapi.NN_call,
-                    idaapi.NN_callfi,
-                    idaapi.NN_callni,
-                ]:
-                    continue
-                callers[func["addr"]] = func
-
-            results.append({
-                "addr": fn_addr,
-                "callers": list(callers.values()),
-                "more": more,
-            })
-        except Exception as e:
-            results.append({"addr": fn_addr, "callers": None, "error": str(e)})
-
-    return results
-
-
 # ============================================================================
 # Comprehensive Function Analysis
 # ============================================================================
 
 
-@tool_timeout(90.0)
 @tool
-@idaread
+@idawrite
+@tool_timeout(90.0)
 def analyze_funcs(
     addrs: Annotated[list[str] | str, "Function addresses to comprehensively analyze"],
 ) -> list[FunctionAnalysis]:
@@ -757,7 +684,7 @@ def find_bytes(
                     {
                         "pattern": pattern,
                         "matches": [],
-                        "count": 0,
+                        "n": 0,
                         "cursor": {"done": True},
                     }
                 )
@@ -790,7 +717,7 @@ def find_bytes(
             {
                 "pattern": pattern,
                 "matches": matches,
-                "count": len(matches),
+                "n": len(matches),
                 "cursor": {"next": offset + limit} if more else {"done": True},
             }
         )
@@ -875,85 +802,6 @@ def basic_blocks(
                     "cursor": {"done": True},
                 }
             )
-    return results
-
-
-@tool
-@idaread
-def find_paths(queries: list[PathQuery] | PathQuery) -> list[dict]:
-    """Find execution paths between source and target addresses"""
-    if isinstance(queries, dict):
-        queries = [queries]
-    results = []
-
-    for query in queries:
-        source = parse_address(query["source"])
-        target = parse_address(query["target"])
-
-        # Get containing function
-        func = idaapi.get_func(source)
-        if not func:
-            results.append(
-                {
-                    "source": query["source"],
-                    "target": query["target"],
-                    "paths": [],
-                    "reachable": False,
-                    "error": "Source not in a function",
-                }
-            )
-            continue
-
-        # Build flow graph
-        flowchart = idaapi.FlowChart(func)
-
-        # Find source and target blocks
-        source_block = None
-        target_block = None
-        for block in flowchart:
-            if block.start_ea <= source < block.end_ea:
-                source_block = block
-            if block.start_ea <= target < block.end_ea:
-                target_block = block
-
-        if not source_block or not target_block:
-            results.append(
-                {
-                    "source": query["source"],
-                    "target": query["target"],
-                    "paths": [],
-                    "reachable": False,
-                    "error": "Could not find basic blocks",
-                }
-            )
-            continue
-
-        # Simple BFS to find paths
-        paths = []
-        queue = [([source_block], {source_block.id})]
-
-        while queue and len(paths) < 10:  # Limit paths
-            path, visited = queue.pop(0)
-            current = path[-1]
-
-            if current.id == target_block.id:
-                paths.append([hex(b.start_ea) for b in path])
-                continue
-
-            for succ in current.succs():
-                if succ.id not in visited and len(path) < 20:  # Limit depth
-                    queue.append((path + [succ], visited | {succ.id}))
-
-        results.append(
-            {
-                "source": query["source"],
-                "target": query["target"],
-                "paths": paths,
-                "reachable": len(paths) > 0,
-                "error": None,
-            }
-        )
-
     return results
 
 
@@ -1197,101 +1045,6 @@ def find(
     return results
 
 
-@tool
-@idaread
-def find_operands(
-    patterns: list[InsnPattern] | InsnPattern,
-    limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
-) -> list[dict]:
-    """Find instructions with specific mnemonics and operand values"""
-    if isinstance(patterns, dict):
-        patterns = [patterns]
-
-    # Enforce max limit
-    if limit <= 0 or limit > 10000:
-        limit = 10000
-    if offset < 0:
-        offset = 0
-
-    results = []
-    for pattern in patterns:
-        mnem = str(pattern.get("mnem", "")).lower()
-        op0_val = pattern.get("op0")
-        op1_val = pattern.get("op1")
-        op2_val = pattern.get("op2")
-        any_val = pattern.get("op_any")
-        allow_broad = bool(pattern.get("allow_broad", False))
-        max_scan_insns = pattern.get("max_scan_insns", 200000)
-        if max_scan_insns <= 0 or max_scan_insns > 2000000:
-            max_scan_insns = 2000000
-
-        has_operand = (
-            op0_val is not None
-            or op1_val is not None
-            or op2_val is not None
-            or any_val is not None
-        )
-
-        if not mnem and not has_operand:
-            results.append(
-                {
-                    "pattern": pattern,
-                    "matches": [],
-                    "count": 0,
-                    "cursor": {"done": True},
-                    "error": "Pattern must include mnemonic and/or operand value",
-                }
-            )
-            continue
-
-        ranges, error = _resolve_insn_scan_ranges(pattern, allow_broad)
-        if error is not None:
-            results.append(
-                {
-                    "pattern": pattern,
-                    "matches": [],
-                    "count": 0,
-                    "cursor": {"done": True},
-                    "error": error,
-                }
-            )
-            continue
-
-        matches, more, scanned, truncated, next_start = _scan_insn_ranges(
-            ranges,
-            mnem,
-            op0_val,
-            op1_val,
-            op2_val,
-            any_val,
-            limit,
-            offset,
-            max_scan_insns,
-        )
-
-        cursor = {"done": True}
-        if more:
-            cursor = {"next": offset + limit}
-        if truncated:
-            cursor["scan_truncated"] = True
-            cursor["next_start"] = hex(next_start) if next_start is not None else None
-            if "done" in cursor:
-                del cursor["done"]
-
-        results.append(
-            {
-                "pattern": pattern,
-                "matches": matches,
-                "count": len(matches),
-                "scanned_instructions": scanned,
-                "scan_limit": max_scan_insns,
-                "cursor": cursor,
-            }
-        )
-    return results
-
-
 def _resolve_insn_scan_ranges(pattern: dict, allow_broad: bool) -> tuple[list[tuple[int, int]], str | None]:
     func_addr = pattern.get("func")
     segment_name = pattern.get("segment")
@@ -1448,7 +1201,7 @@ def _scan_insn_ranges(
 
 
 @tool
-@idaread
+@idawrite
 def export_funcs(
     addrs: Annotated[list[str] | str, "Function addresses to export"],
     format: Annotated[
@@ -1633,84 +1386,5 @@ def callgraph(
 
         except Exception as e:
             results.append({"root": root, "error": str(e), "nodes": [], "edges": []})
-
-    return results
-
-
-# ============================================================================
-# String Analysis
-# ============================================================================
-
-
-@tool
-@idaread
-def analyze_strings(
-    filters: list[StringFilter] | StringFilter,
-    limit: Annotated[int, "Max matches per filter (default: 1000, max: 10000)"] = 1000,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
-    include_xrefs: Annotated[
-        bool, "Include xrefs per string (default: false)"
-    ] = False,
-) -> list[dict]:
-    """Analyze and filter strings in the binary"""
-    if isinstance(filters, dict):
-        filters = [filters]
-
-    # Enforce max limit
-    if limit <= 0 or limit > 10000:
-        limit = 10000
-
-    # Use cached strings
-    all_strings = get_entries()
-
-    results = []
-
-    for filt in filters:
-        pattern = filt.get("pattern", "")
-        min_length = filt.get("min_length", 0)
-
-        matches = []
-        more = False
-
-        # Fast path: use search_indices for pattern matching
-        if pattern:
-            indices, more = search_indices(pattern, limit, offset)
-            for idx in indices:
-                s = all_strings[idx]
-                if min_length and len(s["string"]) < min_length:
-                    continue
-                if include_xrefs:
-                    s_ea = parse_address(s["addr"])
-                    xrefs = [hex(x.frm) for x in idautils.XrefsTo(s_ea, 0)]
-                    matches.append({**s, "xrefs": xrefs, "xref_count": len(xrefs)})
-                else:
-                    matches.append({**s, "xrefs": None, "xref_count": None})
-        else:
-            # No pattern: iterate with min_length filter only
-            skipped = 0
-            for s in all_strings:
-                if min_length and len(s["string"]) < min_length:
-                    continue
-                if skipped < offset:
-                    skipped += 1
-                    continue
-                if include_xrefs:
-                    s_ea = parse_address(s["addr"])
-                    xrefs = [hex(x.frm) for x in idautils.XrefsTo(s_ea, 0)]
-                    matches.append({**s, "xrefs": xrefs, "xref_count": len(xrefs)})
-                else:
-                    matches.append({**s, "xrefs": None, "xref_count": None})
-                if len(matches) >= limit:
-                    more = True
-                    break
-
-        results.append(
-            {
-                "filter": filt,
-                "matches": matches,
-                "count": len(matches),
-                "cursor": {"next": offset + limit} if more else {"done": True},
-            }
-        )
 
     return results
