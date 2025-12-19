@@ -1,3 +1,4 @@
+from itertools import islice
 from typing import Annotated, Optional
 import ida_hexrays
 import ida_kernwin
@@ -15,7 +16,7 @@ import ida_search
 import ida_idaapi
 import ida_xref
 from .rpc import tool
-from .sync import idaread, is_window_active
+from .sync import idaread, is_window_active, tool_timeout
 from .utils import (
     parse_address,
     normalize_list_input,
@@ -45,46 +46,11 @@ from .utils import (
 )
 
 # ============================================================================
-# String Cache
-# ============================================================================
-
-# Cache for idautils.Strings() to avoid rebuilding on every call
-_strings_cache: Optional[list[dict]] = None
-_strings_cache_md5: Optional[str] = None
-
-
-def _get_cached_strings_dict() -> list[dict]:
-    """Get cached strings as dicts, rebuilding if IDB changed"""
-    global _strings_cache, _strings_cache_md5
-
-    # Get current IDB modification hash
-    current_md5 = ida_nalt.retrieve_input_file_md5()
-
-    # Rebuild cache if needed
-    if _strings_cache is None or _strings_cache_md5 != current_md5:
-        _strings_cache = []
-        for s in idautils.Strings():
-            try:
-                _strings_cache.append(
-                    {
-                        "addr": hex(s.ea),
-                        "length": s.length,
-                        "string": str(s),
-                        "type": s.strtype,
-                    }
-                )
-            except Exception:
-                pass
-        _strings_cache_md5 = current_md5
-
-    return _strings_cache
-
-
-# ============================================================================
 # Code Analysis & Decompilation
 # ============================================================================
 
 
+@tool_timeout(90.0)
 @tool
 @idaread
 def decompile(
@@ -130,6 +96,7 @@ def decompile(
     return results
 
 
+@tool_timeout(90.0)
 @tool
 @idaread
 def disasm(
@@ -214,7 +181,7 @@ def disasm(
             # Apply pagination
             total_insns = len(all_instructions)
             paginated_insns = all_instructions[offset : offset + max_instructions]
-            has_more = offset + max_instructions < total_insns
+            more = offset + max_instructions < total_insns
 
             # Build disassembly string from paginated instructions
             lines_str = f"{func_name} ({segment_name} @ {hex(header_addr)}):"
@@ -257,7 +224,7 @@ def disasm(
                     "total_instructions": total_insns,
                     "cursor": (
                         {"next": offset + max_instructions}
-                        if has_more
+                        if more
                         else {"done": True}
                     ),
                 }
@@ -284,24 +251,32 @@ def disasm(
 @idaread
 def xrefs_to(
     addrs: Annotated[list[str] | str, "Addresses to find cross-references to"],
+    limit: Annotated[int, "Max xrefs per address (default: 100, max: 1000)"] = 100,
 ) -> list[dict]:
-    """Get all cross-references to specified addresses"""
+    """Get cross-references to specified addresses"""
     addrs = normalize_list_input(addrs)
+
+    if limit <= 0 or limit > 1000:
+        limit = 1000
+
     results = []
 
     for addr in addrs:
         try:
             xrefs = []
-            xref: ida_xref.xrefblk_t
+            more = False
             for xref in idautils.XrefsTo(parse_address(addr)):
-                xrefs += [
+                if len(xrefs) >= limit:
+                    more = True
+                    break
+                xrefs.append(
                     Xref(
                         addr=hex(xref.frm),
                         type="code" if xref.iscode else "data",
                         fn=get_function(xref.frm, raise_error=False),
                     )
-                ]
-            results.append({"addr": addr, "xrefs": xrefs})
+                )
+            results.append({"addr": addr, "xrefs": xrefs, "more": more})
         except Exception as e:
             results.append({"addr": addr, "xrefs": None, "error": str(e)})
 
@@ -404,9 +379,14 @@ def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[d
 @idaread
 def callees(
     addrs: Annotated[list[str] | str, "Function addresses to get callees for"],
+    limit: Annotated[int, "Max callees per function (default: 200, max: 500)"] = 200,
 ) -> list[dict]:
-    """Get all functions called by the specified functions"""
+    """Get functions called by the specified functions"""
     addrs = normalize_list_input(addrs)
+
+    if limit <= 0 or limit > 500:
+        limit = 500
+
     results = []
 
     for fn_addr in addrs:
@@ -419,34 +399,39 @@ def callees(
                 )
                 continue
             func_end = idc.find_func_end(func_start)
-            callees: list[dict[str, str]] = []
+            callees_dict = {}
+            more = False
             current_ea = func_start
             while current_ea < func_end:
+                if len(callees_dict) >= limit:
+                    more = True
+                    break
                 insn = idaapi.insn_t()
                 idaapi.decode_insn(insn, current_ea)
                 if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
                     target = idc.get_operand_value(current_ea, 0)
                     target_type = idc.get_operand_type(current_ea, 0)
                     if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
-                        func_type = (
-                            "internal"
-                            if idaapi.get_func(target) is not None
-                            else "external"
-                        )
-                        func_name = idc.get_name(target)
-                        if func_name is not None:
-                            callees.append(
-                                {
+                        if target not in callees_dict:
+                            func_type = (
+                                "internal"
+                                if idaapi.get_func(target) is not None
+                                else "external"
+                            )
+                            func_name = idc.get_name(target)
+                            if func_name is not None:
+                                callees_dict[target] = {
                                     "addr": hex(target),
                                     "name": func_name,
                                     "type": func_type,
                                 }
-                            )
                 current_ea = idc.next_head(current_ea, func_end)
 
-            unique_callee_tuples = {tuple(callee.items()) for callee in callees}
-            unique_callees = [dict(callee) for callee in unique_callee_tuples]
-            results.append({"addr": fn_addr, "callees": unique_callees})
+            results.append({
+                "addr": fn_addr,
+                "callees": list(callees_dict.values()),
+                "more": more,
+            })
         except Exception as e:
             results.append({"addr": fn_addr, "callees": None, "error": str(e)})
 
@@ -457,15 +442,24 @@ def callees(
 @idaread
 def callers(
     addrs: Annotated[list[str] | str, "Function addresses to get callers for"],
+    limit: Annotated[int, "Max callers per function (default: 20, max: 500)"] = 20,
 ) -> list[dict]:
-    """Get all functions that call the specified functions"""
+    """Get functions that call the specified functions"""
     addrs = normalize_list_input(addrs)
+
+    if limit <= 0 or limit > 500:
+        limit = 500
+
     results = []
 
     for fn_addr in addrs:
         try:
             callers = {}
+            more = False
             for caller_addr in idautils.CodeRefsTo(parse_address(fn_addr), 0):
+                if len(callers) >= limit:
+                    more = True
+                    break
                 func = get_function(caller_addr, raise_error=False)
                 if not func:
                     continue
@@ -479,7 +473,11 @@ def callers(
                     continue
                 callers[func["addr"]] = func
 
-            results.append({"addr": fn_addr, "callers": list(callers.values())})
+            results.append({
+                "addr": fn_addr,
+                "callers": list(callers.values()),
+                "more": more,
+            })
         except Exception as e:
             results.append({"addr": fn_addr, "callers": None, "error": str(e)})
 
@@ -505,6 +503,7 @@ def entrypoints() -> list[Function]:
 # ============================================================================
 
 
+@tool_timeout(90.0)
 @tool
 @idaread
 def analyze_funcs(
@@ -614,7 +613,9 @@ def find_bytes(
 
     results = []
     for pattern in patterns:
-        all_matches = []
+        matches = []
+        skipped = 0
+        more = False
         try:
             # Parse the pattern
             compiled = ida_bytes.compiled_binpat_vec_t()
@@ -632,124 +633,37 @@ def find_bytes(
                 )
                 continue
 
-            # Search for all matches
+            # Search with early exit
             ea = ida_ida.inf_get_min_ea()
+            max_ea = ida_ida.inf_get_max_ea()
             while ea != idaapi.BADADDR:
                 ea = ida_bytes.bin_search(
-                    ea, ida_ida.inf_get_max_ea(), compiled, ida_bytes.BIN_SEARCH_FORWARD
+                    ea, max_ea, compiled, ida_bytes.BIN_SEARCH_FORWARD
                 )
                 if ea != idaapi.BADADDR:
-                    all_matches.append(hex(ea))
+                    if skipped < offset:
+                        skipped += 1
+                    else:
+                        matches.append(hex(ea))
+                        if len(matches) >= limit:
+                            # Check if there's more
+                            next_ea = ida_bytes.bin_search(
+                                ea + 1, max_ea, compiled, ida_bytes.BIN_SEARCH_FORWARD
+                            )
+                            more = next_ea != idaapi.BADADDR
+                            break
                     ea += 1
         except Exception:
             pass
-
-        # Apply pagination
-        if limit > 0:
-            matches = all_matches[offset : offset + limit]
-            has_more = offset + limit < len(all_matches)
-        else:
-            matches = all_matches[offset:]
-            has_more = False
 
         results.append(
             {
                 "pattern": pattern,
                 "matches": matches,
                 "count": len(matches),
-                "cursor": {"next": offset + limit} if has_more else {"done": True},
+                "cursor": {"next": offset + limit} if more else {"done": True},
             }
         )
-    return results
-
-
-@tool
-@idaread
-def find_insns(
-    sequences: Annotated[
-        list[list[str]] | list[str], "Instruction mnemonic sequences to search for"
-    ],
-    limit: Annotated[
-        int, "Max matches per sequence (default: 1000, max: 10000)"
-    ] = 1000,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
-) -> list[dict]:
-    """Search for sequences of instruction mnemonics in the binary"""
-    # Handle single sequence vs array of sequences
-    if sequences and isinstance(sequences[0], str):
-        sequences = [sequences]
-
-    # Enforce max limit
-    if limit <= 0 or limit > 10000:
-        limit = 10000
-
-    results = []
-
-    for sequence in sequences:
-        if not sequence:
-            results.append(
-                {
-                    "sequence": sequence,
-                    "matches": [],
-                    "count": 0,
-                    "cursor": {"done": True},
-                }
-            )
-            continue
-
-        all_matches = []
-        # Scan all code segments
-        for seg_ea in idautils.Segments():
-            seg = idaapi.getseg(seg_ea)
-            if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
-                continue
-
-            ea = seg.start_ea
-            while ea < seg.end_ea:
-                # Try to match sequence starting at ea
-                match_ea = ea
-                matched = True
-
-                for expected_mnem in sequence:
-                    insn = idaapi.insn_t()
-                    if idaapi.decode_insn(insn, match_ea) == 0:
-                        matched = False
-                        break
-
-                    actual_mnem = idc.print_insn_mnem(match_ea)
-                    if actual_mnem != expected_mnem:
-                        matched = False
-                        break
-
-                    match_ea = idc.next_head(match_ea, seg.end_ea)
-                    if match_ea == idaapi.BADADDR:
-                        matched = False
-                        break
-
-                if matched:
-                    all_matches.append(hex(ea))
-
-                ea = idc.next_head(ea, seg.end_ea)
-                if ea == idaapi.BADADDR:
-                    break
-
-        # Apply pagination
-        if limit > 0:
-            matches = all_matches[offset : offset + limit]
-            has_more = offset + limit < len(all_matches)
-        else:
-            matches = all_matches[offset:]
-            has_more = False
-
-        results.append(
-            {
-                "sequence": sequence,
-                "matches": matches,
-                "count": len(matches),
-                "cursor": {"next": offset + limit} if has_more else {"done": True},
-            }
-        )
-
     return results
 
 
@@ -808,7 +722,7 @@ def basic_blocks(
             # Apply pagination
             total_blocks = len(all_blocks)
             blocks = all_blocks[offset : offset + max_blocks]
-            has_more = offset + max_blocks < total_blocks
+            more = offset + max_blocks < total_blocks
 
             results.append(
                 {
@@ -817,7 +731,7 @@ def basic_blocks(
                     "count": len(blocks),
                     "total_blocks": total_blocks,
                     "cursor": (
-                        {"next": offset + max_blocks} if has_more else {"done": True}
+                        {"next": offset + max_blocks} if more else {"done": True}
                     ),
                     "error": None,
                 }
@@ -941,26 +855,48 @@ def search(
     results = []
 
     if type == "string":
-        # Search for strings containing pattern
-        all_strings = _get_cached_strings_dict()
+        # Binary search for string bytes in the binary
         for pattern in targets:
             pattern_str = str(pattern)
-            all_matches = [
-                s["addr"]
-                for s in all_strings
-                if pattern_str.lower() in s["string"].lower()
-            ]
+            # Convert string to byte pattern (hex format for bin_search)
+            byte_pattern = " ".join(f"{b:02X}" for b in pattern_str.encode("utf-8"))
 
-            # Apply pagination
-            matches = all_matches[offset : offset + limit]
-            has_more = offset + limit < len(all_matches)
+            matches = []
+            skipped = 0
+            more = False
+            try:
+                compiled = ida_bytes.compiled_binpat_vec_t()
+                err = ida_bytes.parse_binpat_str(
+                    compiled, ida_ida.inf_get_min_ea(), byte_pattern, 16
+                )
+                if not err:
+                    ea = ida_ida.inf_get_min_ea()
+                    max_ea = ida_ida.inf_get_max_ea()
+                    while ea != idaapi.BADADDR:
+                        ea = ida_bytes.bin_search(
+                            ea, max_ea, compiled, ida_bytes.BIN_SEARCH_FORWARD
+                        )
+                        if ea != idaapi.BADADDR:
+                            if skipped < offset:
+                                skipped += 1
+                            else:
+                                matches.append(hex(ea))
+                                if len(matches) >= limit:
+                                    next_ea = ida_bytes.bin_search(
+                                        ea + 1, max_ea, compiled, ida_bytes.BIN_SEARCH_FORWARD
+                                    )
+                                    more = next_ea != idaapi.BADADDR
+                                    break
+                            ea += 1
+            except Exception:
+                pass
 
             results.append(
                 {
                     "query": pattern_str,
                     "matches": matches,
                     "count": len(matches),
-                    "cursor": {"next": offset + limit} if has_more else {"done": True},
+                    "cursor": {"next": offset + limit} if more else {"done": True},
                     "error": None,
                 }
             )
@@ -974,28 +910,37 @@ def search(
                 except ValueError:
                     value = 0
 
-            all_matches = []
+            matches = []
+            skipped = 0
+            more = False
             try:
                 ea = ida_ida.inf_get_min_ea()
-                while ea < ida_ida.inf_get_max_ea():
+                max_ea = ida_ida.inf_get_max_ea()
+                while ea < max_ea:
                     result = ida_search.find_imm(ea, ida_search.SEARCH_DOWN, value)
                     if result[0] == idaapi.BADADDR:
                         break
-                    all_matches.append(hex(result[0]))
+                    if skipped < offset:
+                        skipped += 1
+                    else:
+                        matches.append(hex(result[0]))
+                        if len(matches) >= limit:
+                            # Check if there's at least one more match
+                            next_result = ida_search.find_imm(
+                                result[0] + 1, ida_search.SEARCH_DOWN, value
+                            )
+                            more = next_result[0] != idaapi.BADADDR
+                            break
                     ea = result[0] + 1
             except Exception:
                 pass
-
-            # Apply pagination
-            matches = all_matches[offset : offset + limit]
-            has_more = offset + limit < len(all_matches)
 
             results.append(
                 {
                     "query": value,
                     "matches": matches,
                     "count": len(matches),
-                    "cursor": {"next": offset + limit} if has_more else {"done": True},
+                    "cursor": {"next": offset + limit} if more else {"done": True},
                     "error": None,
                 }
             )
@@ -1005,15 +950,12 @@ def search(
         for target_str in targets:
             try:
                 target = parse_address(str(target_str))
-                all_matches = [hex(xref) for xref in idautils.DataRefsTo(target)]
-
-                # Apply pagination
-                if limit > 0:
-                    matches = all_matches[offset : offset + limit]
-                    has_more = offset + limit < len(all_matches)
-                else:
-                    matches = all_matches[offset:]
-                    has_more = False
+                gen = (hex(xref) for xref in idautils.DataRefsTo(target))
+                # Skip offset items, take limit+1 to check more
+                matches = list(islice(islice(gen, offset, None), limit + 1))
+                more = len(matches) > limit
+                if more:
+                    matches = matches[:limit]
 
                 results.append(
                     {
@@ -1021,7 +963,7 @@ def search(
                         "matches": matches,
                         "count": len(matches),
                         "cursor": (
-                            {"next": offset + limit} if has_more else {"done": True}
+                            {"next": offset + limit} if more else {"done": True}
                         ),
                         "error": None,
                     }
@@ -1042,15 +984,12 @@ def search(
         for target_str in targets:
             try:
                 target = parse_address(str(target_str))
-                all_matches = [hex(xref) for xref in idautils.CodeRefsTo(target, 0)]
-
-                # Apply pagination
-                if limit > 0:
-                    matches = all_matches[offset : offset + limit]
-                    has_more = offset + limit < len(all_matches)
-                else:
-                    matches = all_matches[offset:]
-                    has_more = False
+                gen = (hex(xref) for xref in idautils.CodeRefsTo(target, 0))
+                # Skip offset items, take limit+1 to check more
+                matches = list(islice(islice(gen, offset, None), limit + 1))
+                more = len(matches) > limit
+                if more:
+                    matches = matches[:limit]
 
                 results.append(
                     {
@@ -1058,7 +997,7 @@ def search(
                         "matches": matches,
                         "count": len(matches),
                         "cursor": (
-                            {"next": offset + limit} if has_more else {"done": True}
+                            {"next": offset + limit} if more else {"done": True}
                         ),
                         "error": None,
                     }
@@ -1102,70 +1041,199 @@ def find_insn_operands(
     # Enforce max limit
     if limit <= 0 or limit > 10000:
         limit = 10000
+    if offset < 0:
+        offset = 0
 
     results = []
     for pattern in patterns:
-        all_matches = _find_insn_pattern(pattern)
+        mnem = str(pattern.get("mnem", "")).lower()
+        op0_val = pattern.get("op0")
+        op1_val = pattern.get("op1")
+        op2_val = pattern.get("op2")
+        any_val = pattern.get("op_any")
+        allow_broad = bool(pattern.get("allow_broad", False))
+        max_scan_insns = pattern.get("max_scan_insns", 200000)
+        if max_scan_insns <= 0 or max_scan_insns > 2000000:
+            max_scan_insns = 2000000
 
-        # Apply pagination
-        if limit > 0:
-            matches = all_matches[offset : offset + limit]
-            has_more = offset + limit < len(all_matches)
-        else:
-            matches = all_matches[offset:]
-            has_more = False
+        has_operand = (
+            op0_val is not None
+            or op1_val is not None
+            or op2_val is not None
+            or any_val is not None
+        )
+
+        if not mnem and not has_operand:
+            results.append(
+                {
+                    "pattern": pattern,
+                    "matches": [],
+                    "count": 0,
+                    "cursor": {"done": True},
+                    "error": "Pattern must include mnemonic and/or operand value",
+                }
+            )
+            continue
+
+        ranges, error = _resolve_insn_scan_ranges(pattern, allow_broad)
+        if error is not None:
+            results.append(
+                {
+                    "pattern": pattern,
+                    "matches": [],
+                    "count": 0,
+                    "cursor": {"done": True},
+                    "error": error,
+                }
+            )
+            continue
+
+        matches, more, scanned, truncated, next_start = _scan_insn_ranges(
+            ranges,
+            mnem,
+            op0_val,
+            op1_val,
+            op2_val,
+            any_val,
+            limit,
+            offset,
+            max_scan_insns,
+        )
+
+        cursor = {"done": True}
+        if more:
+            cursor = {"next": offset + limit}
+        if truncated:
+            cursor["scan_truncated"] = True
+            cursor["next_start"] = hex(next_start) if next_start is not None else None
+            if "done" in cursor:
+                del cursor["done"]
 
         results.append(
             {
                 "pattern": pattern,
                 "matches": matches,
                 "count": len(matches),
-                "cursor": {"next": offset + limit} if has_more else {"done": True},
+                "scanned_instructions": scanned,
+                "scan_limit": max_scan_insns,
+                "cursor": cursor,
             }
         )
     return results
 
 
-def _find_insn_pattern(pattern: dict) -> list[str]:
-    """Internal helper to find instructions matching a pattern"""
-    mnem = pattern.get("mnem", "").lower()
-    op0_val = pattern.get("op0")
-    op1_val = pattern.get("op1")
-    op2_val = pattern.get("op2")
-    any_val = pattern.get("op_any")
+def _resolve_insn_scan_ranges(pattern: dict, allow_broad: bool) -> tuple[list[tuple[int, int]], str | None]:
+    func_addr = pattern.get("func")
+    segment_name = pattern.get("segment")
+    start_s = pattern.get("start")
+    end_s = pattern.get("end")
 
-    matches = []
-
-    # Scan all executable segments
+    exec_segments = []
     for seg_ea in idautils.Segments():
         seg = idaapi.getseg(seg_ea)
-        if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
-            continue
+        if seg and (seg.perm & idaapi.SEGPERM_EXEC):
+            exec_segments.append(seg)
 
-        ea = seg.start_ea
-        while ea < seg.end_ea:
-            # Check mnemonic
+    if func_addr is not None:
+        try:
+            ea = parse_address(func_addr)
+            func = idaapi.get_func(ea)
+            if not func:
+                return [], f"Function not found at {func_addr}"
+            return [(func.start_ea, func.end_ea)], None
+        except Exception as e:
+            return [], str(e)
+
+    if segment_name is not None:
+        for seg in exec_segments:
+            if idaapi.get_segm_name(seg) == segment_name:
+                return [(seg.start_ea, seg.end_ea)], None
+        return [], f"Executable segment not found: {segment_name}"
+
+    if start_s is not None or end_s is not None:
+        if start_s is None:
+            return [], "start is required when end is set"
+        try:
+            start_ea = parse_address(start_s)
+            end_ea = parse_address(end_s) if end_s is not None else None
+        except Exception as e:
+            return [], str(e)
+
+        if not exec_segments:
+            return [], "No executable segments found"
+
+        if end_ea is None:
+            seg = idaapi.getseg(start_ea)
+            if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
+                return [], "start address not in executable segment"
+            end_ea = seg.end_ea
+
+        if end_ea <= start_ea:
+            return [], "end must be greater than start"
+
+        ranges = []
+        for seg in exec_segments:
+            seg_start = max(seg.start_ea, start_ea)
+            seg_end = min(seg.end_ea, end_ea)
+            if seg_end > seg_start:
+                ranges.append((seg_start, seg_end))
+
+        if not ranges:
+            return [], "No executable ranges within start/end"
+
+        return ranges, None
+
+    if not allow_broad:
+        return [], "Scope required: set func/segment/start/end or allow_broad=true"
+
+    if not exec_segments:
+        return [], "No executable segments found"
+
+    return [(seg.start_ea, seg.end_ea) for seg in exec_segments], None
+
+
+def _scan_insn_ranges(
+    ranges: list[tuple[int, int]],
+    mnem: str,
+    op0_val: int | None,
+    op1_val: int | None,
+    op2_val: int | None,
+    any_val: int | None,
+    limit: int,
+    offset: int,
+    max_scan_insns: int,
+) -> tuple[list[str], bool, int, bool, int | None]:
+    matches: list[str] = []
+    skipped = 0
+    scanned = 0
+    more = False
+    truncated = False
+    next_start: int | None = None
+
+    for start_ea, end_ea in ranges:
+        ea = start_ea
+        while ea < end_ea:
+            if scanned >= max_scan_insns:
+                truncated = True
+                next_start = ea
+                break
+
+            scanned += 1
+
             if mnem and idc.print_insn_mnem(ea).lower() != mnem:
-                ea = idc.next_head(ea, seg.end_ea)
+                ea = idc.next_head(ea, end_ea)
                 if ea == idaapi.BADADDR:
                     break
                 continue
 
-            # Check specific operand positions
             match = True
-            if op0_val is not None:
-                if idc.get_operand_value(ea, 0) != op0_val:
-                    match = False
+            if op0_val is not None and idc.get_operand_value(ea, 0) != op0_val:
+                match = False
+            if op1_val is not None and idc.get_operand_value(ea, 1) != op1_val:
+                match = False
+            if op2_val is not None and idc.get_operand_value(ea, 2) != op2_val:
+                match = False
 
-            if op1_val is not None:
-                if idc.get_operand_value(ea, 1) != op1_val:
-                    match = False
-
-            if op2_val is not None:
-                if idc.get_operand_value(ea, 2) != op2_val:
-                    match = False
-
-            # Check any operand
             if any_val is not None and match:
                 found_any = False
                 for i in range(8):
@@ -1178,13 +1246,23 @@ def _find_insn_pattern(pattern: dict) -> list[str]:
                     match = False
 
             if match:
-                matches.append(hex(ea))
+                if skipped < offset:
+                    skipped += 1
+                else:
+                    matches.append(hex(ea))
+                    if len(matches) > limit:
+                        more = True
+                        matches = matches[:limit]
+                        break
 
-            ea = idc.next_head(ea, seg.end_ea)
+            ea = idc.next_head(ea, end_ea)
             if ea == idaapi.BADADDR:
                 break
 
-    return matches
+        if more or truncated:
+            break
+
+    return matches, more, scanned, truncated, next_start
 
 
 # ============================================================================
@@ -1263,9 +1341,17 @@ def callgraph(
         list[str] | str, "Root function addresses to start call graph traversal from"
     ],
     max_depth: Annotated[int, "Maximum depth for call graph traversal"] = 5,
+    max_nodes: Annotated[int, "Max nodes across the graph (default: 1000, max: 100000)"] = 1000,
+    max_edges: Annotated[int, "Max edges across the graph (default: 5000, max: 200000)"] = 5000,
 ) -> list[dict]:
     """Build call graph starting from root functions"""
     roots = normalize_list_input(roots)
+    if max_depth < 0:
+        max_depth = 0
+    if max_nodes <= 0 or max_nodes > 100000:
+        max_nodes = 100000
+    if max_edges <= 0 or max_edges > 200000:
+        max_edges = 200000
     results = []
 
     for root in roots:
@@ -1286,9 +1372,21 @@ def callgraph(
             nodes = {}
             edges = []
             visited = set()
+            truncated = False
+            limit_reason = None
+
+            def hit_limit(reason: str):
+                nonlocal truncated, limit_reason
+                truncated = True
+                limit_reason = reason
 
             def traverse(addr, depth):
+                if truncated:
+                    return
                 if depth > max_depth or addr in visited:
+                    return
+                if len(nodes) >= max_nodes:
+                    hit_limit("nodes")
                     return
                 visited.add(addr)
 
@@ -1305,9 +1403,16 @@ def callgraph(
 
                 # Get callees
                 for item_ea in idautils.FuncItems(f.start_ea):
+                    if truncated:
+                        break
                     for xref in idautils.CodeRefsFrom(item_ea, 0):
+                        if truncated:
+                            break
                         callee_func = idaapi.get_func(xref)
                         if callee_func:
+                            if len(edges) >= max_edges:
+                                hit_limit("edges")
+                                break
                             edges.append(
                                 {
                                     "from": hex(addr),
@@ -1325,6 +1430,10 @@ def callgraph(
                     "nodes": list(nodes.values()),
                     "edges": edges,
                     "max_depth": max_depth,
+                    "truncated": truncated,
+                    "limit_reason": limit_reason,
+                    "max_nodes": max_nodes,
+                    "max_edges": max_edges,
                     "error": None,
                 }
             )
@@ -1388,6 +1497,9 @@ def analyze_strings(
     filters: list[StringFilter] | StringFilter,
     limit: Annotated[int, "Max matches per filter (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
+    include_xrefs: Annotated[
+        bool, "Include xrefs per string (default: false)"
+    ] = False,
 ) -> list[dict]:
     """Analyze and filter strings in the binary"""
     if isinstance(filters, dict):
@@ -1406,33 +1518,41 @@ def analyze_strings(
         pattern = filt.get("pattern", "").lower()
         min_length = filt.get("min_length", 0)
 
-        # Find all matching strings
-        all_matches = []
+        # Apply offset/limit during iteration to avoid processing all matches
+        matches = []
+        skipped = 0
+        more = False
         for s in all_strings:
             if len(s["string"]) < min_length:
                 continue
             if pattern and pattern not in s["string"].lower():
                 continue
 
-            # Add xref info
-            s_ea = parse_address(s["addr"])
-            xrefs = [hex(x.frm) for x in idautils.XrefsTo(s_ea, 0)]
-            all_matches.append({**s, "xrefs": xrefs, "xref_count": len(xrefs)})
+            if skipped < offset:
+                skipped += 1
+                continue
 
-        # Apply pagination
-        if limit > 0:
-            matches = all_matches[offset : offset + limit]
-            has_more = offset + limit < len(all_matches)
-        else:
-            matches = all_matches[offset:]
-            has_more = False
+            if include_xrefs:
+                s_ea = parse_address(s["addr"])
+                xrefs = [hex(x.frm) for x in idautils.XrefsTo(s_ea, 0)]
+                matches.append({**s, "xrefs": xrefs, "xref_count": len(xrefs)})
+            else:
+                item = dict(s)
+                item["xrefs"] = None
+                item["xref_count"] = None
+                matches.append(item)
+
+            if len(matches) > limit:
+                more = True
+                matches = matches[:limit]
+                break
 
         results.append(
             {
                 "filter": filt,
                 "matches": matches,
                 "count": len(matches),
-                "cursor": {"next": offset + limit} if has_more else {"done": True},
+                "cursor": {"next": offset + limit} if more else {"done": True},
             }
         )
 

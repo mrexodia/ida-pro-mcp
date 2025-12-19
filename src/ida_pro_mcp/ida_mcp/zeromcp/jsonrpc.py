@@ -1,10 +1,32 @@
 import json
 import inspect
+import os
+import time
 import traceback
 from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, is_typeddict
 from types import UnionType
 
 JsonRpcId: TypeAlias = str | int | float | None
+
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    value = value.strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+_LOG_REQUESTS = _parse_bool_env("IDA_MCP_LOG_REQUESTS", True)
+_LOG_SKIP_METHODS = {
+    m.strip()
+    for m in os.getenv("IDA_MCP_LOG_SKIP_METHODS", "tools/call").split(",")
+    if m.strip()
+}
 JsonRpcParams: TypeAlias = dict[str, Any] | list[Any] | None
 
 class JsonRpcRequest(TypedDict):
@@ -59,8 +81,23 @@ class JsonRpcRegistry:
         request_id: JsonRpcId = request.get("id")
         is_notification = "id" not in request
         params: JsonRpcParams = request.get("params")
+
+        log_method = _LOG_REQUESTS and method not in _LOG_SKIP_METHODS
+        if log_method:
+            params_str = json.dumps(params, default=str)
+            if len(params_str) > 200:
+                params_str = params_str[:200] + "..."
+            print(f"[MCP] >> {method}({params_str})")
+
+        start_time = time.perf_counter()
         try:
             result = self._call(method, params)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if log_method:
+                result_str = json.dumps(result, default=str)
+                if len(result_str) > 200:
+                    result_str = result_str[:200] + "..."
+                print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) {result_str}")
             if is_notification:
                 return None
             return {
@@ -69,10 +106,16 @@ class JsonRpcRegistry:
                 "id": request_id,
             }
         except JsonRpcException as e:
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if log_method:
+                print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) ERROR: {e.message}")
             if is_notification:
                 return None
             return self._error(request_id, e.code, e.message, e.data)
         except Exception as e:
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if log_method:
+                print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) EXCEPTION: {e}")
             if is_notification:
                 return None
             error = self.map_exception(e)

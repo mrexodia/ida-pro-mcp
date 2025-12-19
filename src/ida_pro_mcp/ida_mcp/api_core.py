@@ -26,49 +26,111 @@ from .utils import (
     parse_address,
     normalize_list_input,
     normalize_dict_list,
-    looks_like_address,
     get_function,
-    create_demangled_to_ea_map,
     paginate,
     pattern_filter,
-    DEMANGLED_TO_EA,
 )
 from .sync import IDAError
 
 
 # ============================================================================
-# String Cache
+# String Cache (with C-accelerated regex search)
 # ============================================================================
 
-# Cache for idautils.Strings() to avoid rebuilding on every call
 _strings_cache: Optional[list[String]] = None
 _strings_cache_md5: Optional[str] = None
+_strings_dump: str = ""  # All strings concatenated with delimiter for fast regex
+_strings_map: dict[str, list[int]] = {}  # string_lower -> list of cache indices
+_DELIM: str = "\x00\x01\x02XDELIMX\x02\x01\x00"
 
 
 def _get_cached_strings() -> list[String]:
-    """Get cached strings, rebuilding if IDB changed"""
-    global _strings_cache, _strings_cache_md5
+    """Get cached strings, rebuilding if IDB changed. Also builds regex search index."""
+    global _strings_cache, _strings_cache_md5, _strings_dump, _strings_map
 
-    # Get current IDB modification hash
     current_md5 = ida_nalt.retrieve_input_file_md5()
 
-    # Rebuild cache if needed
     if _strings_cache is None or _strings_cache_md5 != current_md5:
         _strings_cache = []
+        _strings_map = {}
+        dump_parts: list[str] = [_DELIM]
+
         for item in idautils.Strings():
             if item is None:
                 continue
             try:
                 string = str(item)
                 if string:
+                    string_lower = string.lower()
+                    idx = len(_strings_cache)
                     _strings_cache.append(
                         String(addr=hex(item.ea), length=item.length, string=string)
                     )
+                    # Map for exact lookups
+                    if string_lower not in _strings_map:
+                        _strings_map[string_lower] = []
+                    _strings_map[string_lower].append(idx)
+                    # Concatenated dump for regex
+                    dump_parts.append(string_lower)
+                    dump_parts.append(_DELIM)
             except Exception:
                 continue
+
+        _strings_dump = "".join(dump_parts)
         _strings_cache_md5 = current_md5
 
     return _strings_cache
+
+
+def _search_strings(pattern: str, limit: int, offset: int) -> tuple[list[String], bool]:
+    """C-accelerated string search using regex on concatenated dump."""
+    import re
+
+    _get_cached_strings()  # Ensure cache built
+
+    pattern_lower = pattern.lower()
+
+    # Fast path: exact match via O(1) map lookup
+    if pattern_lower in _strings_map:
+        indices = _strings_map[pattern_lower]
+        results: list[String] = []
+        more = False
+        for i, idx in enumerate(indices):
+            if i < offset:
+                continue
+            results.append(_strings_cache[idx])
+            if len(results) >= limit:
+                more = i + 1 < len(indices)
+                break
+        return results, more
+
+    # Substring search: C-accelerated regex on concatenated dump
+    escaped = re.escape(pattern_lower)
+    delim_escaped = re.escape(_DELIM)
+    regex = re.compile(
+        f"{delim_escaped}([^\\x00]*?{escaped}[^\\x00]*?)(?={delim_escaped})",
+        re.IGNORECASE,
+    )
+
+    results = []
+    skipped = 0
+    more = False
+
+    for m in regex.finditer(_strings_dump):
+        matched_str = m.group(1)
+        indices = _strings_map.get(matched_str, [])
+        for idx in indices:
+            if skipped < offset:
+                skipped += 1
+                continue
+            results.append(_strings_cache[idx])
+            if len(results) >= limit:
+                more = True
+                break
+        if more:
+            break
+
+    return results, more
 
 
 # ============================================================================
@@ -99,6 +161,27 @@ def idb_meta() -> Metadata:
     )
 
 
+def _parse_func_query(query: str) -> int:
+    """Fast path for common function query patterns. Returns ea or BADADDR."""
+    q = query.strip()
+
+    # 0x<hex> - direct address
+    if q.startswith("0x") or q.startswith("0X"):
+        try:
+            return int(q, 16)
+        except ValueError:
+            pass
+
+    # sub_<hex> - IDA auto-named function
+    if q.startswith("sub_"):
+        try:
+            return int(q[4:], 16)
+        except ValueError:
+            pass
+
+    return idaapi.BADADDR
+
+
 @tool
 @idaread
 def lookup_funcs(
@@ -107,31 +190,24 @@ def lookup_funcs(
     """Get functions by address or name (auto-detects)"""
     queries = normalize_list_input(queries)
 
-    # Treat empty/"*" as "all functions"
+    # Treat empty/"*" as "all functions" - but add limit
     if not queries or (len(queries) == 1 and queries[0] in ("*", "")):
-        all_funcs = [get_function(addr) for addr in idautils.Functions()]
+        all_funcs = []
+        for addr in idautils.Functions():
+            all_funcs.append(get_function(addr))
+            if len(all_funcs) >= 1000:
+                break
         return [{"query": "*", "fn": fn, "error": None} for fn in all_funcs]
-
-    if len(DEMANGLED_TO_EA) == 0:
-        create_demangled_to_ea_map()
 
     results = []
     for query in queries:
         try:
-            ea = idaapi.BADADDR
+            # Fast path: 0x<ea> or sub_<ea>
+            ea = _parse_func_query(query)
 
-            # Try as address first if it looks like one
-            if looks_like_address(query):
-                try:
-                    ea = parse_address(query)
-                except Exception:
-                    ea = idaapi.BADADDR
-
-            # Fall back to name lookup
+            # Slow path: name lookup
             if ea == idaapi.BADADDR:
                 ea = idaapi.get_name_ea(idaapi.BADADDR, query)
-                if ea == idaapi.BADADDR and query in DEMANGLED_TO_EA:
-                    ea = DEMANGLED_TO_EA[query]
 
             if ea != idaapi.BADADDR:
                 func = get_function(ea, raise_error=False)
@@ -329,30 +405,77 @@ def imports(
 def strings(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
-        "List strings with optional filtering and pagination",
+        "Search/list strings (C-accelerated regex)",
     ],
 ) -> list[Page[String]]:
-    """List strings"""
+    """Search strings using C-accelerated regex. Fast for both exact and substring matches."""
     queries = normalize_dict_list(
         queries, lambda s: {"offset": 0, "count": 50, "filter": s}
     )
-    # Use cached strings instead of rebuilding every time
-    all_strings = _get_cached_strings()
 
-    results = []
+    results: list[Page[String]] = []
     for query in queries:
         offset = query.get("offset", 0)
         count = query.get("count", 100)
         filter_pattern = query.get("filter", "")
 
-        # Treat empty/"*" filter as "all"
-        if filter_pattern in ("", "*"):
-            filter_pattern = ""
-
-        filtered = pattern_filter(all_strings, filter_pattern, "string")
-        results.append(paginate(filtered, offset, count))
+        # No filter: simple pagination of all strings
+        if not filter_pattern or filter_pattern == "*":
+            all_strings = _get_cached_strings()
+            end = offset + count
+            data = all_strings[offset:end]
+            next_offset = end if end < len(all_strings) else None
+            results.append({"data": data, "next_offset": next_offset})
+        else:
+            # Use C-accelerated regex search
+            data, more = _search_strings(filter_pattern, count, offset)
+            next_offset = offset + count if more else None
+            results.append({"data": data, "next_offset": next_offset})
 
     return results
+
+
+def _build_pattern_matcher(pattern: str):
+    """Build a matcher function for pattern filtering with early exit support"""
+    import fnmatch
+    import re
+
+    if not pattern:
+        return lambda s: True
+
+    regex = None
+    use_glob = False
+
+    # Regex pattern: /pattern/flags
+    if pattern.startswith("/") and pattern.count("/") >= 2:
+        last_slash = pattern.rfind("/")
+        body = pattern[1:last_slash]
+        flag_str = pattern[last_slash + 1:]
+
+        flags = 0
+        for ch in flag_str:
+            if ch == "i":
+                flags |= re.IGNORECASE
+            elif ch == "m":
+                flags |= re.MULTILINE
+            elif ch == "s":
+                flags |= re.DOTALL
+
+        try:
+            regex = re.compile(body, flags or re.IGNORECASE)
+        except re.error:
+            regex = None
+    # Glob pattern: contains * or ?
+    elif "*" in pattern or "?" in pattern:
+        use_glob = True
+
+    if regex is not None:
+        return lambda s: bool(regex.search(s))
+    if use_glob:
+        pattern_lower = pattern.lower()
+        return lambda s: fnmatch.fnmatch(s.lower(), pattern_lower)
+    pattern_lower = pattern.lower()
+    return lambda s: pattern_lower in s.lower()
 
 
 def ida_segment_perm2str(perm: int) -> str:

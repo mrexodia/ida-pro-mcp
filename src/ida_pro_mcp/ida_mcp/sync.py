@@ -1,6 +1,9 @@
 import logging
 import queue
 import functools
+import os
+import sys
+import time
 from enum import IntEnum
 import idaapi
 import ida_kernwin
@@ -28,6 +31,18 @@ class IDASyncError(Exception):
 
 
 logger = logging.getLogger(__name__)
+_TOOL_TIMEOUT_ENV = "IDA_MCP_TOOL_TIMEOUT_SEC"
+_DEFAULT_TOOL_TIMEOUT_SEC = 15.0
+
+
+def _get_tool_timeout_seconds() -> float:
+    value = os.getenv(_TOOL_TIMEOUT_ENV, "").strip()
+    if value == "":
+        return _DEFAULT_TOOL_TIMEOUT_SEC
+    try:
+        return float(value)
+    except ValueError:
+        return _DEFAULT_TOOL_TIMEOUT_SEC
 
 
 class IDASafety(IntEnum):
@@ -46,7 +61,6 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
         logger.error(error_str)
         raise IDASyncError(error_str)
 
-    # NOTE: This is not actually a queue, there is one item in it at most
     res_container = queue.Queue()
 
     def runned():
@@ -69,10 +83,40 @@ def _sync_wrapper(ff, safety_mode: IDASafety):
         raise res
     return res
 
-def sync_wrapper(ff, safety_mode: IDASafety):
+def _normalize_timeout(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def sync_wrapper(ff, safety_mode: IDASafety, timeout_override: float | None = None):
     """Wrapper to enable batch mode during IDA synchronization."""
     old_batch = idc.batch(1)
     try:
+        timeout = timeout_override
+        if timeout is None:
+            timeout = _get_tool_timeout_seconds()
+        if timeout > 0:
+            deadline = time.monotonic() + timeout
+
+            def timed_ff():
+                def tracefunc(frame, event, arg):
+                    if time.monotonic() >= deadline:
+                        raise IDASyncError(f"Tool timed out after {timeout:.2f}s")
+                    return tracefunc
+
+                old_trace = sys.gettrace()
+                sys.settrace(tracefunc)
+                try:
+                    return ff()
+                finally:
+                    sys.settrace(old_trace)
+
+            timed_ff.__name__ = ff.__name__
+            return _sync_wrapper(timed_ff, safety_mode)
         return _sync_wrapper(ff, safety_mode)
     finally:
         idc.batch(old_batch)
@@ -84,7 +128,10 @@ def idawrite(f):
     def wrapper(*args, **kwargs):
         ff = functools.partial(f, *args, **kwargs)
         ff.__name__ = f.__name__
-        return sync_wrapper(ff, idaapi.MFF_WRITE)
+        timeout_override = _normalize_timeout(
+            getattr(f, "__ida_mcp_timeout_sec__", None)
+        )
+        return sync_wrapper(ff, idaapi.MFF_WRITE, timeout_override)
 
     return wrapper
 
@@ -96,9 +143,20 @@ def idaread(f):
     def wrapper(*args, **kwargs):
         ff = functools.partial(f, *args, **kwargs)
         ff.__name__ = f.__name__
-        return sync_wrapper(ff, idaapi.MFF_READ)
+        timeout_override = _normalize_timeout(
+            getattr(f, "__ida_mcp_timeout_sec__", None)
+        )
+        return sync_wrapper(ff, idaapi.MFF_READ, timeout_override)
 
     return wrapper
+
+
+def tool_timeout(seconds: float):
+    """Decorator to override per-tool timeout (seconds)."""
+    def decorator(func):
+        setattr(func, "__ida_mcp_timeout_sec__", seconds)
+        return func
+    return decorator
 
 
 def is_window_active():

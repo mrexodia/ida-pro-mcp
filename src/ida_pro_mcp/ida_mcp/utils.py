@@ -154,6 +154,17 @@ class InsnPattern(TypedDict, total=False):
     op1: Annotated[int, "Value to match in second operand"]
     op2: Annotated[int, "Value to match in third operand"]
     op_any: Annotated[int, "Value to match in any operand"]
+    func: Annotated[str, "Function address to scope the scan"]
+    segment: Annotated[str, "Segment name to scope the scan"]
+    start: Annotated[str, "Start address (hex/dec) to scope the scan"]
+    end: Annotated[str, "End address (hex/dec, exclusive) to scope the scan"]
+    max_scan_insns: Annotated[
+        int, "Max instructions to scan (default: 200000, max: 2000000)"
+    ]
+    allow_broad: Annotated[
+        bool,
+        "Allow scans without scope (default: false). Use with care on large binaries.",
+    ]
 
 
 class NumberConversion(TypedDict, total=False):
