@@ -267,36 +267,36 @@ def imports(
 @tool
 @idaread
 def find_regex(
-    queries: Annotated[
-        list[ListQuery] | ListQuery | str,
-        "Search/list strings (case-insensitive regex; matches substrings of strings)",
-    ],
-) -> list[Page[String]]:
-    """Search strings with a case-insensitive regex; matches any substring of a string."""
-    queries = normalize_dict_list(
-        queries, lambda s: {"offset": 0, "count": 50, "filter": s}
-    )
+    patterns: Annotated[list[str] | str, "Regex patterns to search for in strings"],
+    limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
+    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
+) -> list[dict]:
+    """Search strings with case-insensitive regex patterns"""
+    patterns = normalize_list_input(patterns)
 
-    results: list[Page[String]] = []
-    for query in queries:
-        offset = query.get("offset", 0)
-        count = query.get("count", 100)
-        filter_pattern = query.get("filter", "")
+    if limit <= 0 or limit > 10000:
+        limit = 10000
 
-        # No filter: simple pagination of all strings
-        if not filter_pattern or filter_pattern == "*":
-            all_strings = get_core_strings()
-            end = offset + count
+    all_strings = get_core_strings()
+    results = []
+
+    for pattern in patterns:
+        if not pattern or pattern == "*":
+            # No filter: simple pagination
+            end = offset + limit
             data = all_strings[offset:end]
-            next_offset = end if end < len(all_strings) else None
-            results.append({"data": data, "next_offset": next_offset})
+            more = end < len(all_strings)
         else:
-            # Use C-accelerated regex search
-            indices, more = search_indices(filter_pattern, count, offset)
-            all_strings = get_core_strings()
+            # Use fast string index search
+            indices, more = search_indices(pattern, limit, offset)
             data = [all_strings[i] for i in indices]
-            next_offset = offset + count if more else None
-            results.append({"data": data, "next_offset": next_offset})
+
+        results.append({
+            "pattern": pattern,
+            "matches": data,
+            "count": len(data),
+            "cursor": {"next": offset + limit} if more else {"done": True},
+        })
 
     return results
 
