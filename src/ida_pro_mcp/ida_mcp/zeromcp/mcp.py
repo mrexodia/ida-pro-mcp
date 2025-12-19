@@ -230,7 +230,7 @@ class McpServer:
         self._sse_connections: dict[str, _McpSseConnection] = {}
         self._protocol_version = threading.local()
         self._enabled_extensions = threading.local()  # set[str] per request
-        self._extensions_registry = extensions or {}  # group -> set of tool names
+        self._extensions_registry = extensions if extensions is not None else {}  # group -> set of tool names
 
         # Register MCP protocol methods with correct names
         self.registry = JsonRpcRegistry()

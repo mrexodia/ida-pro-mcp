@@ -9,7 +9,6 @@ from typing import Annotated
 import ida_funcs
 import ida_nalt
 import ida_segment
-import ida_struct
 import ida_typeinf
 import idaapi
 import idautils
@@ -174,15 +173,19 @@ def types_resource() -> list[dict]:
 def structs_resource() -> list[dict]:
    """Get all structures/unions"""
    structs = []
-   for idx in range(ida_struct.get_struc_qty()):
-      tid = ida_struct.get_struc_by_idx(idx)
-      struc = ida_struct.get_struc(tid)
-      if struc:
+   limit = ida_typeinf.get_ordinal_limit()
+   for ordinal in range(1, limit):
+      tif = ida_typeinf.tinfo_t()
+      if tif.get_numbered_type(None, ordinal) and tif.is_udt():
+         udt_data = ida_typeinf.udt_type_data_t()
+         is_union = False
+         if tif.get_udt_details(udt_data):
+            is_union = udt_data.is_union
          structs.append(
             {
-               "name": ida_struct.get_struc_name(tid),
-               "size": hex(ida_struct.get_struc_size(struc)),
-               "is_union": struc.is_union(),
+               "name": tif.get_type_name(),
+               "size": hex(tif.get_size()),
+               "is_union": is_union,
             }
          )
    return structs
@@ -192,36 +195,30 @@ def structs_resource() -> list[dict]:
 @idaread
 def struct_name_resource(name: Annotated[str, "Structure name"]) -> dict:
    """Get structure definition with fields"""
-   sid = ida_struct.get_struc_id(name)
-   if sid == idaapi.BADADDR:
+   tif = ida_typeinf.tinfo_t()
+   if not tif.get_named_type(None, name):
       return {"error": f"Structure not found: {name}"}
 
-   struc = ida_struct.get_struc(sid)
-   if not struc:
-      return {"error": f"Structure not found: {name}"}
+   if not tif.is_udt():
+      return {"error": f"'{name}' is not a structure/union"}
+
+   udt_data = ida_typeinf.udt_type_data_t()
+   if not tif.get_udt_details(udt_data):
+      return {"error": f"Failed to get struct details for '{name}'"}
 
    members = []
-   for i in range(struc.memqty):
-      member = struc.get_member(i)
-      if member:
-         mname = ida_struct.get_member_name(member.id)
-         tif = ida_typeinf.tinfo_t()
-         if ida_struct.get_member_tinfo(tif, member):
-            type_str = str(tif)
-         else:
-            type_str = "unknown"
-
-         members.append(
-            StructureMember(
-               name=mname,
-               offset=hex(member.soff),
-               size=hex(ida_struct.get_member_size(member)),
-               type=type_str,
-            )
+   for member in udt_data:
+      members.append(
+         StructureMember(
+            name=member.name,
+            offset=hex(member.offset // 8),
+            size=hex(member.size // 8),
+            type=str(member.type),
          )
+      )
 
    return StructureDefinition(
-      name=name, size=hex(ida_struct.get_struc_size(struc)), members=members
+      name=name, size=hex(tif.get_size()), members=members
    )
 
 
