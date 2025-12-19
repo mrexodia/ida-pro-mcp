@@ -17,7 +17,7 @@ import ida_xref
 import ida_ua
 import ida_name
 from .rpc import tool
-from .fast_str import get_entries
+from .fast_str import get_entries, search_indices
 from .sync import idaread, is_window_active, tool_timeout
 from .utils import (
     parse_address,
@@ -1660,43 +1660,49 @@ def analyze_strings(
     if limit <= 0 or limit > 10000:
         limit = 10000
 
-    # Use cached strings to avoid rebuilding on every call
+    # Use cached strings
     all_strings = get_entries()
 
     results = []
 
     for filt in filters:
-        pattern = filt.get("pattern", "").lower()
+        pattern = filt.get("pattern", "")
         min_length = filt.get("min_length", 0)
 
-        # Apply offset/limit during iteration to avoid processing all matches
         matches = []
-        skipped = 0
         more = False
-        for s in all_strings:
-            if len(s["string"]) < min_length:
-                continue
-            if pattern and pattern not in s["string"].lower():
-                continue
 
-            if skipped < offset:
-                skipped += 1
-                continue
-
-            if include_xrefs:
-                s_ea = parse_address(s["addr"])
-                xrefs = [hex(x.frm) for x in idautils.XrefsTo(s_ea, 0)]
-                matches.append({**s, "xrefs": xrefs, "xref_count": len(xrefs)})
-            else:
-                item = dict(s)
-                item["xrefs"] = None
-                item["xref_count"] = None
-                matches.append(item)
-
-            if len(matches) > limit:
-                more = True
-                matches = matches[:limit]
-                break
+        # Fast path: use search_indices for pattern matching
+        if pattern:
+            indices, more = search_indices(pattern, limit, offset)
+            for idx in indices:
+                s = all_strings[idx]
+                if min_length and len(s["string"]) < min_length:
+                    continue
+                if include_xrefs:
+                    s_ea = parse_address(s["addr"])
+                    xrefs = [hex(x.frm) for x in idautils.XrefsTo(s_ea, 0)]
+                    matches.append({**s, "xrefs": xrefs, "xref_count": len(xrefs)})
+                else:
+                    matches.append({**s, "xrefs": None, "xref_count": None})
+        else:
+            # No pattern: iterate with min_length filter only
+            skipped = 0
+            for s in all_strings:
+                if min_length and len(s["string"]) < min_length:
+                    continue
+                if skipped < offset:
+                    skipped += 1
+                    continue
+                if include_xrefs:
+                    s_ea = parse_address(s["addr"])
+                    xrefs = [hex(x.frm) for x in idautils.XrefsTo(s_ea, 0)]
+                    matches.append({**s, "xrefs": xrefs, "xref_count": len(xrefs)})
+                else:
+                    matches.append({**s, "xrefs": None, "xref_count": None})
+                if len(matches) >= limit:
+                    more = True
+                    break
 
         results.append(
             {
