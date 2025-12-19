@@ -10,9 +10,9 @@ Usage from IDA console:
     run_tests(pattern="*meta*")    # Run tests matching pattern
 
 Usage from command line:
-    ida-mcp-test crackme03.elf
-    ida-mcp-test crackme03.elf --category api_core
-    ida-mcp-test crackme03.elf --pattern "*meta*"
+    ida-mcp-test tests/crackme03.elf
+    ida-mcp-test tests/crackme03.elf --category api_core
+    ida-mcp-test tests/crackme03.elf --pattern "*meta*"
 """
 
 import fnmatch

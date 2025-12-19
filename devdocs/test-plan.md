@@ -72,7 +72,7 @@ TESTS: dict[str, TestInfo] = {}  # name -> TestInfo
 # Decorator
 def test(expression: str = "", skip: bool = False) -> Callable:
     """Register a test function.
-    
+
     Args:
         expression: Future use - expression to evaluate for binary-specific tests
         skip: If True, test will be skipped
@@ -108,26 +108,26 @@ class TestResult:
 # Helper assertions (for use in test functions)
 def assert_valid_address(addr: str) -> None:
     """Assert addr is a valid hex string starting with 0x"""
-    
+
 def assert_has_keys(d: dict, *keys: str) -> None:
     """Assert dict has all specified keys"""
-    
+
 def assert_non_empty(value: Any) -> None:
     """Assert value is not None and not empty"""
-    
+
 def assert_is_list(value: Any, min_length: int = 0) -> None:
     """Assert value is a list with at least min_length items"""
-    
+
 def assert_all_have_keys(items: list[dict], *keys: str) -> None:
     """Assert all dicts in list have specified keys"""
 
 # Helper utilities (for getting test data)
 def get_any_function() -> Optional[str]:
     """Returns address of first function, or None if no functions"""
-    
+
 def get_any_string() -> Optional[str]:
     """Returns address of first string, or None if no strings"""
-    
+
 def get_first_segment() -> Optional[tuple[str, str]]:
     """Returns (start_addr, end_addr) of first segment, or None"""
 ```
@@ -184,19 +184,19 @@ Usage:
 
 ```bash
 # Run all tests on the test binary
-ida-mcp-test crackme03.elf
+ida-mcp-test tests/crackme03.elf
 
 # Run specific category
-ida-mcp-test crackme03.elf --category api_core
+ida-mcp-test tests/crackme03.elf --category api_core
 
 # Run with pattern
-ida-mcp-test crackme03.elf --pattern "*meta*"
+ida-mcp-test tests/crackme03.elf --pattern "*meta*"
 
 # Stop on first failure
-ida-mcp-test crackme03.elf --stop-on-failure
+ida-mcp-test tests/crackme03.elf --stop-on-failure
 
 # Quiet output
-ida-mcp-test crackme03.elf --quiet
+ida-mcp-test tests/crackme03.elf --quiet
 ```
 
 ## Test Categories
@@ -294,10 +294,10 @@ def test_set_comment_roundtrip():
     fn_addr = get_any_function()
     if not fn_addr:
         return  # Skip if no functions
-    
+
     original_comment = ""  # Assume empty initially
     test_comment = "__TEST_COMMENT_12345__"
-    
+
     try:
         # Set comment
         result = set_comments({"addr": fn_addr, "comment": test_comment})
@@ -317,7 +317,7 @@ def test_decompile_batch():
     """decompile handles multiple addresses"""
     result = list_funcs({"count": 3})
     addrs = [fn["addr"] for fn in result[0]["data"]]
-    
+
     results = decompile(addrs)
     assert len(results) == len(addrs)
     for r in results:
@@ -342,7 +342,7 @@ Binary: crackme03.elf
   + test_strings_returns_strings (0.08s)
   x test_int_convert_formats (0.01s)
     AssertionError: Expected 'binary' key in result
-    
+
     Traceback (most recent call last):
       File ".../api_core.py", line 123, in test_int_convert_formats
         assert "binary" in result["result"]
@@ -393,7 +393,7 @@ Tests that modify state MUST clean up after themselves:
 def test_rename_function():
     fn_addr = get_any_function()
     original_name = get_function_name(fn_addr)
-    
+
     try:
         rename({"func": [{"addr": fn_addr, "name": "__test_name__"}]})
         # ... assertions ...
@@ -405,7 +405,7 @@ def test_rename_function():
 
 Based on GitHub issues:
 - Issue #205: `get_function()` returns input addr instead of `fn.start_ea`
-- Issue #200: APIs returning invalid responses  
+- Issue #200: APIs returning invalid responses
 - Issue #208: Strings operation timing out
 
 ## Code Coverage

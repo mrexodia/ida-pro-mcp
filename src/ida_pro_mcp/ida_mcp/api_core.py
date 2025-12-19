@@ -201,11 +201,35 @@ def cursor_addr() -> str:
     return hex(idaapi.get_screen_ea())
 
 
+@test()
+def test_cursor_addr():
+    """cursor_addr returns valid address or handles headless mode"""
+    try:
+        result = cursor_addr()
+        # If it succeeds, verify it's a valid hex address
+        assert_valid_address(result)
+    except IDAError:
+        pass  # Expected in headless mode without GUI
+
+
 @tool
 @idaread
 def cursor_func() -> Optional[Function]:
     """Get current function"""
     return get_function(idaapi.get_screen_ea())
+
+
+@test()
+def test_cursor_func():
+    """cursor_func returns function info or handles headless mode"""
+    try:
+        result = cursor_func()
+        # Result can be None if cursor is not in a function
+        if result is not None:
+            assert_has_keys(result, "addr", "name", "size")
+            assert_valid_address(result["addr"])
+    except IDAError:
+        pass  # Expected in headless mode or if cursor not in function
 
 
 @tool
@@ -386,6 +410,38 @@ def list_globals(
     return results
 
 
+@test()
+def test_list_globals():
+    """list_globals returns global variables with proper structure"""
+    result = list_globals({})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "data", "next_offset")
+    # Globals list may be empty for some binaries
+    if page["data"]:
+        glob = page["data"][0]
+        assert_has_keys(glob, "addr", "name")
+        assert_valid_address(glob["addr"])
+
+
+@test()
+def test_list_globals_pagination():
+    """list_globals pagination works correctly"""
+    # Get first 2 globals
+    result1 = list_globals({"offset": 0, "count": 2})
+    assert_is_list(result1, min_length=1)
+    page1 = result1[0]
+    assert len(page1["data"]) <= 2
+
+    # Get next 2 globals if available
+    if page1["next_offset"] is not None and page1["data"]:
+        result2 = list_globals({"offset": page1["next_offset"], "count": 2})
+        page2 = result2[0]
+        # Verify we got different globals (if there are enough)
+        if page2["data"]:
+            assert page1["data"][0]["addr"] != page2["data"][0]["addr"]
+
+
 @tool
 @idaread
 def imports(
@@ -413,6 +469,34 @@ def imports(
         ida_nalt.enum_import_names(i, imp_cb_w_context)
 
     return paginate(rv, offset, count)
+
+
+@test()
+def test_imports():
+    """imports returns list of imported functions"""
+    result = imports(0, 50)
+    assert_has_keys(result, "data", "next_offset")
+    # Imports may be empty for some binaries (static linking)
+    if result["data"]:
+        imp = result["data"][0]
+        assert_has_keys(imp, "addr", "imported_name", "module")
+        assert_valid_address(imp["addr"])
+
+
+@test()
+def test_imports_pagination():
+    """imports pagination works correctly"""
+    # Get first 2 imports
+    result1 = imports(0, 2)
+    assert_has_keys(result1, "data", "next_offset")
+    assert len(result1["data"]) <= 2
+
+    # Get next 2 imports if available
+    if result1["next_offset"] is not None and result1["data"]:
+        result2 = imports(result1["next_offset"], 2)
+        # Verify we got different imports (if there are enough)
+        if result2["data"]:
+            assert result1["data"][0]["addr"] != result2["data"][0]["addr"]
 
 
 @tool
@@ -557,3 +641,17 @@ def local_types():
         except Exception:
             continue
     return locals
+
+
+@test()
+def test_local_types():
+    """local_types returns list of local types"""
+    result = local_types()
+    # Result is a list of strings describing local types
+    assert isinstance(result, list), f"Expected list, got {type(result).__name__}"
+    # Local types may be empty for some binaries
+    if result:
+        # Each item should be a string describing a type
+        assert isinstance(result[0], str), (
+            f"Expected string items, got {type(result[0]).__name__}"
+        )

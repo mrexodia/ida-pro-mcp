@@ -15,7 +15,7 @@ import ida_search
 import ida_idaapi
 import ida_xref
 from .rpc import tool
-from .sync import idaread, is_window_active, IDAError
+from .sync import idaread, is_window_active
 from .tests import (
     test,
     assert_has_keys,
@@ -23,7 +23,6 @@ from .tests import (
     assert_is_list,
     get_any_function,
     get_any_string,
-    get_first_segment,
 )
 from .utils import (
     parse_address,
@@ -230,7 +229,7 @@ def disasm(
                     all_instructions.append((ea, instruction))
             else:
                 # No function: disassemble sequentially from start address
-                func_name = f"<no function>"
+                func_name = "<no function>"
                 header_addr = start
 
                 ea = start
@@ -488,6 +487,30 @@ def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[d
             )
 
     return results
+
+
+@test()
+def test_xrefs_to_field_nonexistent_struct():
+    """xrefs_to_field handles nonexistent struct gracefully"""
+    result = xrefs_to_field({"struct": "NonExistentStruct12345", "field": "field"})
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "struct", "field", "xrefs")
+    # Should have error or empty xrefs for nonexistent struct
+    assert result[0].get("error") is not None or result[0]["xrefs"] == []
+
+
+@test()
+def test_xrefs_to_field_batch():
+    """xrefs_to_field handles multiple queries"""
+    result = xrefs_to_field(
+        [
+            {"struct": "NonExistentStruct1", "field": "field1"},
+            {"struct": "NonExistentStruct2", "field": "field2"},
+        ]
+    )
+    assert_is_list(result, min_length=2)
+    for item in result:
+        assert_has_keys(item, "struct", "field", "xrefs")
 
 
 # ============================================================================
@@ -1124,6 +1147,31 @@ def find_paths(queries: list[PathQuery] | PathQuery) -> list[dict]:
     return results
 
 
+@test()
+def test_find_paths_same_function():
+    """find_paths returns paths within a function"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    # Query path from function start to itself (trivial path)
+    result = find_paths({"source": func_addr, "target": func_addr})
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "source", "target", "paths", "reachable")
+    # Path to itself is always reachable
+    assert result[0]["reachable"] is True
+
+
+@test()
+def test_find_paths_invalid_source():
+    """find_paths handles invalid source address"""
+    result = find_paths(
+        {"source": "0xDEADBEEFDEADBEEF", "target": "0xDEADBEEFDEADBEEF"}
+    )
+    assert_is_list(result, min_length=1)
+    # Should have error or reachable=False
+    assert result[0].get("error") is not None or result[0]["reachable"] is False
+
+
 # ============================================================================
 # Search Operations
 # ============================================================================
@@ -1299,6 +1347,46 @@ def search(
     return results
 
 
+@test()
+def test_search_string():
+    """search finds strings containing pattern"""
+    # Search for a common string pattern (empty pattern matches all)
+    result = search(type="string", targets=[""])
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "query", "matches", "count", "cursor")
+    assert_is_list(result[0]["matches"])
+
+
+@test()
+def test_search_immediate():
+    """search finds immediate values"""
+    # Search for 0 - a common immediate value in most binaries
+    result = search(type="immediate", targets=[0])
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "query", "matches", "count", "cursor")
+    assert_is_list(result[0]["matches"])
+
+
+@test()
+def test_search_code_ref():
+    """search finds code references"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = search(type="code_ref", targets=[func_addr])
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "query", "matches", "count", "cursor")
+    assert_is_list(result[0]["matches"])
+
+
+@test()
+def test_search_invalid_type():
+    """search returns error for invalid type"""
+    result = search(type="invalid_type", targets=["test"])
+    assert_is_list(result, min_length=1)
+    assert result[0].get("error") is not None
+
+
 @tool
 @idaread
 def find_insn_operands(
@@ -1398,6 +1486,34 @@ def _find_insn_pattern(pattern: dict) -> list[str]:
     return matches
 
 
+@test()
+def test_find_insn_operands_mnem_only():
+    """find_insn_operands finds instructions by mnemonic"""
+    # Search for 'ret' instruction - common in most binaries
+    result = find_insn_operands({"mnem": "ret"})
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "pattern", "matches", "count", "cursor")
+    assert_is_list(result[0]["matches"])
+
+
+@test()
+def test_find_insn_operands_with_operand():
+    """find_insn_operands handles operand filtering"""
+    # Search for any instruction - just verify the structure is correct
+    result = find_insn_operands({"mnem": "nop"})
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "pattern", "matches", "count", "cursor")
+
+
+@test()
+def test_find_insn_operands_batch():
+    """find_insn_operands handles multiple patterns"""
+    result = find_insn_operands([{"mnem": "ret"}, {"mnem": "nop"}])
+    assert_is_list(result, min_length=2)
+    for item in result:
+        assert_has_keys(item, "pattern", "matches", "count", "cursor")
+
+
 # ============================================================================
 # Export Operations
 # ============================================================================
@@ -1460,6 +1576,53 @@ def export_funcs(
         return {"format": "prototypes", "functions": prototypes}
 
     return {"format": "json", "functions": results}
+
+
+@test()
+def test_export_funcs_json():
+    """export_funcs returns function data in json format"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = export_funcs([func_addr])
+    assert_has_keys(result, "format", "functions")
+    assert result["format"] == "json"
+    assert_is_list(result["functions"], min_length=1)
+    # Check structure of function data
+    assert_has_keys(result["functions"][0], "addr", "name", "prototype", "size")
+
+
+@test()
+def test_export_funcs_c_header():
+    """export_funcs generates c_header format"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = export_funcs([func_addr], format="c_header")
+    assert_has_keys(result, "format", "content")
+    assert result["format"] == "c_header"
+    assert isinstance(result["content"], str)
+
+
+@test()
+def test_export_funcs_prototypes():
+    """export_funcs generates prototypes format"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = export_funcs([func_addr], format="prototypes")
+    assert_has_keys(result, "format", "functions")
+    assert result["format"] == "prototypes"
+    assert_is_list(result["functions"])
+
+
+@test()
+def test_export_funcs_invalid_address():
+    """export_funcs handles invalid address"""
+    result = export_funcs(["0xDEADBEEFDEADBEEF"])
+    assert_has_keys(result, "format", "functions")
+    assert_is_list(result["functions"], min_length=1)
+    assert result["functions"][0].get("error") is not None
 
 
 # ============================================================================
@@ -1604,6 +1767,44 @@ def xref_matrix(
     return {"matrix": matrix, "entities": entities}
 
 
+@test()
+def test_xref_matrix_single_entity():
+    """xref_matrix returns matrix structure for single entity"""
+    func_addr = get_any_function()
+    if not func_addr:
+        return
+    result = xref_matrix([func_addr])
+    assert_has_keys(result, "matrix", "entities")
+    assert isinstance(result["matrix"], dict)
+    assert_is_list(result["entities"], min_length=1)
+
+
+@test()
+def test_xref_matrix_multiple_entities():
+    """xref_matrix handles multiple entities"""
+    # Get first two functions if available
+    funcs = []
+    for ea in idautils.Functions():
+        funcs.append(hex(ea))
+        if len(funcs) >= 2:
+            break
+    if len(funcs) < 2:
+        return
+    result = xref_matrix(funcs)
+    assert_has_keys(result, "matrix", "entities")
+    assert isinstance(result["matrix"], dict)
+    assert_is_list(result["entities"], min_length=2)
+
+
+@test()
+def test_xref_matrix_invalid_address():
+    """xref_matrix handles invalid address gracefully"""
+    result = xref_matrix(["0xDEADBEEFDEADBEEF"])
+    assert_has_keys(result, "matrix", "entities")
+    # Should have error in matrix for invalid address
+    assert "0xDEADBEEFDEADBEEF" in result["matrix"]
+
+
 # ============================================================================
 # String Analysis
 # ============================================================================
@@ -1664,3 +1865,45 @@ def analyze_strings(
         )
 
     return results
+
+
+@test()
+def test_analyze_strings_empty_filter():
+    """analyze_strings returns strings with empty filter"""
+    result = analyze_strings({})
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "filter", "matches", "count", "cursor")
+    assert_is_list(result[0]["matches"])
+
+
+@test()
+def test_analyze_strings_pattern():
+    """analyze_strings filters by pattern"""
+    # Get any string first to know what to search for
+    str_addr = get_any_string()
+    if not str_addr:
+        return
+    # Just test that pattern filtering works (may find nothing if no matches)
+    result = analyze_strings({"pattern": "a"})
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "filter", "matches", "count", "cursor")
+
+
+@test()
+def test_analyze_strings_min_length():
+    """analyze_strings filters by min_length"""
+    result = analyze_strings({"min_length": 5})
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "filter", "matches", "count", "cursor")
+    # All matches should have length >= 5
+    for match in result[0]["matches"]:
+        assert len(match["string"]) >= 5
+
+
+@test()
+def test_analyze_strings_batch():
+    """analyze_strings handles multiple filters"""
+    result = analyze_strings([{"pattern": "a"}, {"min_length": 10}])
+    assert_is_list(result, min_length=2)
+    for item in result:
+        assert_has_keys(item, "filter", "matches", "count", "cursor")

@@ -13,7 +13,7 @@ venv*/
 # Logs
 *.log
 
-# Test files
+# IDA database
 *.idb
 *.i64
 *.nam
@@ -21,7 +21,6 @@ venv*/
 *.id1
 *.id2
 *.til
-*.elf
 
 # Generated server files (historical)
 server_generated.py

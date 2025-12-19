@@ -1,9 +1,9 @@
 """Standalone test runner for IDA Pro MCP using idalib.
 
 Usage:
-    ida-mcp-test crackme03.elf
-    ida-mcp-test crackme03.elf --category api_core
-    ida-mcp-test crackme03.elf --pattern "*meta*"
+    ida-mcp-test tests/crackme03.elf
+    ida-mcp-test tests/crackme03.elf --category api_core
+    ida-mcp-test tests/crackme03.elf --pattern "*meta*"
 
 With coverage:
     uv run coverage run -m ida_pro_mcp.test crackme03.elf
@@ -27,10 +27,10 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  ida-mcp-test crackme03.elf
-  ida-mcp-test crackme03.elf --category api_core
-  ida-mcp-test crackme03.elf --pattern "*meta*"
-  ida-mcp-test crackme03.elf --stop-on-failure
+  ida-mcp-test tests/crackme03.elf
+  ida-mcp-test tests/crackme03.elf --category api_core
+  ida-mcp-test tests/crackme03.elf --pattern "*meta*"
+  ida-mcp-test tests/crackme03.elf --stop-on-failure
 
 With coverage:
   uv run coverage run -m ida_pro_mcp.test crackme03.elf

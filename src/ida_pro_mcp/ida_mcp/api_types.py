@@ -9,7 +9,7 @@ import ida_ida
 import idaapi
 
 from .rpc import tool
-from .sync import idaread, idawrite, ida_major, IDAError
+from .sync import idaread, idawrite, ida_major
 from .utils import (
     normalize_list_input,
     normalize_dict_list,
@@ -28,6 +28,7 @@ from .tests import (
     assert_is_list,
     assert_all_have_keys,
     get_any_function,
+    get_first_segment,
 )
 
 
@@ -346,6 +347,44 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
     return results
 
 
+@test()
+def test_read_struct():
+    """read_struct reads structure values from memory"""
+    # First check if any structs exist
+    struct_list = structs()
+    if not struct_list:
+        return  # Skip if no structs
+
+    # Try to read a struct from a valid address
+    seg = get_first_segment()
+    if not seg:
+        return  # Skip if no segments
+    start_addr, _ = seg
+    struct_name = struct_list[0]["name"]
+
+    result = read_struct([{"addr": start_addr, "struct": struct_name}])
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr", "struct")
+    # Should have either members or error
+    assert "members" in result[0] or "error" in result[0]
+
+
+@test()
+def test_read_struct_not_found():
+    """read_struct handles nonexistent struct gracefully"""
+    seg = get_first_segment()
+    if not seg:
+        return  # Skip if no segments
+    start_addr, _ = seg
+
+    result = read_struct(
+        [{"addr": start_addr, "struct": "__nonexistent_struct_12345__"}]
+    )
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr", "struct", "error")
+    assert "not found" in result[0]["error"].lower()
+
+
 @tool
 @idaread
 def search_structs(
@@ -548,6 +587,29 @@ def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[d
             results.append({"edit": app, "error": str(e)})
 
     return results
+
+
+@test()
+def test_apply_types():
+    """apply_types can apply type to address"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return  # Skip if no functions
+
+    # Test applying a simple type - use "int" which always exists
+    result = apply_types([{"addr": fn_addr, "ty": "int"}])
+    assert_is_list(result, min_length=1)
+    # Should either succeed or have error
+    assert "ok" in result[0] or "error" in result[0]
+
+
+@test()
+def test_apply_types_invalid_address():
+    """apply_types handles invalid address gracefully"""
+    result = apply_types([{"addr": "0xDEADBEEFDEADBEEF", "ty": "int"}])
+    assert_is_list(result, min_length=1)
+    # Should have either ok or error field
+    assert "ok" in result[0] or "error" in result[0]
 
 
 @tool

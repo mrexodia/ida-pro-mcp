@@ -206,19 +206,19 @@ The project uses a custom test framework with tests defined inline in `api_*.py`
 
 ```bash
 # Run all tests on a binary
-uv run ida-mcp-test crackme03.elf
+uv run ida-mcp-test tests/crackme03.elf
 
 # Run specific category
-uv run ida-mcp-test crackme03.elf --category api_core
+uv run ida-mcp-test tests/crackme03.elf --category api_core
 
 # Run tests matching pattern
-uv run ida-mcp-test crackme03.elf --pattern "*decompile*"
+uv run ida-mcp-test tests/crackme03.elf --pattern "*decompile*"
 
 # List available tests
-uv run ida-mcp-test crackme03.elf --list
+uv run ida-mcp-test tests/crackme03.elf --list
 
 # Stop on first failure
-uv run ida-mcp-test crackme03.elf --stop-on-failure
+uv run ida-mcp-test tests/crackme03.elf --stop-on-failure
 ```
 
 ### Running Tests from IDA Console

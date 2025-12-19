@@ -241,25 +241,25 @@ run_tests(verbose=False)
 
 ```bash
 # Basic usage
-ida-mcp-test crackme03.elf
+ida-mcp-test tests/crackme03.elf
 
 # Filter by category
-ida-mcp-test crackme03.elf --category api_core
+ida-mcp-test tests/crackme03.elf --category api_core
 
 # Filter by pattern
-ida-mcp-test crackme03.elf --pattern "*meta*"
+ida-mcp-test tests/crackme03.elf --pattern "*meta*"
 
 # List available tests
-ida-mcp-test crackme03.elf --list
+ida-mcp-test tests/crackme03.elf --list
 
 # Stop on first failure
-ida-mcp-test crackme03.elf --stop-on-failure
+ida-mcp-test tests/crackme03.elf --stop-on-failure
 
 # With code coverage
-ida-mcp-test crackme03.elf --coverage
+ida-mcp-test tests/crackme03.elf --coverage
 
 # HTML coverage report
-ida-mcp-test crackme03.elf --coverage --coverage-report html
+ida-mcp-test tests/crackme03.elf --coverage --coverage-report html
 ```
 
 ## Code Coverage
@@ -488,7 +488,7 @@ for r in results.results:
 
 4. **Run the test**:
    ```bash
-   ida-mcp-test crackme03.elf --pattern "test_my_function"
+   ida-mcp-test tests/crackme03.elf --pattern "test_my_function"
    ```
 
 ### Best Practices

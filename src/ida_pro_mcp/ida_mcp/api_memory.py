@@ -6,6 +6,8 @@ granularities (bytes, u8, u16, u32, u64, strings) and patching binary data.
 
 from typing import Annotated
 import ida_bytes
+import ida_nalt
+import ida_typeinf
 import idaapi
 
 from .rpc import tool
@@ -268,11 +270,6 @@ def test_get_string():
 
 
 def get_global_variable_value_internal(ea: int) -> str:
-    import ida_typeinf
-    import ida_nalt
-    import ida_bytes
-    from .sync import IDAError
-
     tif = ida_typeinf.tinfo_t()
     if not ida_nalt.get_tinfo(tif, ea):
         if not ida_bytes.has_any_name(ea):
@@ -385,3 +382,59 @@ def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[dict]:
             results.append({"addr": patch.get("addr"), "size": 0, "error": str(e)})
 
     return results
+
+
+@test()
+def test_patch():
+    """patch modifies bytes and can be restored"""
+    seg = get_first_segment()
+    if not seg:
+        return  # Skip if no segments
+
+    start_addr, _ = seg
+
+    # Read original bytes
+    original = get_bytes({"addr": start_addr, "size": 1})
+    if not original or not original[0].get("data"):
+        return  # Skip if can't read original bytes
+
+    # Parse original byte (format is "0xNN")
+    original_data = original[0]["data"].split()[0]  # Get first byte
+    original_hex = original_data.replace("0x", "")  # Convert "0x90" -> "90"
+
+    try:
+        # Patch with a different byte (0x00 if different, else 0x01)
+        test_byte = "00" if original_hex != "00" else "01"
+        result = patch([{"addr": start_addr, "data": test_byte}])
+        assert_is_list(result, min_length=1)
+        assert_has_keys(result[0], "addr", "size")
+        # Verify either success or error key
+        assert result[0].get("ok") is True or result[0].get("error") is not None
+        if result[0].get("ok"):
+            assert result[0]["size"] == 1
+    finally:
+        # Restore original byte
+        patch([{"addr": start_addr, "data": original_hex}])
+
+
+@test()
+def test_patch_invalid_address():
+    """patch handles invalid address gracefully"""
+    result = patch([{"addr": "invalid_address", "data": "90"}])
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr", "error")
+    assert result[0]["error"] is not None
+
+
+@test()
+def test_patch_invalid_hex_data():
+    """patch handles invalid hex data gracefully"""
+    seg = get_first_segment()
+    if not seg:
+        return  # Skip if no segments
+
+    start_addr, _ = seg
+    result = patch([{"addr": start_addr, "data": "not_valid_hex"}])
+    assert_is_list(result, min_length=1)
+    assert_has_keys(result[0], "addr", "error")
+    assert result[0]["error"] is not None

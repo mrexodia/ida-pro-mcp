@@ -2,7 +2,7 @@
 
 ## Phase 1: Framework + Basic Tests
 
-**Status**: ✅ Complete  
+**Status**: ✅ Complete
 **Goal**: Establish working test infrastructure with basic smoke tests
 
 ### Tasks
@@ -22,7 +22,7 @@
 | Update `__init__.py` exports | ✅ Complete | Export `run_tests`, `test` |
 | Add `api_core.py` tests | ✅ Complete | 8 tests, placed after each function |
 | Test framework in IDA console | ✅ Complete | `from ida_mcp.tests import run_tests` works |
-| Test standalone runner | ✅ Complete | `ida-mcp-test crackme03.elf` works |
+| Test standalone runner | ✅ Complete | `ida-mcp-test tests/crackme03.elf` works |
 | Add coverage configuration | ✅ Complete | `pyproject.toml` updated with `[tool.coverage.*]` |
 
 ### Phase 1 Test List (api_core)
@@ -51,7 +51,7 @@
 ### Exit Criteria
 
 - [x] `from ida_mcp.tests import run_tests; run_tests()` works in IDA console
-- [x] `ida-mcp-test crackme03.elf` works from command line
+- [x] `ida-mcp-test tests/crackme03.elf` works from command line
 - [x] All Phase 1 tests pass on `crackme03.elf`
 - [x] Verbose output shows pass/fail with tracebacks for failures
 
@@ -59,14 +59,14 @@
 
 ## Phase 2: Category Implementation (Parallel)
 
-**Status**: ✅ Complete  
+**Status**: ✅ Complete
 **Goal**: Comprehensive test coverage across all safe API modules
 
 All categories implemented and passing.
 
 ### Category: api_analysis
 
-**Tests**: 15  
+**Tests**: 15
 **Status**: ✅ Complete
 
 | Test | Status | Description |
@@ -89,7 +89,7 @@ All categories implemented and passing.
 
 ### Category: api_memory
 
-**Tests**: 8  
+**Tests**: 8
 **Status**: ✅ Complete
 
 | Test | Status | Description |
@@ -105,7 +105,7 @@ All categories implemented and passing.
 
 ### Category: api_types
 
-**Tests**: 6  
+**Tests**: 6
 **Status**: ✅ Complete
 
 | Test | Status | Description |
@@ -119,7 +119,7 @@ All categories implemented and passing.
 
 ### Category: api_modify
 
-**Tests**: 5  
+**Tests**: 5
 **Status**: ✅ Complete
 
 | Test | Status | Description |
@@ -132,7 +132,7 @@ All categories implemented and passing.
 
 ### Category: api_stack
 
-**Tests**: 3  
+**Tests**: 3
 **Status**: ✅ Complete
 
 | Test | Status | Description |
@@ -143,7 +143,7 @@ All categories implemented and passing.
 
 ### Category: api_resources
 
-**Tests**: 10  
+**Tests**: 10
 **Status**: ✅ Complete
 
 | Test | Status | Description |
@@ -191,19 +191,19 @@ During test implementation, the following bugs were discovered and fixed:
 
 ```bash
 # Run all tests
-uv run ida-mcp-test crackme03.elf
+uv run ida-mcp-test tests/crackme03.elf
 
 # Run specific category
-uv run ida-mcp-test crackme03.elf --category api_core
+uv run ida-mcp-test tests/crackme03.elf --category api_core
 
 # Run tests matching pattern
-uv run ida-mcp-test crackme03.elf --pattern "*decompile*"
+uv run ida-mcp-test tests/crackme03.elf --pattern "*decompile*"
 
 # List available tests
-uv run ida-mcp-test crackme03.elf --list
+uv run ida-mcp-test tests/crackme03.elf --list
 
 # Stop on first failure
-uv run ida-mcp-test crackme03.elf --stop-on-failure
+uv run ida-mcp-test tests/crackme03.elf --stop-on-failure
 ```
 
 ---
@@ -211,7 +211,7 @@ uv run ida-mcp-test crackme03.elf --stop-on-failure
 ## Legend
 
 - ⬜ Pending / Not Started
-- 🔄 In Progress  
+- 🔄 In Progress
 - ✅ Complete / Pass
 - ⏭️ Skipped
 - ❌ Blocked / Failed

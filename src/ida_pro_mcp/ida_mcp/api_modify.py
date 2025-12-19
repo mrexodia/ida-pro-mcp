@@ -454,7 +454,7 @@ def test_rename_global_roundtrip():
 
     global_info = globals_result[0]["data"][0]
     original_name = global_info["name"]
-    global_addr = global_info["addr"]
+    global_info["addr"]
 
     # Skip system globals that can't be renamed
     if original_name.startswith("__") or original_name.startswith("."):
