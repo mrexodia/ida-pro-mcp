@@ -9,7 +9,7 @@ import ida_nalt
 import ida_typeinf
 import ida_segment
 
-from .rpc import tool, test
+from .rpc import tool
 from .sync import idaread
 from .utils import (
     Metadata,
@@ -34,6 +34,14 @@ from .utils import (
     DEMANGLED_TO_EA,
 )
 from .sync import IDAError
+from .tests import (
+    test,
+    assert_has_keys,
+    assert_valid_address,
+    assert_non_empty,
+    assert_is_list,
+    get_any_function,
+)
 
 
 # ============================================================================
@@ -101,15 +109,15 @@ def idb_meta() -> Metadata:
 
 @test()
 def test_idb_meta():
+    """idb_meta returns valid metadata with all required fields"""
     meta = idb_meta()
-    assert "path" in meta
-    assert "module" in meta
-    assert "base" in meta
-    assert "size" in meta
-    assert "md5" in meta
-    assert "sha256" in meta
-    assert "crc32" in meta
-    assert "filesize" in meta
+    assert_has_keys(
+        meta, "path", "module", "base", "size", "md5", "sha256", "crc32", "filesize"
+    )
+    assert_non_empty(meta["path"])
+    assert_non_empty(meta["module"])
+    assert_valid_address(meta["base"])
+    assert_valid_address(meta["size"])
 
 
 @tool
@@ -160,6 +168,30 @@ def lookup_funcs(
             results.append({"query": query, "fn": None, "error": str(e)})
 
     return results
+
+
+@test()
+def test_lookup_funcs_by_address():
+    """lookup_funcs can find function by address"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return  # Skip if no functions
+
+    result = lookup_funcs(fn_addr)
+    assert_is_list(result, min_length=1)
+    assert result[0]["fn"] is not None
+    assert result[0]["error"] is None
+    assert_has_keys(result[0]["fn"], "addr", "name", "size")
+
+
+@test()
+def test_lookup_funcs_invalid():
+    """lookup_funcs returns error for invalid address"""
+    # Use an address that's unlikely to be a valid function
+    result = lookup_funcs("0xDEADBEEFDEADBEEF")
+    assert_is_list(result, min_length=1)
+    assert result[0]["fn"] is None
+    assert result[0]["error"] is not None
 
 
 @tool
@@ -245,6 +277,20 @@ def int_convert(
     return results
 
 
+@test()
+def test_int_convert():
+    """int_convert properly converts numbers"""
+    result = int_convert({"text": "0x41"})
+    assert_is_list(result, min_length=1)
+    assert result[0]["error"] is None
+    assert result[0]["result"] is not None
+    conv = result[0]["result"]
+    assert_has_keys(conv, "decimal", "hexadecimal", "bytes", "binary")
+    assert conv["decimal"] == "65"
+    assert conv["hexadecimal"] == "0x41"
+    assert conv["ascii"] == "A"
+
+
 @tool
 @idaread
 def list_funcs(
@@ -273,6 +319,38 @@ def list_funcs(
         results.append(paginate(filtered, offset, count))
 
     return results
+
+
+@test()
+def test_list_funcs():
+    """list_funcs returns functions with proper structure"""
+    result = list_funcs({})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "data", "next_offset")
+    assert_is_list(page["data"], min_length=1)
+    # Check first function has required keys
+    fn = page["data"][0]
+    assert_has_keys(fn, "addr", "name", "size")
+    assert_valid_address(fn["addr"])
+
+
+@test()
+def test_list_funcs_pagination():
+    """list_funcs pagination works correctly"""
+    # Get first 2 functions
+    result1 = list_funcs({"offset": 0, "count": 2})
+    assert_is_list(result1, min_length=1)
+    page1 = result1[0]
+    assert len(page1["data"]) <= 2
+
+    # Get next 2 functions
+    if page1["next_offset"] is not None:
+        result2 = list_funcs({"offset": page1["next_offset"], "count": 2})
+        page2 = result2[0]
+        # Verify we got different functions (if there are enough)
+        if page2["data"]:
+            assert page1["data"][0]["addr"] != page2["data"][0]["addr"]
 
 
 @tool
@@ -368,6 +446,20 @@ def strings(
     return results
 
 
+@test()
+def test_strings():
+    """strings returns string list with proper structure"""
+    result = strings({})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "data", "next_offset")
+    # If there are strings, check structure
+    if page["data"]:
+        string_item = page["data"][0]
+        assert_has_keys(string_item, "addr", "length", "string")
+        assert_valid_address(string_item["addr"])
+
+
 def ida_segment_perm2str(perm: int) -> str:
     perms = []
     if perm & ida_segment.SEGPERM_READ:
@@ -405,6 +497,17 @@ def segments() -> list[Segment]:
             )
         )
     return segments
+
+
+@test()
+def test_segments():
+    """segments returns list of memory segments"""
+    result = segments()
+    assert_is_list(result, min_length=1)
+    seg = result[0]
+    assert_has_keys(seg, "name", "start", "end", "size", "permissions")
+    assert_valid_address(seg["start"])
+    assert_valid_address(seg["end"])
 
 
 @tool

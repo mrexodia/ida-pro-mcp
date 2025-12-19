@@ -23,5 +23,10 @@ venv*/
 *.til
 *.elf
 
-# Generated server files
+# Generated server files (historical)
 server_generated.py
+
+# Coverage
+htmlcov/
+.coverage*
+coverage.xml

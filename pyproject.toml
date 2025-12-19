@@ -34,9 +34,28 @@ build-backend = "setuptools.build_meta"
 [project.scripts]
 ida-pro-mcp = "ida_pro_mcp.server:main"
 idalib-mcp = "ida_pro_mcp.idalib_server:main"
+ida-mcp-test = "ida_pro_mcp.test:main"
 
 [tool.pyright]
 include = ["src/ida_pro_mcp"]
 
 [tool.ruff]
 exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.13.0",
+]
+
+[tool.coverage.run]
+source = ["src/ida_pro_mcp"]
+omit = [
+    "*/zeromcp/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]

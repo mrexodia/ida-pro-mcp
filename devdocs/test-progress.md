@@ -2,7 +2,7 @@
 
 ## Phase 1: Framework + Basic Tests
 
-**Status**: In Progress  
+**Status**: Complete  
 **Goal**: Establish working test infrastructure with basic smoke tests
 
 ### Tasks
@@ -17,62 +17,63 @@
 | Implement `run_tests()` function | ✅ Complete | Pattern matching, verbose output |
 | Implement test helper assertions | ✅ Complete | `assert_*` functions |
 | Implement test helper utilities | ✅ Complete | `get_any_*` functions |
-| Add `main()` for standalone runner | ✅ Complete | idalib-based entry point |
+| Create `test.py` standalone runner | ✅ Complete | idalib-based entry point |
 | Add `ida-mcp-test` to pyproject.toml | ✅ Complete | Script entry point |
 | Update `__init__.py` exports | ✅ Complete | Export `run_tests`, `test` |
-| Update `api_core.py` test import | ✅ Complete | Changed to `from .tests` |
-| Rewrite `test_idb_meta` | ✅ Complete | Uses new helpers |
-| Add basic `api_core.py` tests | ✅ Complete | 8 tests total |
-| Test framework in IDA console | ⬜ Pending | Verify `run_tests()` works |
-| Test standalone runner | ⬜ Pending | Verify `ida-mcp-test` works |
+| Add `api_core.py` tests | ✅ Complete | 8 tests, placed after each function |
+| Test framework in IDA console | ✅ Complete | `from ida_mcp.tests import run_tests` works |
+| Test standalone runner | ✅ Complete | `ida-mcp-test crackme03.elf` works |
+| Add coverage configuration | ✅ Complete | `pyproject.toml` updated with `[tool.coverage.*]` |
 
 ### Phase 1 Test List (api_core)
 
 | Test | Status | Description |
 |------|--------|-------------|
-| `test_idb_meta` | ✅ | Metadata has required keys and valid values |
-| `test_list_funcs` | ✅ | Returns functions with proper structure |
-| `test_list_funcs_pagination` | ✅ | Offset/count parameters work |
-| `test_lookup_funcs_by_address` | ✅ | Can look up function by address |
-| `test_lookup_funcs_invalid` | ✅ | Invalid address raises IDAError |
-| `test_strings` | ✅ | Returns strings with proper structure |
-| `test_int_convert` | ✅ | Number conversion works |
-| `test_segments` | ✅ | Returns segments list |
+| `test_idb_meta` | ✅ Pass | Metadata has required keys and valid values |
+| `test_list_funcs` | ✅ Pass | Returns functions with proper structure |
+| `test_list_funcs_pagination` | ✅ Pass | Offset/count parameters work |
+| `test_lookup_funcs_by_address` | ✅ Pass | Can look up function by address |
+| `test_lookup_funcs_invalid` | ✅ Pass | Invalid address returns error (not crash) |
+| `test_strings` | ✅ Pass | Returns strings with proper structure |
+| `test_int_convert` | ✅ Pass | Number conversion works |
+| `test_segments` | ✅ Pass | Returns segments list |
 
 ### Deliverables
 
 1. ✅ `devdocs/test-plan.md` - Test plan document
 2. ✅ `devdocs/test-progress.md` - Progress tracking (this file)
-3. ✅ `src/ida_pro_mcp/ida_mcp/tests.py` - Complete test framework
-4. ✅ Updated `pyproject.toml` with `ida-mcp-test` entry point
-5. ✅ Updated `api_core.py` with 8 working tests
-6. ✅ Updated `__init__.py` with exports
+3. ✅ `src/ida_pro_mcp/ida_mcp/tests.py` - Test framework
+4. ✅ `src/ida_pro_mcp/test.py` - Standalone runner
+5. ✅ Updated `pyproject.toml` with `ida-mcp-test` entry point and coverage config
+6. ✅ Updated `api_core.py` with 8 working tests (inline after each function)
+7. ✅ Updated `__init__.py` with exports
 
 ### Exit Criteria
 
-- [ ] `from ida_mcp.tests import run_tests; run_tests()` works in IDA console
-- [ ] `ida-mcp-test crackme03.elf` works from command line
-- [ ] All Phase 1 tests pass on `crackme03.elf`
-- [ ] Verbose output shows pass/fail with tracebacks for failures
+- [x] `from ida_mcp.tests import run_tests; run_tests()` works in IDA console
+- [x] `ida-mcp-test crackme03.elf` works from command line
+- [x] All Phase 1 tests pass on `crackme03.elf`
+- [x] Verbose output shows pass/fail with tracebacks for failures
 
 ---
 
 ## Phase 2: Category Implementation (Parallel)
 
-**Status**: Blocked on Phase 1  
+**Status**: In Progress  
 **Goal**: Comprehensive test coverage across all safe API modules
 
 Each category can be implemented in parallel by different agents.
 
 ### Category: api_analysis
 
-**Estimated tests**: 12-15
+**Estimated tests**: 12-15  
+**Status**: 🔄 In Progress (3 tests added)
 
 | Test | Status | Description |
 |------|--------|-------------|
-| `test_decompile_valid_function` | ⬜ | Decompile returns code for valid function |
-| `test_decompile_invalid_address` | ⬜ | Raises IDAError for invalid address |
-| `test_decompile_batch` | ⬜ | Handles multiple addresses |
+| `test_decompile_valid_function` | ✅ Done | Decompile returns code for valid function |
+| `test_decompile_invalid_address` | ✅ Done | Returns error for invalid address |
+| `test_decompile_batch` | ✅ Done | Handles multiple addresses |
 | `test_disasm_valid_function` | ⬜ | Disassembly returns lines |
 | `test_disasm_pagination` | ⬜ | Offset/max_instructions work |
 | `test_xrefs_to` | ⬜ | Returns cross-references |
@@ -161,13 +162,43 @@ Each category can be implemented in parallel by different agents.
 |-------|----------|-------|--------|
 | 1 | framework | - | ✅ Complete |
 | 1 | api_core | 8 | ✅ Complete |
-| 2 | api_analysis | 15 | ⬜ Blocked |
-| 2 | api_memory | 8 | ⬜ Blocked |
-| 2 | api_types | 6 | ⬜ Blocked |
-| 2 | api_modify | 5 | ⬜ Blocked |
-| 2 | api_stack | 3 | ⬜ Blocked |
-| 2 | api_resources | 10 | ⬜ Blocked |
-| **Total** | | **~55** | |
+| 2 | api_analysis | 3/15 | 🔄 In Progress |
+| 2 | api_memory | 0/8 | ⬜ Ready |
+| 2 | api_types | 0/6 | ⬜ Ready |
+| 2 | api_modify | 0/5 | ⬜ Ready |
+| 2 | api_stack | 0/3 | ⬜ Ready |
+| 2 | api_resources | 0/10 | ⬜ Ready |
+| **Total** | | **11/~55** | |
+
+---
+
+## Continuation Prompt
+
+To continue implementing Phase 2 tests:
+
+```
+Continue implementing Phase 2 tests for ida-pro-mcp. Phase 1 is complete with the test framework in place.
+
+Key files to reference:
+- `devdocs/test-plan.md` - Overall test plan
+- `devdocs/test-progress.md` - Progress tracking with specific tests needed
+- `devdocs/test-framework.md` - Patterns and helpers documentation
+- `src/ida_pro_mcp/ida_mcp/api_core.py` - Example of inline tests after functions
+
+To implement tests for a category (e.g., api_analysis):
+1. Read the target `api_*.py` file
+2. Import test helpers at top: `from .tests import test, assert_has_keys, ...`
+3. Add `@test()` functions immediately after each function to test
+4. Use binary-agnostic assertions (validate structure, not specific values)
+5. Run tests: `uv run ida-mcp-test crackme03.elf --category api_analysis`
+
+Test binary: `crackme03.elf` in project root
+
+Key patterns:
+- Use `get_any_function()` to get a valid function address
+- For error tests: `try: ... except IDAError: pass`
+- Cleanup pattern for modify tests: `try: modify() finally: restore()`
+```
 
 ---
 
@@ -175,6 +206,6 @@ Each category can be implemented in parallel by different agents.
 
 - ⬜ Pending / Not Started
 - 🔄 In Progress  
-- ✅ Complete
+- ✅ Complete / Pass
 - ⏭️ Skipped
 - ❌ Blocked / Failed

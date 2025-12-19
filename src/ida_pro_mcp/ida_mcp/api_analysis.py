@@ -15,7 +15,16 @@ import ida_search
 import ida_idaapi
 import ida_xref
 from .rpc import tool
-from .sync import idaread, is_window_active
+from .sync import idaread, is_window_active, IDAError
+from .tests import (
+    test,
+    assert_has_keys,
+    assert_non_empty,
+    assert_is_list,
+    get_any_function,
+    get_any_string,
+    get_first_segment,
+)
 from .utils import (
     parse_address,
     normalize_list_input,
@@ -130,6 +139,35 @@ def decompile(
     return results
 
 
+@test()
+def test_decompile_valid_function():
+    """Decompile returns code for valid function"""
+    func_addr = get_any_function()
+    assert func_addr is not None, "No functions in IDB"
+    result = decompile(func_addr)
+    assert len(result) == 1, f"Expected 1 result, got {len(result)}"
+    assert_has_keys(result[0], "addr", "code")
+    assert result[0]["code"] is not None, "Code should not be None"
+    assert_non_empty(result[0]["code"])
+
+
+@test()
+def test_decompile_invalid_address():
+    """Decompile returns error for invalid address"""
+    result = decompile("0xDEADBEEF")
+    assert len(result) == 1
+    assert "error" in result[0], "Expected error for invalid address"
+
+
+@test()
+def test_decompile_batch():
+    """Decompile handles multiple addresses"""
+    func_addr = get_any_function()
+    assert func_addr is not None, "No functions in IDB"
+    result = decompile([func_addr, func_addr])
+    assert len(result) == 2, f"Expected 2 results, got {len(result)}"
+
+
 @tool
 @idaread
 def disasm(
@@ -196,7 +234,10 @@ def disasm(
                 header_addr = start
 
                 ea = start
-                while ea < seg.end_ea and len(all_instructions) < max_instructions + offset:
+                while (
+                    ea < seg.end_ea
+                    and len(all_instructions) < max_instructions + offset
+                ):
                     if ea == idaapi.BADADDR:
                         break
 

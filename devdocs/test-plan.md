@@ -408,6 +408,39 @@ Based on GitHub issues:
 - Issue #200: APIs returning invalid responses  
 - Issue #208: Strings operation timing out
 
+## Code Coverage
+
+Coverage is configured in `pyproject.toml` to only include project source files:
+
+```toml
+[tool.coverage.run]
+source = ["src/ida_pro_mcp"]
+omit = [
+    "*/zeromcp/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+```
+
+### Running Coverage
+
+```bash
+# Run tests with coverage
+uv run coverage run -m ida_pro_mcp.test crackme03.elf
+
+# Show coverage report
+uv run coverage report --show-missing
+
+# Generate HTML report
+uv run coverage html
+open htmlcov/index.html
+```
+
 ## Future Extensions
 
 ### Expression-Based Tests (Future)

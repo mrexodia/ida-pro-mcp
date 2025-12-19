@@ -191,7 +191,100 @@ from .utils import pattern_filter
 filtered = pattern_filter(items, "name", pattern)  # Glob-style matching
 ```
 
-## Testing Workflow
+## Testing
+
+### Test Framework Overview
+
+The project uses a custom test framework with tests defined inline in `api_*.py` files using the `@test` decorator. Tests are placed immediately after the function they test.
+
+**Key files**:
+- `ida_mcp/tests.py`: Test framework (decorator, runner, helpers)
+- `test.py`: Standalone idalib-based test runner
+- `devdocs/test-framework.md`: Detailed documentation
+
+### Running Tests
+
+```bash
+# Run all tests on a binary
+uv run ida-mcp-test crackme03.elf
+
+# Run specific category
+uv run ida-mcp-test crackme03.elf --category api_core
+
+# Run tests matching pattern
+uv run ida-mcp-test crackme03.elf --pattern "*decompile*"
+
+# List available tests
+uv run ida-mcp-test crackme03.elf --list
+
+# Stop on first failure
+uv run ida-mcp-test crackme03.elf --stop-on-failure
+```
+
+### Running Tests from IDA Console
+
+```python
+from ida_mcp.tests import run_tests
+run_tests()                      # Run all tests
+run_tests(category="api_core")   # Run specific category
+run_tests(pattern="*meta*")      # Run tests matching pattern
+```
+
+### Code Coverage
+
+```bash
+# Run tests with coverage
+uv run coverage run -m ida_pro_mcp.test crackme03.elf
+
+# Show coverage report
+uv run coverage report --show-missing
+
+# Generate HTML report
+uv run coverage html
+open htmlcov/index.html
+```
+
+### Writing Tests
+
+Tests are placed immediately after the function they test:
+
+```python
+from .tests import test, assert_has_keys, assert_valid_address
+
+@tool
+@idaread
+def my_function(...):
+    ...
+
+
+@test()
+def test_my_function():
+    """Description of what the test verifies"""
+    result = my_function(...)
+    assert_has_keys(result, "key1", "key2")
+    assert_valid_address(result["addr"])
+```
+
+**Available assertion helpers**: `assert_has_keys`, `assert_valid_address`, `assert_non_empty`, `assert_is_list`, `assert_all_have_keys`
+
+**Test data helpers**: `get_any_function()`, `get_any_string()`, `get_first_segment()`
+
+**Error handling**: Tools raise `IDAError` - catch and assert on these:
+```python
+from .sync import IDAError
+
+@test()
+def test_invalid_input():
+    try:
+        my_function("invalid")
+        assert False, "Expected IDAError"
+    except IDAError:
+        pass  # Expected
+```
+
+See `devdocs/test-framework.md` for complete documentation.
+
+## Manual Testing Workflow
 
 1. **Install plugin symlink**: `uv run ida-pro-mcp --install` (one-time)
 2. **Load binary in IDA**: Plugin appears under Edit → Plugins → MCP (Ctrl+Alt+M)
