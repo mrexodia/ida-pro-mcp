@@ -107,6 +107,27 @@ def _value_to_le_bytes(value: int) -> tuple[bytes, int, int] | None:
     return struct.pack(fmt, value), size, value
 
 
+def _value_candidates_for_immediate(value: int) -> list[tuple[int, int, bytes]]:
+    candidates: list[tuple[int, int, bytes]] = []
+
+    def add(size: int, signed_val: int):
+        if size == 4:
+            masked = signed_val & 0xFFFFFFFF
+            if not (-0x80000000 <= signed_val <= 0x7FFFFFFF):
+                return
+            b = struct.pack("<I", masked)
+        else:
+            masked = signed_val & 0xFFFFFFFFFFFFFFFF
+            if not (-0x8000000000000000 <= signed_val <= 0x7FFFFFFFFFFFFFFF):
+                return
+            b = struct.pack("<Q", masked)
+        candidates.append((masked, size, b))
+
+    add(4, value)
+    add(8, value)
+    return candidates
+
+
 def _resolve_immediate_insn_start(
     match_ea: int,
     value: int,
@@ -1045,8 +1066,8 @@ def search(
             skipped = 0
             more = False
             try:
-                packed = _value_to_le_bytes(value)
-                if packed is None:
+                candidates = _value_candidates_for_immediate(value)
+                if not candidates:
                     results.append(
                         {
                             "query": value,
@@ -1058,53 +1079,37 @@ def search(
                     )
                     continue
 
-                pattern_bytes, _, normalized = packed
-                alt_value = normalized if normalized != value else None
-                pattern_str = " ".join(f"{b:02X}" for b in pattern_bytes)
-                compiled = ida_bytes.compiled_binpat_vec_t()
-                err = ida_bytes.parse_binpat_str(
-                    compiled, ida_ida.inf_get_min_ea(), pattern_str, 16
-                )
-                if err:
-                    results.append(
-                        {
-                            "query": value,
-                            "matches": [],
-                            "count": 0,
-                            "cursor": {"done": True},
-                            "error": f"Failed to compile pattern: {pattern_str}",
-                        }
-                    )
-                    continue
-
                 seen_insn = set()
                 for seg_ea in idautils.Segments():
                     seg = idaapi.getseg(seg_ea)
                     if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
                         continue
-                    ea = seg.start_ea
-                    while ea != idaapi.BADADDR and ea < seg.end_ea:
-                        ea = ida_bytes.bin_search(
-                            ea, seg.end_ea, compiled, ida_bytes.BIN_SEARCH_FORWARD
-                        )
-                        if ea == idaapi.BADADDR:
+                    for normalized, size, pattern_bytes in candidates:
+                        ea = seg.start_ea
+                        while ea != idaapi.BADADDR and ea < seg.end_ea:
+                            ea = ida_bytes.bin_search(
+                                ea, seg.end_ea, pattern_bytes, b"\xFF" * size, size, ida_bytes.BIN_SEARCH_FORWARD
+                            )
+                            if ea == idaapi.BADADDR:
+                                break
+
+                            insn_start = _resolve_immediate_insn_start(
+                                ea, value, seg.start_ea, normalized
+                            )
+                            if insn_start is not None and insn_start not in seen_insn:
+                                seen_insn.add(insn_start)
+                                if skipped < offset:
+                                    skipped += 1
+                                else:
+                                    matches.append(hex(insn_start))
+                                    if len(matches) >= limit:
+                                        more = True
+                                        break
+
+                            ea += 1
+
+                        if more:
                             break
-
-                        insn_start = _resolve_immediate_insn_start(
-                            ea, value, seg.start_ea, alt_value
-                        )
-                        if insn_start is not None and insn_start not in seen_insn:
-                            seen_insn.add(insn_start)
-                            if skipped < offset:
-                                skipped += 1
-                            else:
-                                matches.append(hex(insn_start))
-                                if len(matches) >= limit:
-                                    more = True
-                                    break
-
-                        ea += 1
-
                     if more:
                         break
             except Exception:
