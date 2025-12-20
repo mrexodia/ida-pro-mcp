@@ -15,7 +15,7 @@ import ida_search
 import ida_idaapi
 import ida_xref
 from .rpc import tool
-from .sync import idaread, is_window_active
+from .sync import idasync, is_window_active
 from .tests import (
     test,
     assert_has_keys,
@@ -94,7 +94,7 @@ def _get_cached_strings_dict() -> list[dict]:
 
 
 @tool
-@idaread
+@idasync
 def decompile(
     addrs: Annotated[list[str] | str, "Function addresses to decompile"],
 ) -> list[dict]:
@@ -168,7 +168,7 @@ def test_decompile_batch():
 
 
 @tool
-@idaread
+@idasync
 def disasm(
     addrs: Annotated[list[str] | str, "Function addresses to disassemble"],
     max_instructions: Annotated[
@@ -379,7 +379,7 @@ def test_disasm_data_segment():
 
 
 @tool
-@idaread
+@idasync
 def xrefs_to(
     addrs: Annotated[list[str] | str, "Addresses to find cross-references to"],
 ) -> list[dict]:
@@ -429,7 +429,7 @@ def test_xrefs_to_invalid():
 
 
 @tool
-@idaread
+@idasync
 def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[dict]:
     """Get cross-references to structure fields"""
     if isinstance(queries, dict):
@@ -545,7 +545,7 @@ def test_xrefs_to_field_batch():
 
 
 @tool
-@idaread
+@idasync
 def callees(
     addrs: Annotated[list[str] | str, "Function addresses to get callees for"],
 ) -> list[dict]:
@@ -640,7 +640,7 @@ def test_callees_invalid_address():
 
 
 @tool
-@idaread
+@idasync
 def callers(
     addrs: Annotated[list[str] | str, "Function addresses to get callers for"],
 ) -> list[dict]:
@@ -686,7 +686,7 @@ def test_callers():
 
 
 @tool
-@idaread
+@idasync
 def entrypoints() -> list[Function]:
     """Get entry points"""
     result = []
@@ -716,7 +716,7 @@ def test_entrypoints():
 
 
 @tool
-@idaread
+@idasync
 def analyze_funcs(
     addrs: Annotated[list[str] | str, "Function addresses to comprehensively analyze"],
 ) -> list[FunctionAnalysis]:
@@ -840,7 +840,7 @@ def test_analyze_funcs():
 
 
 @tool
-@idaread
+@idasync
 def find_bytes(
     patterns: Annotated[
         list[str] | str, "Byte patterns to search for (e.g. '48 8B ?? ??')"
@@ -919,7 +919,7 @@ def test_find_bytes():
 
 
 @tool
-@idaread
+@idasync
 def find_insns(
     sequences: Annotated[
         list[list[str]] | list[str], "Instruction mnemonic sequences to search for"
@@ -1025,7 +1025,7 @@ def test_find_insns():
 
 
 @tool
-@idaread
+@idasync
 def basic_blocks(
     addrs: Annotated[list[str] | str, "Function addresses to get basic blocks for"],
     max_blocks: Annotated[
@@ -1124,7 +1124,7 @@ def test_basic_blocks():
 
 
 @tool
-@idaread
+@idasync
 def find_paths(queries: list[PathQuery] | PathQuery) -> list[dict]:
     """Find execution paths between source and target addresses"""
     if isinstance(queries, dict):
@@ -1233,7 +1233,7 @@ def test_find_paths_invalid_source():
 
 
 @tool
-@idaread
+@idasync
 def search(
     type: Annotated[
         str, "Search type: 'string', 'immediate', 'data_ref', or 'code_ref'"
@@ -1443,7 +1443,7 @@ def test_search_invalid_type():
 
 
 @tool
-@idaread
+@idasync
 def find_insn_operands(
     patterns: list[InsnPattern] | InsnPattern,
     limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
@@ -1575,7 +1575,7 @@ def test_find_insn_operands_batch():
 
 
 @tool
-@idaread
+@idasync
 def export_funcs(
     addrs: Annotated[list[str] | str, "Function addresses to export"],
     format: Annotated[
@@ -1686,7 +1686,7 @@ def test_export_funcs_invalid_address():
 
 
 @tool
-@idaread
+@idasync
 def callgraph(
     roots: Annotated[
         list[str] | str, "Root function addresses to start call graph traversal from"
@@ -1786,7 +1786,7 @@ def test_callgraph():
 
 
 @tool
-@idaread
+@idasync
 def xref_matrix(
     entities: Annotated[
         list[str] | str, "Addresses to build cross-reference matrix for"
@@ -1866,7 +1866,7 @@ def test_xref_matrix_invalid_address():
 
 
 @tool
-@idaread
+@idasync
 def analyze_strings(
     filters: list[StringFilter] | StringFilter,
     limit: Annotated[int, "Max matches per filter (default: 1000, max: 10000)"] = 1000,

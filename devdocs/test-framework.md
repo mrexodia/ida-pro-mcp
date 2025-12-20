@@ -71,7 +71,7 @@ Tests should be placed **immediately after** the function they test:
 
 ```python
 @tool
-@idaread
+@idasync
 def idb_meta() -> Metadata:
     """Get IDB metadata"""
     return Metadata(...)
@@ -474,7 +474,7 @@ for r in results.results:
 3. **Write the test** immediately after the function:
    ```python
    @tool
-   @idaread
+   @idasync
    def my_function(...):
        ...
 
@@ -591,7 +591,7 @@ def test_decompile_multiple():
     addrs = get_n_functions()  # Uses configured sample size
     if len(addrs) < 2:
         return
-    
+
     results = decompile(addrs)
     assert len(results) == len(addrs)
     # At least some should succeed

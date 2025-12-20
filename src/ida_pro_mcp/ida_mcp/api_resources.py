@@ -19,7 +19,7 @@ import idautils
 import idc
 
 from .rpc import resource
-from .sync import idaread
+from .sync import idasync
 from .tests import (
     test,
     assert_has_keys,
@@ -51,7 +51,7 @@ from .utils import (
 
 
 @resource("ida://idb/metadata")
-@idaread
+@idasync
 def idb_metadata_resource() -> Metadata:
     """Get IDB file metadata (path, arch, base address, size, hashes)"""
     import hashlib
@@ -98,7 +98,7 @@ def test_resource_idb_metadata():
 
 
 @resource("ida://idb/segments")
-@idaread
+@idasync
 def idb_segments_resource() -> list[Segment]:
     """Get all memory segments with permissions"""
     segments = []
@@ -138,7 +138,7 @@ def test_resource_idb_segments():
 
 
 @resource("ida://idb/entrypoints")
-@idaread
+@idasync
 def idb_entrypoints_resource() -> list[dict]:
     """Get entry points (main, TLS callbacks, etc.)"""
     entrypoints = []
@@ -169,7 +169,7 @@ def test_resource_idb_entrypoints():
 
 
 @resource("ida://functions")
-@idaread
+@idasync
 def functions_resource(
     filter: Annotated[str, "Optional glob pattern to filter by name"] = "",
     offset: Annotated[int, "Starting index"] = 0,
@@ -208,7 +208,7 @@ def test_resource_functions():
 
 
 @resource("ida://function/{addr}")
-@idaread
+@idasync
 def function_addr_resource(
     addr: Annotated[str, "Function address (hex or decimal)"],
 ) -> dict:
@@ -257,7 +257,7 @@ def test_resource_function_addr():
 
 
 @resource("ida://globals")
-@idaread
+@idasync
 def globals_resource(
     filter: Annotated[str, "Optional glob pattern to filter by name"] = "",
     offset: Annotated[int, "Starting index"] = 0,
@@ -291,7 +291,7 @@ def test_resource_globals():
 
 
 @resource("ida://global/{name_or_addr}")
-@idaread
+@idasync
 def global_id_resource(name_or_addr: Annotated[str, "Global name or address"]) -> dict:
     """Get specific global variable details"""
     # Try as address first
@@ -345,7 +345,7 @@ def test_resource_global_id():
 
 
 @resource("ida://strings")
-@idaread
+@idasync
 def strings_resource(
     filter: Annotated[str, "Optional pattern to match in strings"] = "",
     offset: Annotated[int, "Starting index"] = 0,
@@ -384,7 +384,7 @@ def test_resource_strings():
 
 
 @resource("ida://string/{addr}")
-@idaread
+@idasync
 def string_addr_resource(addr: Annotated[str, "String address"]) -> dict:
     """Get specific string details"""
     ea = parse_address(addr)
@@ -416,7 +416,7 @@ def test_resource_string_addr():
 
 
 @resource("ida://imports")
-@idaread
+@idasync
 def imports_resource(
     offset: Annotated[int, "Starting index"] = 0,
     count: Annotated[int, "Maximum results (0=all)"] = 50,
@@ -454,7 +454,7 @@ def test_resource_imports():
 
 
 @resource("ida://import/{name}")
-@idaread
+@idasync
 def import_name_resource(name: Annotated[str, "Import name"]) -> dict:
     """Get specific import details"""
     nimps = ida_nalt.get_import_module_qty()
@@ -499,7 +499,7 @@ def test_resource_import_name():
 
 
 @resource("ida://exports")
-@idaread
+@idasync
 def exports_resource(
     offset: Annotated[int, "Starting index"] = 0,
     count: Annotated[int, "Maximum results (0=all)"] = 50,
@@ -530,7 +530,7 @@ def test_resource_exports():
 
 
 @resource("ida://export/{name}")
-@idaread
+@idasync
 def export_name_resource(name: Annotated[str, "Export name"]) -> dict:
     """Get specific export details"""
     entry_count = ida_entry.get_entry_qty()
@@ -574,7 +574,7 @@ def test_resource_export_name():
 
 
 @resource("ida://types")
-@idaread
+@idasync
 def types_resource() -> list[dict]:
     """Get all local types"""
     types = []
@@ -599,7 +599,7 @@ def test_resource_types():
 
 
 @resource("ida://structs")
-@idaread
+@idasync
 def structs_resource() -> list[dict]:
     """Get all structures/unions"""
     structs = []
@@ -631,7 +631,7 @@ def test_resource_structs():
 
 
 @resource("ida://struct/{name}")
-@idaread
+@idasync
 def struct_name_resource(name: Annotated[str, "Structure name"]) -> dict:
     """Get structure definition with fields"""
     tif = ida_typeinf.tinfo_t()
@@ -681,7 +681,7 @@ def test_resource_struct_name():
 
 
 @resource("ida://xrefs/to/{addr}")
-@idaread
+@idasync
 def xrefs_to_addr_resource(addr: Annotated[str, "Target address"]) -> list[dict]:
     """Get cross-references to address"""
     ea = parse_address(addr)
@@ -714,7 +714,7 @@ def test_resource_xrefs_to():
 
 
 @resource("ida://xrefs/from/{addr}")
-@idaread
+@idasync
 def xrefs_from_resource(addr: Annotated[str, "Source address"]) -> list[dict]:
     """Get cross-references from address"""
     ea = parse_address(addr)
@@ -747,7 +747,7 @@ def test_resource_xrefs_from():
 
 
 @resource("ida://stack/{func_addr}")
-@idaread
+@idasync
 def stack_func_resource(func_addr: Annotated[str, "Function address"]) -> dict:
     """Get stack frame variables for a function"""
     from .utils import get_stack_frame_variables_internal
@@ -776,7 +776,7 @@ def test_resource_stack_func():
 
 
 @resource("ida://cursor")
-@idaread
+@idasync
 def cursor_resource() -> dict:
     """Get current cursor position and function"""
     ea = ida_kernwin.get_screen_ea()
@@ -810,7 +810,7 @@ def test_resource_cursor():
 
 
 @resource("ida://selection")
-@idaread
+@idasync
 def selection_resource() -> dict:
     """Get current selection range (if any)"""
     start = ida_kernwin.read_range_selection(None)
@@ -840,7 +840,7 @@ def test_resource_selection():
 
 
 @resource("ida://debug/breakpoints")
-@idaread
+@idasync
 def debug_breakpoints_resource() -> list[dict]:
     """Get all debugger breakpoints"""
     if not ida_dbg.is_debugger_on():
@@ -875,7 +875,7 @@ def test_resource_debug_breakpoints():
 
 
 @resource("ida://debug/registers")
-@idaread
+@idasync
 def debug_registers_resource() -> dict:
     """Get current debugger register values"""
     if not ida_dbg.is_debugger_on():
@@ -905,7 +905,7 @@ def test_resource_debug_registers():
 
 
 @resource("ida://debug/callstack")
-@idaread
+@idasync
 def debug_callstack_resource() -> list[dict]:
     """Get current debugger call stack"""
     if not ida_dbg.is_debugger_on():

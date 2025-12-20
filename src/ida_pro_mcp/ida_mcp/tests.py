@@ -334,7 +334,6 @@ def get_functions_with_calls() -> list[str]:
     """
     import idaapi
     import idautils
-    import idc
 
     result = []
     for func_ea in idautils.Functions():

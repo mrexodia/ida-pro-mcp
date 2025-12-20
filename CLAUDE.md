@@ -69,7 +69,7 @@ git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 
 **Infrastructure**:
 - `rpc.py`: JSON-RPC registry + type checking (`@tool`, `@resource`, `@unsafe` decorators)
-- `sync.py`: IDA thread synchronization (`@idaread`/`@idawrite` decorators)
+- `sync.py`: IDA thread synchronization (`@idasync` decorator)
 - `zeromcp/mcp.py`: HTTP/SSE server implementation (Streamable HTTP + SSE transports)
 - `utils.py`: TypedDict schemas, address parsing, pagination helpers
 
@@ -78,19 +78,15 @@ git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 Every API function follows this pattern:
 ```python
 @tool             # 1. Register MCP tool
-@idaread          # 2. Execute on IDA's main thread (read-only)
+@idasync          # 2. Execute on IDA's main thread
 def my_api(param: Annotated[str, "description"]) -> ReturnType:
     """Docstring becomes MCP tool description"""
     # Implementation uses IDA SDK
 ```
 
-**IMPORTANT**: Use `@idawrite` instead of `@idaread` for functions that modify the IDB.
-
 ### Thread Safety
 
-**All IDA SDK calls MUST run on main thread** - enforced by `@idaread`/`@idawrite`:
-- `@idaread`: Use for read-only operations (queries, decompilation)
-- `@idawrite`: Use for modifications (comments, patches, renames)
+**All IDA SDK calls MUST run on main thread** - enforced by `@idasync`:
 - Implementation: `sync_wrapper()` uses `idaapi.execute_sync()` with queue-based result passing
 
 ### Type Annotations
@@ -114,12 +110,12 @@ count: Annotated[int, "Maximum number of results"]
 2. Import required IDA SDK modules and decorators:
    ```python
    from .rpc import tool
-   from .sync import idaread  # or idawrite
+   from .sync import idasync
    ```
 3. Define function with full type hints:
    ```python
    @tool
-   @idaread
+   @idasync
    def my_function(param: Annotated[str, "param description"]) -> dict:
        """Tool description (first line used in MCP schema)"""
        # Use IDA SDK here
@@ -135,7 +131,7 @@ Mark debugger operations or destructive actions as unsafe:
 ```python
 @unsafe           # Requires --unsafe flag
 @tool
-@idawrite
+@idasync
 def dangerous_op():
     pass
 ```
@@ -145,14 +141,14 @@ def dangerous_op():
 Expose RESTful URI-based access to IDA data using `@resource`:
 ```python
 @resource(uri="ida://functions/{pattern}")
-@idaread
+@idasync
 def functions_resource(pattern: str = "*") -> list[dict]:
     """Get functions matching pattern via ida://functions/pattern URI"""
     # Return data accessible via MCP resource protocol
     return filtered_functions
 ```
 
-Resources provide read-only access to IDA data via URI patterns. All resources use `@idaread`.
+Resources provide read-only access to IDA data via URI patterns. All resources use `@idasync`.
 
 ## Common Patterns
 
@@ -178,7 +174,7 @@ return results
 from .utils import paginate, Page
 
 @tool
-@idaread
+@idasync
 def list_items(queries: Annotated[str, "offset:count or pattern"]) -> Page:
     all_items = get_all_items()
     return paginate(all_items, queries)
@@ -252,7 +248,7 @@ Tests are placed immediately after the function they test:
 from .tests import test, assert_has_keys, assert_valid_address
 
 @tool
-@idaread
+@idasync
 def my_function(...):
     ...
 

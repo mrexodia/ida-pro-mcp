@@ -11,7 +11,7 @@ import ida_typeinf
 import idaapi
 
 from .rpc import tool
-from .sync import idaread, idawrite, IDAError
+from .sync import idasync, IDAError
 from .utils import normalize_list_input, parse_address, MemoryRead, MemoryPatch
 from .tests import (
     test,
@@ -29,7 +29,7 @@ from .tests import (
 
 
 @tool
-@idaread
+@idasync
 def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     """Read bytes from memory addresses"""
     if isinstance(regions, dict):
@@ -79,7 +79,7 @@ def test_get_bytes_invalid():
 
 
 @tool
-@idaread
+@idasync
 def get_u8(
     addrs: Annotated[list[str] | str, "Addresses to read 8-bit unsigned integers from"],
 ) -> list[dict]:
@@ -116,7 +116,7 @@ def test_get_u8():
 
 
 @tool
-@idaread
+@idasync
 def get_u16(
     addrs: Annotated[
         list[str] | str, "Addresses to read 16-bit unsigned integers from"
@@ -155,7 +155,7 @@ def test_get_u16():
 
 
 @tool
-@idaread
+@idasync
 def get_u32(
     addrs: Annotated[
         list[str] | str, "Addresses to read 32-bit unsigned integers from"
@@ -194,7 +194,7 @@ def test_get_u32():
 
 
 @tool
-@idaread
+@idasync
 def get_u64(
     addrs: Annotated[
         list[str] | str, "Addresses to read 64-bit unsigned integers from"
@@ -233,7 +233,7 @@ def test_get_u64():
 
 
 @tool
-@idaread
+@idasync
 def get_string(
     addrs: Annotated[list[str] | str, "Addresses to read strings from"],
 ) -> list[dict]:
@@ -297,7 +297,7 @@ def get_global_variable_value_internal(ea: int) -> str:
 
 
 @tool
-@idaread
+@idasync
 def get_global_value(
     queries: Annotated[
         list[str] | str, "Global variable addresses or names to read values from"
@@ -360,7 +360,7 @@ def test_get_global_value():
 
 
 @tool
-@idawrite
+@idasync
 def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[dict]:
     """Patch bytes at memory addresses with hex data"""
     if isinstance(patches, dict):

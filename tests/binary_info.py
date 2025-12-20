@@ -50,7 +50,6 @@ def main():
     import ida_name
     import ida_bytes
     import ida_entry
-    import ida_segment
 
     info = {}
 
@@ -137,7 +136,7 @@ def main():
             if content:
                 try:
                     decoded = content.decode("utf-8", errors="replace")
-                except:
+                except Exception:
                     decoded = repr(content)
                 info["strings"].append(
                     {
@@ -160,7 +159,7 @@ def main():
         return True
 
     for idx in range(idaapi.get_import_module_qty()):
-        module = idaapi.get_import_module_name(idx)
+        idaapi.get_import_module_name(idx)
         idaapi.enum_import_names(idx, imp_cb)
 
     # Globals (named addresses that aren't functions)

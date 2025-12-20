@@ -10,7 +10,7 @@ import ida_typeinf
 import ida_segment
 
 from .rpc import tool
-from .sync import idaread
+from .sync import idasync
 from .utils import (
     Metadata,
     Function,
@@ -85,7 +85,7 @@ def _get_cached_strings() -> list[String]:
 
 
 @tool
-@idaread
+@idasync
 def idb_meta() -> Metadata:
     """Get IDB metadata"""
 
@@ -121,7 +121,7 @@ def test_idb_meta():
 
 
 @tool
-@idaread
+@idasync
 def lookup_funcs(
     queries: Annotated[list[str] | str, "Address(es) or name(s)"],
 ) -> list[dict]:
@@ -242,7 +242,7 @@ def test_lookup_funcs_data_address():
 
 
 @tool
-@idaread
+@idasync
 def cursor_addr() -> str:
     """Get current address"""
     return hex(idaapi.get_screen_ea())
@@ -260,7 +260,7 @@ def test_cursor_addr():
 
 
 @tool
-@idaread
+@idasync
 def cursor_func() -> Optional[Function]:
     """Get current function"""
     return get_function(idaapi.get_screen_ea())
@@ -395,7 +395,7 @@ def test_int_convert_non_ascii():
 
 
 @tool
-@idaread
+@idasync
 def list_funcs(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
@@ -457,7 +457,7 @@ def test_list_funcs_pagination():
 
 
 @tool
-@idaread
+@idasync
 def list_globals(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
@@ -522,7 +522,7 @@ def test_list_globals_pagination():
 
 
 @tool
-@idaread
+@idasync
 def imports(
     offset: Annotated[int, "Offset"],
     count: Annotated[int, "Count (0=all)"],
@@ -579,7 +579,7 @@ def test_imports_pagination():
 
 
 @tool
-@idaread
+@idasync
 def strings(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
@@ -641,7 +641,7 @@ def ida_segment_perm2str(perm: int) -> str:
 
 
 @tool
-@idaread
+@idasync
 def segments() -> list[Segment]:
     """List all segments"""
     segments = []
@@ -674,7 +674,7 @@ def test_segments():
 
 
 @tool
-@idaread
+@idasync
 def local_types():
     """List local types"""
     error = ida_hexrays.hexrays_failure_t()

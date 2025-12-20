@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 from .zeromcp import McpRpcRegistry, McpServer, McpToolError, McpHttpRequestHandler
 
 MCP_SERVER = McpServer("ida-pro-mcp")

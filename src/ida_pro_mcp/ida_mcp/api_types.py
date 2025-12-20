@@ -9,7 +9,7 @@ import ida_ida
 import idaapi
 
 from .rpc import tool
-from .sync import idaread, idawrite, ida_major
+from .sync import idasync, ida_major
 from .utils import (
     normalize_list_input,
     normalize_dict_list,
@@ -38,7 +38,7 @@ from .tests import (
 
 
 @tool
-@idawrite
+@idasync
 def declare_type(
     decls: Annotated[list[str] | str, "C type declarations"],
 ) -> list[dict]:
@@ -95,7 +95,7 @@ def test_declare_type():
 
 
 @tool
-@idaread
+@idasync
 def structs() -> list[StructureDefinition]:
     """List all structures"""
     rv = []
@@ -137,7 +137,7 @@ def test_structs_list():
 
 
 @tool
-@idaread
+@idasync
 def struct_info(
     names: Annotated[list[str] | str, "Structure names to query"],
 ) -> list[dict]:
@@ -232,7 +232,7 @@ def test_struct_info_not_found():
 
 
 @tool
-@idaread
+@idasync
 def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
     """Read struct fields"""
 
@@ -386,7 +386,7 @@ def test_read_struct_not_found():
 
 
 @tool
-@idaread
+@idasync
 def search_structs(
     filter: Annotated[
         str, "Case-insensitive substring to search for in structure names"
@@ -457,7 +457,7 @@ def test_search_structs():
 
 
 @tool
-@idawrite
+@idasync
 def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[dict]:
     """Apply types (function/global/local/stack)"""
 
@@ -613,7 +613,7 @@ def test_apply_types_invalid_address():
 
 
 @tool
-@idaread
+@idasync
 def infer_types(
     addrs: Annotated[list[str] | str, "Addresses to infer types for"],
 ) -> list[dict]:
