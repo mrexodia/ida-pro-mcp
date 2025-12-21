@@ -12,7 +12,7 @@ from types import UnionType
 from urllib.parse import urlparse, parse_qs
 from io import BufferedIOBase
 
-from .jsonrpc import JsonRpcRegistry, JsonRpcError
+from .jsonrpc import JsonRpcRegistry, JsonRpcError, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
 
 class McpToolError(Exception):
     def __init__(self, message: str):
@@ -241,6 +241,7 @@ class McpServer:
         self.registry.methods["resources/list"] = self._mcp_resources_list
         self.registry.methods["resources/templates/list"] = self._mcp_resource_templates_list
         self.registry.methods["resources/read"] = self._mcp_resources_read
+        self.registry.methods["notifications/cancelled"] = self._mcp_notifications_cancelled
 
     def tool(self, func: Callable) -> Callable:
         return self.tools.method(func)
@@ -399,28 +400,43 @@ class McpServer:
                 "isError": True,
             }
 
-        # Wrap tool call in JSON-RPC request
-        tool_response = self.tools.dispatch({
-            "jsonrpc": "2.0",
-            "method": name,
-            "params": arguments,
-            "id": None,
-        })
+        # Register request for cancellation tracking
+        request_id = get_current_request_id()
+        if request_id is not None:
+            register_pending_request(request_id)
 
-        # Check for error response
-        if tool_response and "error" in tool_response:
-            error = tool_response["error"]
+        try:
+            # Wrap tool call in JSON-RPC request
+            tool_response = self.tools.dispatch({
+                "jsonrpc": "2.0",
+                "method": name,
+                "params": arguments,
+                "id": None,
+            })
+
+            # Check for error response
+            if tool_response and "error" in tool_response:
+                error = tool_response["error"]
+                return {
+                    "content": [{"type": "text", "text": error.get("message", "Unknown error")}],
+                    "isError": True,
+                }
+
+            result = tool_response.get("result") if tool_response else None
             return {
-                "content": [{"type": "text", "text": error.get("message", "Unknown error")}],
-                "isError": True,
+                "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
+                "structuredContent": result if isinstance(result, dict) else {"result": result},
+                "isError": False,
             }
+        finally:
+            if request_id is not None:
+                unregister_pending_request(request_id)
 
-        result = tool_response.get("result") if tool_response else None
-        return {
-            "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
-            "structuredContent": result if isinstance(result, dict) else {"result": result},
-            "isError": False,
-        }
+    def _mcp_notifications_cancelled(self, requestId: int | str, reason: str | None = None) -> None:
+        """MCP notifications/cancelled - cancel an in-flight request"""
+        if cancel_request(requestId):
+            print(f"[MCP] Cancelled request {requestId}: {reason or 'no reason'}")
+        # Notifications don't return a response
 
     def _mcp_resources_list(self, _meta: dict | None = None) -> dict:
         """MCP resources/list method - returns static resources only (no URI parameters)"""

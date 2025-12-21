@@ -1,12 +1,56 @@
 import json
 import inspect
 import os
+import threading
 import time
 import traceback
 from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, is_typeddict
 from types import UnionType
 
 JsonRpcId: TypeAlias = str | int | float | None
+
+# Thread-local storage for current request context (ID + cancel event)
+_current_request = threading.local()
+
+# Global pending requests for cancellation
+_pending_requests_lock = threading.Lock()
+_pending_requests: dict[int | str, threading.Event] = {}
+
+
+def get_current_request_id() -> JsonRpcId:
+    """Get the JSON-RPC request ID of the currently executing request."""
+    return getattr(_current_request, "id", None)
+
+
+def get_current_cancel_event() -> threading.Event | None:
+    """Get the cancel event for the currently executing request."""
+    return getattr(_current_request, "cancel_event", None)
+
+
+def register_pending_request(request_id: int | str) -> threading.Event:
+    """Register a request as pending and return its cancel event."""
+    event = threading.Event()
+    with _pending_requests_lock:
+        _pending_requests[request_id] = event
+    _current_request.cancel_event = event
+    return event
+
+
+def unregister_pending_request(request_id: int | str) -> None:
+    """Unregister a pending request."""
+    with _pending_requests_lock:
+        _pending_requests.pop(request_id, None)
+    _current_request.cancel_event = None
+
+
+def cancel_request(request_id: int | str) -> bool:
+    """Signal cancellation for a pending request. Returns True if request was found."""
+    with _pending_requests_lock:
+        event = _pending_requests.get(request_id)
+        if event:
+            event.set()
+            return True
+    return False
 
 
 def _parse_bool_env(name: str, default: bool) -> bool:
@@ -52,6 +96,11 @@ class JsonRpcException(Exception):
         self.message = message
         self.data = data
 
+
+class RequestCancelledError(Exception):
+    """Base class for request cancellation errors (LSP error code -32800)."""
+    pass
+
 class JsonRpcRegistry:
     def __init__(self):
         self.methods: dict[str, Callable] = {}
@@ -89,6 +138,8 @@ class JsonRpcRegistry:
                 params_str = params_str[:200] + "..."
             print(f"[MCP] >> {method}({params_str})")
 
+        # Set current request ID in thread-local for cancellation tracking
+        _current_request.id = request_id
         start_time = time.perf_counter()
         try:
             result = self._call(method, params)
@@ -112,6 +163,14 @@ class JsonRpcRegistry:
             if is_notification:
                 return None
             return self._error(request_id, e.code, e.message, e.data)
+        except RequestCancelledError as e:
+            # LSP error code -32800: Request cancelled
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if log_method:
+                print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) CANCELLED")
+            if is_notification:
+                return None
+            return self._error(request_id, -32800, str(e) or "Request cancelled")
         except Exception as e:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             if log_method:
@@ -120,6 +179,8 @@ class JsonRpcRegistry:
                 return None
             error = self.map_exception(e)
             return self._error(request_id, error["code"], error["message"], error.get("data"))
+        finally:
+            _current_request.id = None
 
     def map_exception(self, e: Exception) -> JsonRpcError:
         return {

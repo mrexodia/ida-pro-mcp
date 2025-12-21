@@ -9,6 +9,7 @@ import idaapi
 import ida_kernwin
 import idc
 from .rpc import McpToolError
+from .zeromcp.jsonrpc import get_current_cancel_event, RequestCancelledError
 
 # ============================================================================
 # IDA Synchronization & Error Handling
@@ -27,6 +28,11 @@ class IDAError(McpToolError):
 
 
 class IDASyncError(Exception):
+    pass
+
+
+class CancelledError(RequestCancelledError):
+    """Raised when a request is cancelled via notifications/cancelled."""
     pass
 
 
@@ -85,17 +91,25 @@ def _normalize_timeout(value: object) -> float | None:
 
 def sync_wrapper(ff, timeout_override: float | None = None):
     """Wrapper to enable batch mode during IDA synchronization."""
+    # Capture cancel event from thread-local before execute_sync
+    cancel_event = get_current_cancel_event()
+
     old_batch = idc.batch(1)
     try:
         timeout = timeout_override
         if timeout is None:
             timeout = _get_tool_timeout_seconds()
-        if timeout > 0:
-            deadline = time.monotonic() + timeout
-
+        if timeout > 0 or cancel_event is not None:
             def timed_ff():
+                # Calculate deadline when execution starts on IDA main thread,
+                # not when the request was queued (avoids stale deadlines)
+                deadline = time.monotonic() + timeout if timeout > 0 else None
+
                 def profilefunc(frame, event, arg):
-                    if time.monotonic() >= deadline:
+                    # Check cancellation first (higher priority)
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise CancelledError("Request was cancelled")
+                    if deadline is not None and time.monotonic() >= deadline:
                         raise IDASyncError(f"Tool timed out after {timeout:.2f}s")
 
                 old_profile = sys.getprofile()
