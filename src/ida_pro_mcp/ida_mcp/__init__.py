@@ -31,6 +31,7 @@ from . import api_resources
 from .sync import idaread, idawrite, IDAError, IDASyncError
 from .rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, resource
 from .http import IdaMcpHttpRequestHandler
+from .api_core import init_caches
 
 __all__ = [
     # Infrastructure modules
@@ -58,4 +59,5 @@ __all__ = [
     "unsafe",
     "resource",
     "IdaMcpHttpRequestHandler",
+    "init_caches",
 ]

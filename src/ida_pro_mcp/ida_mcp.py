@@ -53,9 +53,14 @@ class MCP(idaapi.plugin_t):
         # HACK: ensure fresh load of ida_mcp package
         unload_package("ida_mcp")
         if TYPE_CHECKING:
-            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
+            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches
         else:
-            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
+            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches
+
+        try:
+            init_caches()
+        except Exception as e:
+            print(f"[MCP] Cache init failed: {e}")
 
         try:
             MCP_SERVER.serve(

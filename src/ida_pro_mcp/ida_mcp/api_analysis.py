@@ -2,7 +2,6 @@ from itertools import islice
 import struct
 from typing import Annotated, Optional
 import ida_hexrays
-import ida_kernwin
 import ida_lines
 import ida_funcs
 import idaapi
@@ -24,22 +23,14 @@ from .utils import (
     get_function,
     get_prototype,
     get_stack_frame_variables_internal,
-    decompile_checked,
     decompile_function_safe,
     get_assembly_lines,
     get_all_xrefs,
     get_all_comments,
-    get_callees,
-    get_callers,
-    get_xrefs_from_internal,
-    extract_function_strings,
-    extract_function_constants,
-    get_analysis_prompt,
     Function,
     Argument,
     DisassemblyFunction,
     Xref,
-    FunctionAnalysis,
     BasicBlock,
     StructFieldQuery,
     InsnPattern,
@@ -170,30 +161,9 @@ def decompile(
     """Decompile function to pseudocode"""
     try:
         start = parse_address(addr)
-        cfunc = decompile_checked(start)
-        sv = cfunc.get_pseudocode()
-        code = ""
-        for i, sl in enumerate(sv):
-            sl: ida_kernwin.simpleline_t
-            item = ida_hexrays.ctree_item_t()
-            ea = None if i > 0 else cfunc.entry_ea
-            if cfunc.get_line_item(sl.line, 0, False, None, item, None):
-                dstr: str | None = item.dstr()
-                if dstr:
-                    ds = dstr.split(": ")
-                    if len(ds) == 2:
-                        try:
-                            ea = int(ds[0], 16)
-                        except ValueError:
-                            pass
-            line = ida_lines.tag_remove(sl.line)
-            if len(code) > 0:
-                code += "\n"
-            if not ea:
-                code += f"/* line: {i} */ {line}"
-            else:
-                code += f"/* line: {i}, address: {hex(ea)} */ {line}"
-
+        code = decompile_function_safe(start)
+        if code is None:
+            return {"addr": addr, "code": None, "error": "Decompilation failed"}
         return {"addr": addr, "code": code}
     except Exception as e:
         return {"addr": addr, "code": None, "error": str(e)}
@@ -549,101 +519,6 @@ def callees(
         except Exception as e:
             results.append({"addr": fn_addr, "callees": None, "error": str(e)})
 
-    return results
-
-
-# ============================================================================
-# Comprehensive Function Analysis
-# ============================================================================
-
-
-@tool
-@idawrite
-@tool_timeout(90.0)
-def analyze_funcs(
-    addrs: Annotated[list[str] | str, "Function addresses to comprehensively analyze"],
-) -> list[FunctionAnalysis]:
-    """Comprehensive function analysis: decompilation, xrefs, callees, strings, constants, blocks"""
-    addrs = normalize_list_input(addrs)
-    results = []
-    for addr in addrs:
-        try:
-            ea = parse_address(addr)
-            func = idaapi.get_func(ea)
-
-            if not func:
-                results.append(
-                    FunctionAnalysis(
-                        addr=addr,
-                        name=None,
-                        code=None,
-                        asm=None,
-                        xto=[],
-                        xfrom=[],
-                        callees=[],
-                        callers=[],
-                        strings=[],
-                        constants=[],
-                        blocks=[],
-                        error="Function not found",
-                        prompt=get_analysis_prompt(),
-                    )
-                )
-                continue
-
-            # Get basic blocks
-            flowchart = idaapi.FlowChart(func)
-            blocks = []
-            for block in flowchart:
-                blocks.append(
-                    {
-                        "start": hex(block.start_ea),
-                        "end": hex(block.end_ea),
-                        "type": block.type,
-                    }
-                )
-
-            result = FunctionAnalysis(
-                addr=addr,
-                name=ida_funcs.get_func_name(func.start_ea),
-                code=decompile_function_safe(ea),
-                asm=get_assembly_lines(ea),
-                xto=[
-                    Xref(
-                        addr=hex(x.frm),
-                        type="code" if x.iscode else "data",
-                        fn=get_function(x.frm, raise_error=False),
-                    )
-                    for x in idautils.XrefsTo(ea, 0)
-                ],
-                xfrom=get_xrefs_from_internal(ea),
-                callees=get_callees(addr),
-                callers=get_callers(addr),
-                strings=extract_function_strings(ea),
-                constants=extract_function_constants(ea),
-                blocks=blocks,
-                error=None,
-                prompt=get_analysis_prompt(),
-            )
-            results.append(result)
-        except Exception as e:
-            results.append(
-                FunctionAnalysis(
-                    addr=addr,
-                    name=None,
-                    code=None,
-                    asm=None,
-                    xto=[],
-                    xfrom=[],
-                    callees=[],
-                    callers=[],
-                    strings=[],
-                    constants=[],
-                    blocks=[],
-                    error=str(e),
-                    prompt=get_analysis_prompt(),
-                )
-            )
     return results
 
 

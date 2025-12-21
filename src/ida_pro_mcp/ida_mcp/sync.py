@@ -94,17 +94,16 @@ def sync_wrapper(ff, timeout_override: float | None = None):
             deadline = time.monotonic() + timeout
 
             def timed_ff():
-                def tracefunc(frame, event, arg):
+                def profilefunc(frame, event, arg):
                     if time.monotonic() >= deadline:
                         raise IDASyncError(f"Tool timed out after {timeout:.2f}s")
-                    return tracefunc
 
-                old_trace = sys.gettrace()
-                sys.settrace(tracefunc)
+                old_profile = sys.getprofile()
+                sys.setprofile(profilefunc)
                 try:
                     return ff()
                 finally:
-                    sys.settrace(old_trace)
+                    sys.setprofile(old_profile)
 
             timed_ff.__name__ = ff.__name__
             return _sync_wrapper(timed_ff)

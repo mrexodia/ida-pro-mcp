@@ -832,39 +832,58 @@ def get_stack_frame_variables_internal(
 
 
 def decompile_checked(addr: int):
-    """Decompile a function and raise IDAError on failure"""
+    """Decompile a function and raise IDAError on failure (uses cache)"""
     if not ida_hexrays.init_hexrays_plugin():
         raise IDAError("Hex-Rays decompiler is not available")
-    error = ida_hexrays.hexrays_failure_t()
-    cfunc = ida_hexrays.decompile_func(addr, error, ida_hexrays.DECOMP_WARNINGS)
+    hf = ida_hexrays.hexrays_failure_t()
+    cfunc = ida_hexrays.decompile(addr, hf)
     if not cfunc:
-        if error.code == ida_hexrays.MERR_LICENSE:
+        if hf.code == ida_hexrays.MERR_LICENSE:
             raise IDAError(
                 "Decompiler license is not available. Use `disassemble_function` to get the assembly code instead."
             )
 
         message = f"Decompilation failed at {hex(addr)}"
-        if error.str:
-            message += f": {error.str}"
-        if error.errea != idaapi.BADADDR:
-            message += f" (address: {hex(error.errea)})"
+        if hf.str:
+            message += f": {hf.str}"
+        if hf.errea != idaapi.BADADDR:
+            message += f" (address: {hex(hf.errea)})"
         raise IDAError(message)
     return cfunc
 
 
 def decompile_function_safe(ea: int) -> Optional[str]:
-    """Safely decompile a function, returning None on failure"""
+    """Safely decompile a function, returning None on failure (uses cache)"""
     import ida_lines
+    import ida_kernwin
 
     try:
         if not ida_hexrays.init_hexrays_plugin():
             return None
-        error = ida_hexrays.hexrays_failure_t()
-        cfunc = ida_hexrays.decompile_func(ea, error, ida_hexrays.DECOMP_WARNINGS)
+        cfunc = ida_hexrays.decompile(ea)
         if not cfunc:
             return None
         sv = cfunc.get_pseudocode()
-        return "\n".join(ida_lines.tag_remove(sl.line) for sl in sv)
+        lines = []
+        for sl in sv:
+            sl: ida_kernwin.simpleline_t
+            item = ida_hexrays.ctree_item_t()
+            line_ea = None
+            if cfunc.get_line_item(sl.line, 0, False, None, item, None):
+                dstr: str | None = item.dstr()
+                if dstr:
+                    ds = dstr.split(": ")
+                    if len(ds) == 2:
+                        try:
+                            line_ea = int(ds[0], 16)
+                        except ValueError:
+                            pass
+            text = ida_lines.tag_remove(sl.line)
+            if line_ea is not None:
+                lines.append(f"{text} /*{line_ea:#x}*/")
+            else:
+                lines.append(text)
+        return "\n".join(lines)
     except Exception:
         return None
 

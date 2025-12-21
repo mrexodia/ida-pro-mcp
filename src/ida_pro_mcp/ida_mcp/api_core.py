@@ -1,6 +1,7 @@
 """Core API Functions - IDB metadata and basic queries"""
 
 import re
+import time
 from typing import Annotated, Optional
 
 import ida_hexrays
@@ -12,6 +13,33 @@ import ida_segment
 
 from .rpc import tool
 from .sync import idaread
+
+# Cached strings list: [(ea, text), ...]
+_strings_cache: list[tuple[int, str]] | None = None
+
+
+def _get_strings_cache() -> list[tuple[int, str]]:
+    """Get cached strings, building cache on first access."""
+    global _strings_cache
+    if _strings_cache is None:
+        _strings_cache = [(s.ea, str(s)) for s in idautils.Strings() if s is not None]
+    return _strings_cache
+
+
+def invalidate_strings_cache():
+    """Clear the strings cache (call after IDB changes)."""
+    global _strings_cache
+    _strings_cache = None
+
+
+def init_caches():
+    """Build caches on plugin startup (called from Ctrl+M)."""
+    t0 = time.perf_counter()
+    strings = _get_strings_cache()
+    t1 = time.perf_counter()
+    print(f"[MCP] Cached {len(strings)} strings in {(t1-t0)*1000:.0f}ms")
+
+
 from .utils import (
     Metadata,
     Function,
@@ -279,12 +307,11 @@ def find_regex(
 
     matches = []
     regex = re.compile(pattern, re.IGNORECASE)
+    strings = _get_strings_cache()
+
     skipped = 0
     more = False
-    for s in idautils.Strings():
-        if s is None:
-            continue
-        text = str(s)
+    for ea, text in strings:
         if regex.search(text):
             if skipped < offset:
                 skipped += 1
@@ -292,7 +319,7 @@ def find_regex(
             if len(matches) >= limit:
                 more = True
                 break
-            matches.append({"addr": hex(s.ea), "string": text})
+            matches.append({"addr": hex(ea), "string": text})
 
     return {
         "n": len(matches),
