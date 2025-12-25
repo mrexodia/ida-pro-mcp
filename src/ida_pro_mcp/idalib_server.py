@@ -31,7 +31,10 @@ def main():
         "--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)"
     )
     parser.add_argument(
-        "input_path", type=Path, help="Path to the input file to analyze."
+        "input_path", 
+        type=Path, 
+        nargs="?",  # Make input_path optional
+        help="Path to the input file to analyze (optional, can be loaded dynamically via MCP tools)."
     )
     args = parser.parse_args()
 
@@ -48,24 +51,29 @@ def main():
     # which is evaluated during import of idalib.
     logging.getLogger().setLevel(log_level)
 
-    if not args.input_path.exists():
-        raise FileNotFoundError(f"Input file not found: {args.input_path}")
+    # Initialize session manager for dynamic binary loading
+    from ida_pro_mcp.idalib_session_manager import get_session_manager
+    session_manager = get_session_manager()
 
-    # TODO: add a tool for specifying the idb/input file (sandboxed)
-    logger.info("opening database: %s", args.input_path)
-    if idapro.open_database(str(args.input_path), run_auto_analysis=True):
-        raise RuntimeError("failed to analyze input file")
+    # Open initial binary if provided
+    if args.input_path is not None:
+        if not args.input_path.exists():
+            raise FileNotFoundError(f"Input file not found: {args.input_path}")
 
-    logger.debug("idalib: waiting for analysis...")
-    ida_auto.auto_wait()
+        logger.info("opening initial database: %s", args.input_path)
+        session_id = session_manager.open_binary(args.input_path, run_auto_analysis=True)
+        logger.info(f"Initial session created: {session_id}")
+    else:
+        logger.info("No initial binary specified. Use idalib_open() to load binaries dynamically.")
 
     # Setup signal handlers to ensure IDA database is properly closed on shutdown.
     # When a signal arrives, our handlers execute first, allowing us to close the
     # IDA database cleanly before the process terminates.
     def cleanup_and_exit(signum, frame):
-        logger.info("Closing IDA database...")
-        idapro.close_database()
-        logger.info("IDA database closed.")
+        logger.info("Shutting down...")
+        logger.info("Closing all IDA sessions...")
+        session_manager.close_all_sessions()
+        logger.info("All sessions closed.")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, cleanup_and_exit)
