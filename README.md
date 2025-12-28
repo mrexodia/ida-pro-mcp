@@ -145,6 +145,104 @@ uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
 
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
+## Session-based Headless Analysis
+
+The `idalib-session-mcp` command provides an advanced headless MCP server with session management capabilities.
+
+**Key Features:**
+
+- **Fully Headless**: Runs entirely without IDA GUI using idalib
+- **Multi-Binary Support**: Open and analyze multiple binaries simultaneously
+- **Dynamic Binary Loading**: LLM can open new binaries at runtime via MCP tools
+- **Session Management**: Switch between different analysis sessions on demand
+- **Analysis Time Tracking**: Reports how long IDA took to analyze each binary
+
+### Quick Start
+
+1. Generate the tools cache (run once after installation):
+
+```sh
+uv run idalib-session-mcp --generate-tools-cache /path/to/any/binary
+```
+
+2. Start the session-aware MCP server:
+
+```sh
+# stdio mode (for most MCP clients)
+uv run idalib-session-mcp
+
+# SSE mode
+uv run idalib-session-mcp --transport http://127.0.0.1:8744/sse
+```
+
+### MCP Client Configuration
+
+```json
+{
+  "mcpServers": {
+    "idalib-session-mcp": {
+      "command": "idalib-session-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Or if running from source:
+
+```json
+{
+  "mcpServers": {
+    "idalib-session-mcp": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/ida-pro-mcp", "idalib-session-mcp"]
+    }
+  }
+}
+```
+
+### Session Management Tools
+
+| Tool | Description |
+|------|-------------|
+| `session_open(binary_path)` | Open a new binary for analysis. Returns session info including analysis time. |
+| `session_list()` | List all active analysis sessions with their status. |
+| `session_switch(session_id)` | Switch to a different session. All subsequent IDA tools will use this session. |
+| `session_close(session_id)` | Close a session and free resources. |
+| `session_info(session_id)` | Get detailed information about a session. |
+
+### Example Workflow
+
+```
+LLM: session_open("/path/to/malware.exe")
+-> {"session_id": "abc123", "status": "ready", "analysis_time": 15.3, ...}
+
+LLM: decompile("main")
+-> {decompiled code from malware.exe}
+
+LLM: session_open("/path/to/dropper.dll")
+-> {"session_id": "def456", "status": "ready", "analysis_time": 8.7, ...}
+
+LLM: session_list()
+-> [{"session_id": "abc123", "is_active": false, ...}, {"session_id": "def456", "is_active": true, ...}]
+
+LLM: session_switch("abc123")
+-> switched back to malware.exe
+
+LLM: xrefs_to("0x401000")
+-> {xrefs from malware.exe}
+```
+
+### Comparison with idalib-mcp
+
+| Feature | idalib-mcp | idalib-session-mcp |
+|---------|------------|-------------------|
+| Headless | Yes | Yes |
+| Multiple binaries | No (single binary per process) | Yes (unlimited sessions) |
+| Dynamic binary loading | No (specified at startup) | Yes (via session_open tool) |
+| Session switching | N/A | Yes |
+| Analysis time reporting | No | Yes |
+
 
 ## MCP Resources
 
