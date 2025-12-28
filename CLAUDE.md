@@ -39,12 +39,32 @@ uv run ida-pro-mcp
 # SSE transport for headless/remote use
 uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
 
-# Headless mode with idalib (no GUI)
+# Headless mode with idalib (no GUI) - single binary
 uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/binary
+
+# Session-aware MCP server (LLM can open/manage multiple binaries)
+uv run idalib-session-mcp
+
+# Session manager daemon (Unix socket/TCP for session management)
+uv run ida-session-manager --socket /tmp/ida-mcp-session.sock
 
 # Enable unsafe debugger functions
 uv run ida-pro-mcp --unsafe
 ```
+
+### Session Management Mode
+
+The session-aware MCP server (`idalib-session-mcp`) allows LLMs to:
+1. **Open binaries dynamically**: Use `session_open` tool to analyze any binary
+2. **Manage multiple sessions**: Work with multiple binaries simultaneously
+3. **Switch contexts**: Use `session_switch` to change active binary
+
+Available session tools:
+- `session_open(binary_path)` - Open a new analysis session
+- `session_list()` - List all active sessions
+- `session_switch(session_id)` - Switch to a different session
+- `session_close(session_id)` - Close a session
+- `session_info(session_id?)` - Get session details
 
 ### Changelog Generation
 ```bash
@@ -325,7 +345,9 @@ Server auto-negotiates based on client request.
 ```
 src/ida_pro_mcp/
 ├── server.py              # MCP server + AST parser + installer
-├── idalib_server.py       # Headless idalib support
+├── idalib_server.py       # Headless idalib support (single binary)
+├── session_mcp_server.py  # Session-aware MCP server (multi-binary)
+├── session_manager.py     # Session manager daemon
 ├── ida_mcp.py             # IDA plugin loader
 └── ida_mcp/
     ├── __init__.py        # Package exports

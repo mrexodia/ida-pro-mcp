@@ -1,0 +1,3662 @@
+[
+  {
+    "name": "idb_meta",
+    "description": "Get IDB metadata",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string"
+        },
+        "md5": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "crc32": {
+          "type": "string"
+        },
+        "filesize": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "module",
+        "base",
+        "size",
+        "md5",
+        "sha256",
+        "crc32",
+        "filesize"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "lookup_funcs",
+    "description": "Get functions by address or name (auto-detects)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "queries": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Address(es) or name(s)"
+        }
+      },
+      "required": [
+        "queries"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "cursor_addr",
+    "description": "Get current address",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "cursor_func",
+    "description": "Get current function",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "addr",
+                "name",
+                "size"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "int_convert",
+    "description": "Convert numbers to different formats",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "inputs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Number string to convert"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "description": "Byte size for conversion (omit for auto)"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "description": "Number string to convert"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "Byte size for conversion (omit for auto)"
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Convert numbers to various formats (hex, decimal, binary, ascii)"
+        }
+      },
+      "required": [
+        "inputs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "list_funcs",
+    "description": "List functions",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "queries": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "filter": {
+                    "type": "string",
+                    "description": "Optional glob pattern to filter results"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Starting index (default: 0)"
+                  },
+                  "count": {
+                    "type": "integer",
+                    "description": "Maximum number of results (default: 50, 0 for all)"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "filter": {
+                  "type": "string",
+                  "description": "Optional glob pattern to filter results"
+                },
+                "offset": {
+                  "type": "integer",
+                  "description": "Starting index (default: 0)"
+                },
+                "count": {
+                  "type": "integer",
+                  "description": "Maximum number of results (default: 50, 0 for all)"
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "List functions with optional filtering and pagination"
+        }
+      },
+      "required": [
+        "queries"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "list_globals",
+    "description": "List globals",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "queries": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "filter": {
+                    "type": "string",
+                    "description": "Optional glob pattern to filter results"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Starting index (default: 0)"
+                  },
+                  "count": {
+                    "type": "integer",
+                    "description": "Maximum number of results (default: 50, 0 for all)"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "filter": {
+                  "type": "string",
+                  "description": "Optional glob pattern to filter results"
+                },
+                "offset": {
+                  "type": "integer",
+                  "description": "Starting index (default: 0)"
+                },
+                "count": {
+                  "type": "integer",
+                  "description": "Maximum number of results (default: 50, 0 for all)"
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "List global variables with optional filtering and pagination"
+        }
+      },
+      "required": [
+        "queries"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "imports",
+    "description": "List imports",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "description": "Offset"
+        },
+        "count": {
+          "type": "integer",
+          "description": "Count (0=all)"
+        }
+      },
+      "required": [
+        "offset",
+        "count"
+      ]
+    },
+    "outputSchema": {
+      "type": "object"
+    }
+  },
+  {
+    "name": "strings",
+    "description": "List strings",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "queries": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "filter": {
+                    "type": "string",
+                    "description": "Optional glob pattern to filter results"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Starting index (default: 0)"
+                  },
+                  "count": {
+                    "type": "integer",
+                    "description": "Maximum number of results (default: 50, 0 for all)"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "filter": {
+                  "type": "string",
+                  "description": "Optional glob pattern to filter results"
+                },
+                "offset": {
+                  "type": "integer",
+                  "description": "Starting index (default: 0)"
+                },
+                "count": {
+                  "type": "integer",
+                  "description": "Maximum number of results (default: 50, 0 for all)"
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "List strings with optional filtering and pagination"
+        }
+      },
+      "required": [
+        "queries"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "segments",
+    "description": "List all segments",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "start": {
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              },
+              "size": {
+                "type": "string"
+              },
+              "permissions": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "start",
+              "end",
+              "size",
+              "permissions"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "local_types",
+    "description": "List local types",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "decompile",
+    "description": "Decompile functions to pseudocode",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Function addresses to decompile"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "disasm",
+    "description": "Disassemble functions to assembly instructions",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Function addresses to disassemble"
+        },
+        "max_instructions": {
+          "type": "integer",
+          "description": "Max instructions per function (default: 5000, max: 50000)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Skip first N instructions (default: 0)"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "xrefs_to",
+    "description": "Get all cross-references to specified addresses",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Addresses to find cross-references to"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "xrefs_to_field",
+    "description": "Get cross-references to structure fields",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "queries": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "struct": {
+                    "type": "string",
+                    "description": "Structure name"
+                  },
+                  "field": {
+                    "type": "string",
+                    "description": "Field name"
+                  }
+                },
+                "required": [
+                  "struct",
+                  "field"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "struct": {
+                  "type": "string",
+                  "description": "Structure name"
+                },
+                "field": {
+                  "type": "string",
+                  "description": "Field name"
+                }
+              },
+              "required": [
+                "struct",
+                "field"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "queries"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "callees",
+    "description": "Get all functions called by the specified functions",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Function addresses to get callees for"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "callers",
+    "description": "Get all functions that call the specified functions",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Function addresses to get callers for"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "entrypoints",
+    "description": "Get entry points",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "addr": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "size": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "addr",
+              "name",
+              "size"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "analyze_funcs",
+    "description": "Comprehensive function analysis: decompilation, xrefs, callees, strings, constants, blocks",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Function addresses to comprehensively analyze"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "addr": {
+                "type": "string"
+              },
+              "name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "code": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "asm": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "xto": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "addr": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "fn": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "addr": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "size": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "addr",
+                            "name",
+                            "size"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "addr",
+                    "type",
+                    "fn"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "xfrom": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "addr": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "fn": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "addr": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "size": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "addr",
+                            "name",
+                            "size"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "addr",
+                    "type",
+                    "fn"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "callees": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "callers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "addr": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "addr",
+                    "name",
+                    "size"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "strings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "addr": {
+                      "type": "string"
+                    },
+                    "length": {
+                      "type": "integer"
+                    },
+                    "string": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "addr",
+                    "length",
+                    "string"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "constants": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "addr",
+              "name",
+              "code",
+              "asm",
+              "xto",
+              "xfrom",
+              "callees",
+              "callers",
+              "strings",
+              "constants",
+              "blocks",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "find_bytes",
+    "description": "Search for byte patterns in the binary (supports wildcards with ??)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "patterns": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Byte patterns to search for (e.g. '48 8B ?? ??')"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max matches per pattern (default: 1000, max: 10000)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Skip first N matches (default: 0)"
+        }
+      },
+      "required": [
+        "patterns"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "find_insns",
+    "description": "Search for sequences of instruction mnemonics in the binary",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "sequences": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "Instruction mnemonic sequences to search for"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max matches per sequence (default: 1000, max: 10000)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Skip first N matches (default: 0)"
+        }
+      },
+      "required": [
+        "sequences"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "basic_blocks",
+    "description": "Get control flow graph basic blocks for functions",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Function addresses to get basic blocks for"
+        },
+        "max_blocks": {
+          "type": "integer",
+          "description": "Max basic blocks per function (default: 1000, max: 10000)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Skip first N blocks (default: 0)"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "find_paths",
+    "description": "Find execution paths between source and target addresses",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "queries": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "description": "Source address (hex or decimal)"
+                  },
+                  "target": {
+                    "type": "string",
+                    "description": "Target address (hex or decimal)"
+                  }
+                },
+                "required": [
+                  "source",
+                  "target"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "description": "Source address (hex or decimal)"
+                },
+                "target": {
+                  "type": "string",
+                  "description": "Target address (hex or decimal)"
+                }
+              },
+              "required": [
+                "source",
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "queries"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "search",
+    "description": "Search for patterns in the binary (strings, immediate values, or references)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Search type: 'string', 'immediate', 'data_ref', or 'code_ref'"
+        },
+        "targets": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "description": "Search targets (strings, integers, or addresses)"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max matches per target (default: 1000, max: 10000)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Skip first N matches (default: 0)"
+        }
+      },
+      "required": [
+        "type",
+        "targets"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "find_insn_operands",
+    "description": "Find instructions with specific mnemonics and operand values",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "patterns": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "mnem": {
+                    "type": "string",
+                    "description": "Instruction mnemonic to match"
+                  },
+                  "op0": {
+                    "type": "integer",
+                    "description": "Value to match in first operand"
+                  },
+                  "op1": {
+                    "type": "integer",
+                    "description": "Value to match in second operand"
+                  },
+                  "op2": {
+                    "type": "integer",
+                    "description": "Value to match in third operand"
+                  },
+                  "op_any": {
+                    "type": "integer",
+                    "description": "Value to match in any operand"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "mnem": {
+                  "type": "string",
+                  "description": "Instruction mnemonic to match"
+                },
+                "op0": {
+                  "type": "integer",
+                  "description": "Value to match in first operand"
+                },
+                "op1": {
+                  "type": "integer",
+                  "description": "Value to match in second operand"
+                },
+                "op2": {
+                  "type": "integer",
+                  "description": "Value to match in third operand"
+                },
+                "op_any": {
+                  "type": "integer",
+                  "description": "Value to match in any operand"
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max matches per pattern (default: 1000, max: 10000)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Skip first N matches (default: 0)"
+        }
+      },
+      "required": [
+        "patterns"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "export_funcs",
+    "description": "Export function data in various formats",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Function addresses to export"
+        },
+        "format": {
+          "type": "string",
+          "description": "Export format: json (default), c_header, or prototypes"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object"
+    }
+  },
+  {
+    "name": "callgraph",
+    "description": "Build call graph starting from root functions",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "roots": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Root function addresses to start call graph traversal from"
+        },
+        "max_depth": {
+          "type": "integer",
+          "description": "Maximum depth for call graph traversal"
+        }
+      },
+      "required": [
+        "roots"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "xref_matrix",
+    "description": "Build matrix showing cross-references between entities",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "entities": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Addresses to build cross-reference matrix for"
+        }
+      },
+      "required": [
+        "entities"
+      ]
+    },
+    "outputSchema": {
+      "type": "object"
+    }
+  },
+  {
+    "name": "analyze_strings",
+    "description": "Analyze and filter strings in the binary",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filters": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "Optional pattern to match in strings"
+                  },
+                  "min_length": {
+                    "type": "integer",
+                    "description": "Optional minimum string length"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "pattern": {
+                  "type": "string",
+                  "description": "Optional pattern to match in strings"
+                },
+                "min_length": {
+                  "type": "integer",
+                  "description": "Optional minimum string length"
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max matches per filter (default: 1000, max: 10000)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Skip first N matches (default: 0)"
+        }
+      },
+      "required": [
+        "filters"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "get_bytes",
+    "description": "Read bytes from memory addresses",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "regions": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Address to read from (hex or decimal)"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "description": "Number of bytes to read"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "size"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Address to read from (hex or decimal)"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "Number of bytes to read"
+                }
+              },
+              "required": [
+                "addr",
+                "size"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "regions"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "get_u8",
+    "description": "Read 8-bit unsigned integers from memory addresses",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Addresses to read 8-bit unsigned integers from"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "get_u16",
+    "description": "Read 16-bit unsigned integers from memory addresses",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Addresses to read 16-bit unsigned integers from"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "get_u32",
+    "description": "Read 32-bit unsigned integers from memory addresses",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Addresses to read 32-bit unsigned integers from"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "get_u64",
+    "description": "Read 64-bit unsigned integers from memory addresses",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Addresses to read 64-bit unsigned integers from"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "get_string",
+    "description": "Read strings from memory addresses",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Addresses to read strings from"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "get_global_value",
+    "description": "Read global variable values by address or name\n    (auto-detects hex addresses vs names)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "queries": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Global variable addresses or names to read values from"
+        }
+      },
+      "required": [
+        "queries"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "patch",
+    "description": "Patch bytes at memory addresses with hex data",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "patches": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Address to patch (hex or decimal)"
+                  },
+                  "data": {
+                    "type": "string",
+                    "description": "Hex data to write (space-separated bytes)"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "data"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Address to patch (hex or decimal)"
+                },
+                "data": {
+                  "type": "string",
+                  "description": "Hex data to write (space-separated bytes)"
+                }
+              },
+              "required": [
+                "addr",
+                "data"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "patches"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "declare_type",
+    "description": "Declare types",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "decls": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "C type declarations"
+        }
+      },
+      "required": [
+        "decls"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "structs",
+    "description": "List all structures",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "size": {
+                "type": "string"
+              },
+              "members": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "offset": {
+                      "type": "string"
+                    },
+                    "size": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "offset",
+                    "size",
+                    "type"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "name",
+              "size",
+              "members"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "struct_info",
+    "description": "Get struct info",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "names": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Structure names to query"
+        }
+      },
+      "required": [
+        "names"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "read_struct",
+    "description": "Read struct fields",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "queries": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Memory address (hex or decimal)"
+                  },
+                  "struct": {
+                    "type": "string",
+                    "description": "Structure name"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "struct"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Memory address (hex or decimal)"
+                },
+                "struct": {
+                  "type": "string",
+                  "description": "Structure name"
+                }
+              },
+              "required": [
+                "addr",
+                "struct"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "queries"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "search_structs",
+    "description": "Search structs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "string",
+          "description": "Case-insensitive substring to search for in structure names"
+        }
+      },
+      "required": [
+        "filter"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "apply_types",
+    "description": "Apply types (function/global/local/stack)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "applications": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Memory address"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Variable/function name"
+                  },
+                  "ty": {
+                    "type": "string",
+                    "description": "Type name or declaration"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "description": "Type of entity (auto-detected if omitted)"
+                  },
+                  "signature": {
+                    "type": "string",
+                    "description": "Function signature (for kind=function)"
+                  },
+                  "variable": {
+                    "type": "string",
+                    "description": "Local variable name (for kind=local)"
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Memory address"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Variable/function name"
+                },
+                "ty": {
+                  "type": "string",
+                  "description": "Type name or declaration"
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "Type of entity (auto-detected if omitted)"
+                },
+                "signature": {
+                  "type": "string",
+                  "description": "Function signature (for kind=function)"
+                },
+                "variable": {
+                  "type": "string",
+                  "description": "Local variable name (for kind=local)"
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "applications"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "infer_types",
+    "description": "Infer types",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Addresses to infer types for"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "set_comments",
+    "description": "Set comments at addresses (both disassembly and decompiler views)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Address (hex or decimal)"
+                  },
+                  "comment": {
+                    "type": "string",
+                    "description": "Comment text"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "comment"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Address (hex or decimal)"
+                },
+                "comment": {
+                  "type": "string",
+                  "description": "Comment text"
+                }
+              },
+              "required": [
+                "addr",
+                "comment"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  {
+    "name": "patch_asm",
+    "description": "Patch assembly instructions at addresses",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Address (hex or decimal)"
+                  },
+                  "asm": {
+                    "type": "string",
+                    "description": "Assembly instruction(s), semicolon-separated"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "asm"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Address (hex or decimal)"
+                },
+                "asm": {
+                  "type": "string",
+                  "description": "Assembly instruction(s), semicolon-separated"
+                }
+              },
+              "required": [
+                "addr",
+                "asm"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "rename",
+    "description": "Unified rename operation for functions, globals, locals, and stack variables",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "batch": {
+          "type": "object",
+          "properties": {
+            "func": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "addr": {
+                        "type": "string",
+                        "description": "Function address (hex or decimal)"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "New function name"
+                      }
+                    },
+                    "required": [
+                      "addr",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "addr": {
+                      "type": "string",
+                      "description": "Function address (hex or decimal)"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "New function name"
+                    }
+                  },
+                  "required": [
+                    "addr",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Function rename operations"
+            },
+            "data": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "old": {
+                        "type": "string",
+                        "description": "Current variable name"
+                      },
+                      "new": {
+                        "type": "string",
+                        "description": "New variable name"
+                      }
+                    },
+                    "required": [
+                      "old",
+                      "new"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "old": {
+                      "type": "string",
+                      "description": "Current variable name"
+                    },
+                    "new": {
+                      "type": "string",
+                      "description": "New variable name"
+                    }
+                  },
+                  "required": [
+                    "old",
+                    "new"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Global/data variable rename operations"
+            },
+            "local": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "func_addr": {
+                        "type": "string",
+                        "description": "Function address containing the local variable"
+                      },
+                      "old": {
+                        "type": "string",
+                        "description": "Current variable name"
+                      },
+                      "new": {
+                        "type": "string",
+                        "description": "New variable name"
+                      }
+                    },
+                    "required": [
+                      "func_addr",
+                      "old",
+                      "new"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "func_addr": {
+                      "type": "string",
+                      "description": "Function address containing the local variable"
+                    },
+                    "old": {
+                      "type": "string",
+                      "description": "Current variable name"
+                    },
+                    "new": {
+                      "type": "string",
+                      "description": "New variable name"
+                    }
+                  },
+                  "required": [
+                    "func_addr",
+                    "old",
+                    "new"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Local variable rename operations"
+            },
+            "stack": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "func_addr": {
+                        "type": "string",
+                        "description": "Function address containing the stack variable"
+                      },
+                      "old": {
+                        "type": "string",
+                        "description": "Current variable name"
+                      },
+                      "new": {
+                        "type": "string",
+                        "description": "New variable name"
+                      }
+                    },
+                    "required": [
+                      "func_addr",
+                      "old",
+                      "new"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "func_addr": {
+                      "type": "string",
+                      "description": "Function address containing the stack variable"
+                    },
+                    "old": {
+                      "type": "string",
+                      "description": "Current variable name"
+                    },
+                    "new": {
+                      "type": "string",
+                      "description": "New variable name"
+                    }
+                  },
+                  "required": [
+                    "func_addr",
+                    "old",
+                    "new"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Stack variable rename operations"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "batch"
+      ]
+    },
+    "outputSchema": {
+      "type": "object"
+    }
+  },
+  {
+    "name": "stack_frame",
+    "description": "Get stack vars",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Address(es)"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "declare_stack",
+    "description": "Create stack vars",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Function address"
+                  },
+                  "offset": {
+                    "type": "string",
+                    "description": "Stack offset"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Variable name"
+                  },
+                  "ty": {
+                    "type": "string",
+                    "description": "Type name"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "offset",
+                  "name",
+                  "ty"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Function address"
+                },
+                "offset": {
+                  "type": "string",
+                  "description": "Stack offset"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Variable name"
+                },
+                "ty": {
+                  "type": "string",
+                  "description": "Type name"
+                }
+              },
+              "required": [
+                "addr",
+                "offset",
+                "name",
+                "ty"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  {
+    "name": "delete_stack",
+    "description": "Delete stack vars",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Function address"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Variable name"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Function address"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Variable name"
+                }
+              },
+              "required": [
+                "addr",
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  {
+    "name": "dbg_start",
+    "description": "Start debugger",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "dbg_exit",
+    "description": "Exit debugger",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "dbg_continue",
+    "description": "Continue debugger",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "dbg_run_to",
+    "description": "Run to address",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addr": {
+          "type": "string",
+          "description": "Address"
+        }
+      },
+      "required": [
+        "addr"
+      ]
+    }
+  },
+  {
+    "name": "dbg_step_into",
+    "description": "Step into",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "dbg_step_over",
+    "description": "Step over",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "dbg_list_bps",
+    "description": "List breakpoints",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "dbg_add_bp",
+    "description": "Add breakpoints",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Address(es) to add breakpoints at"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "dbg_delete_bp",
+    "description": "Delete breakpoints",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "addrs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Address(es) to delete breakpoints from"
+        }
+      },
+      "required": [
+        "addrs"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "dbg_enable_bp",
+    "description": "Enable/disable breakpoints",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Breakpoint address (hex or decimal)"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Enable (true) or disable (false)"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "enabled"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Breakpoint address (hex or decimal)"
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable (true) or disable (false)"
+                }
+              },
+              "required": [
+                "addr",
+                "enabled"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "dbg_regs",
+    "description": "Get all registers",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "thread_id": {
+                "type": "integer"
+              },
+              "registers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "thread_id",
+              "registers"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "dbg_regs_thread",
+    "description": "Get thread registers",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tids": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "description": "Thread ID(s) to get registers for"
+        }
+      },
+      "required": [
+        "tids"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "dbg_regs_cur",
+    "description": "Get current thread registers",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "integer"
+        },
+        "registers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "thread_id",
+        "registers"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "dbg_gpregs_thread",
+    "description": "Get GP registers for threads",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tids": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "description": "Thread ID(s) to get GP registers for"
+        }
+      },
+      "required": [
+        "tids"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "dbg_current_gpregs",
+    "description": "Get current thread GP registers",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "integer"
+        },
+        "registers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "thread_id",
+        "registers"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "dbg_regs_for_thread",
+    "description": "Get specific thread registers",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "integer",
+          "description": "Thread ID"
+        },
+        "register_names": {
+          "type": "string",
+          "description": "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
+        }
+      },
+      "required": [
+        "thread_id",
+        "register_names"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "integer"
+        },
+        "registers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "thread_id",
+        "registers"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "dbg_current_regs",
+    "description": "Get specific current thread registers",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "register_names": {
+          "type": "string",
+          "description": "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
+        }
+      },
+      "required": [
+        "register_names"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "integer"
+        },
+        "registers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "thread_id",
+        "registers"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "dbg_callstack",
+    "description": "Get call stack",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "dbg_read_mem",
+    "description": "Read debug memory",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "regions": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Address to read from (hex or decimal)"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "description": "Number of bytes to read"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "size"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Address to read from (hex or decimal)"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "Number of bytes to read"
+                }
+              },
+              "required": [
+                "addr",
+                "size"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "regions"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "dbg_write_mem",
+    "description": "Write debug memory",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "regions": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "addr": {
+                    "type": "string",
+                    "description": "Address to patch (hex or decimal)"
+                  },
+                  "data": {
+                    "type": "string",
+                    "description": "Hex data to write (space-separated bytes)"
+                  }
+                },
+                "required": [
+                  "addr",
+                  "data"
+                ],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string",
+                  "description": "Address to patch (hex or decimal)"
+                },
+                "data": {
+                  "type": "string",
+                  "description": "Hex data to write (space-separated bytes)"
+                }
+              },
+              "required": [
+                "addr",
+                "data"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "regions"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  },
+  {
+    "name": "py_eval",
+    "description": "Execute Python code in IDA context.\n    Returns dict with result/stdout/stderr.\n    Has access to all IDA API modules.\n    Supports Jupyter-style evaluation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Python code"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "outputSchema": {
+      "type": "object"
+    }
+  }
+]

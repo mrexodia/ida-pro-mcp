@@ -34,6 +34,8 @@ build-backend = "setuptools.build_meta"
 [project.scripts]
 ida-pro-mcp = "ida_pro_mcp.server:main"
 idalib-mcp = "ida_pro_mcp.idalib_server:main"
+idalib-session-mcp = "ida_pro_mcp.session_mcp_server:main"
+ida-session-manager = "ida_pro_mcp.session_manager:main"
 ida-mcp-test = "ida_pro_mcp.test:main"
 
 [tool.pyright]
