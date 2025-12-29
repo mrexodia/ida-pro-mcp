@@ -59,8 +59,13 @@ The session-aware MCP server (`idalib-session-mcp`) allows LLMs to:
 2. **Manage multiple sessions**: Work with multiple binaries simultaneously
 3. **Switch contexts**: Use `session_switch` to change active binary
 
+```bash
+# Generate tools cache (run once after installation for immediate tool visibility)
+uv run idalib-session-mcp --generate-tools-cache /path/to/any/binary
+```
+
 Available session tools:
-- `session_open(binary_path)` - Open a new analysis session
+- `session_open(binary_path)` - Open a new analysis session (returns analysis_time)
 - `session_list()` - List all active sessions
 - `session_switch(session_id)` - Switch to a different session
 - `session_close(session_id)` - Close a session
