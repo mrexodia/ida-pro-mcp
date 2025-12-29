@@ -8,6 +8,7 @@ from pathlib import Path
 # idapro must go first to initialize idalib
 import idapro
 import ida_auto
+import ida_loader
 
 from ida_pro_mcp.ida_mcp import MCP_SERVER
 
@@ -110,6 +111,8 @@ def main():
     # When a signal arrives, our handlers execute first, allowing us to close the
     # IDA database cleanly before the process terminates.
     def cleanup_and_exit(signum, frame):
+        logger.info("Saving IDA database...")
+        ida_loader.save_database("", 0)  # Save to current IDB path
         logger.info("Closing IDA database...")
         idapro.close_database()
         logger.info("IDA database closed.")

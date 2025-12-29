@@ -561,7 +561,7 @@ class SessionMcpServer:
                     self.sessions[session_id].status = "closed"
 
     def _destroy_session(self, session_id: str) -> bool:
-        """Destroy a session"""
+        """Destroy a session, saving the IDB before termination"""
         with self._lock:
             if session_id not in self.sessions:
                 return False
@@ -570,9 +570,14 @@ class SessionMcpServer:
 
             if process and process.poll() is None:
                 try:
+                    # Send SIGTERM to trigger graceful shutdown with IDB save
+                    logger.info(f"Sending SIGTERM to session {session_id} for graceful shutdown with IDB save...")
                     process.terminate()
-                    process.wait(timeout=5)
+                    # Wait longer for IDB save to complete (up to 30 seconds)
+                    process.wait(timeout=30)
+                    logger.info(f"Session {session_id} terminated gracefully with IDB saved")
                 except subprocess.TimeoutExpired:
+                    logger.warning(f"Session {session_id} did not terminate in time, force killing...")
                     process.kill()
                     process.wait()
 
@@ -587,8 +592,10 @@ class SessionMcpServer:
             return True
 
     def cleanup(self):
-        """Clean up all sessions"""
+        """Clean up all sessions, saving IDBs before termination"""
         session_ids = list(self.sessions.keys())
+        if session_ids:
+            logger.info(f"Saving and closing {len(session_ids)} session(s)...")
         for session_id in session_ids:
             self._destroy_session(session_id)
 
@@ -676,7 +683,7 @@ def main():
     server = SessionMcpServer(unsafe=args.unsafe, verbose=args.verbose)
 
     def signal_handler(signum, frame):
-        logger.info("Shutting down...")
+        logger.info("Shutting down, saving all IDBs...")
         server.cleanup()
         server.stop()
         sys.exit(0)
