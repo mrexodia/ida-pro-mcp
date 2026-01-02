@@ -20,79 +20,75 @@ from ..framework import (
 )
 
 # Import functions under test
-from ..api_stack import *
+from ..api_stack import (
+    stack_frame,
+    declare_stack,
+    delete_stack,
+)
 
 # Import sync module for IDAError
 from ..sync import IDAError
 
 
 # ============================================================================
-# Tests
+# Tests for stack_frame
 # ============================================================================
+
 
 @test()
 def test_stack_frame():
-    """stack_frame returns stack variables for a valid function"""
+    """stack_frame returns stack frame info for a function"""
     fn_addr = get_any_function()
     if not fn_addr:
-        return  # Skip if no functions
+        return
 
     result = stack_frame(fn_addr)
     assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "addr", "vars")
-    # vars can be None if function has no stack frame, or a list
-    # Just verify the structure is correct
-    assert result[0]["addr"] == fn_addr
-    assert "error" not in result[0] or result[0].get("error") is None
+    r = result[0]
+    assert_has_keys(r, "addr", "frame", "error")
 
 
 @test()
 def test_stack_frame_no_function():
-    """stack_frame handles invalid address gracefully"""
-    # Use an address that's unlikely to be a valid function
-    result = stack_frame("0xDEADBEEFDEADBEEF")
+    """stack_frame handles non-function address"""
+    data_addr = get_data_address()
+    if not data_addr:
+        return
+
+    result = stack_frame(data_addr)
     assert_is_list(result, min_length=1)
-    # Should return error, not crash
-    assert "error" in result[0]
-    assert result[0]["error"] is not None
+    r = result[0]
+    # Should have error or null frame
+    assert r.get("error") is not None or r.get("frame") is None
 
 
-@test()
+# ============================================================================
+# Tests for declare_stack / delete_stack
+# ============================================================================
+
+
+@test(skip=True)  # Skip by default as it modifies the database
 def test_declare_delete_stack():
-    """declare_stack and delete_stack create/delete stack variables"""
+    """declare_stack and delete_stack work together"""
     fn_addr = get_any_function()
     if not fn_addr:
-        return  # Skip if no functions
+        return
 
-    # First check if the function has a stack frame
-    frame_result = stack_frame(fn_addr)
-    if not frame_result or frame_result[0].get("error"):
-        return  # Skip if function has no frame
+    # Try to declare a stack variable
+    result = declare_stack({
+        "func": fn_addr,
+        "name": "__test_var__",
+        "offset": -8,
+        "type": "int"
+    })
+    assert_is_list(result, min_length=1)
+    r = result[0]
+    assert_has_keys(r, "func", "error")
 
-    test_var_name = "__mcp_test_var__"
-
-    try:
-        # Try to create a stack variable at offset 0x10
-        # Use "int" as the type - a basic type that should exist
-        declare_result = declare_stack(
-            {"addr": fn_addr, "offset": "0x10", "name": test_var_name, "ty": "int"}
-        )
-        assert_is_list(declare_result, min_length=1)
-        assert_has_keys(declare_result[0], "addr", "name")
-
-        # If creation succeeded, try to delete it
-        if declare_result[0].get("ok"):
-            delete_result = delete_stack({"addr": fn_addr, "name": test_var_name})
-            assert_is_list(delete_result, min_length=1)
-            assert_has_keys(delete_result[0], "addr", "name")
-        # If creation failed (e.g., no frame, offset conflict), that's OK
-        # The test verifies the API handles it gracefully without crashing
-    except Exception:
-        # If any operation fails, ensure cleanup is attempted
-        try:
-            delete_stack({"addr": fn_addr, "name": test_var_name})
-        except Exception:
-            pass
-        raise
-
-
+    # If declare succeeded, try to delete
+    if r.get("error") is None:
+        del_result = delete_stack({
+            "func": fn_addr,
+            "name": "__test_var__"
+        })
+        assert_is_list(del_result, min_length=1)

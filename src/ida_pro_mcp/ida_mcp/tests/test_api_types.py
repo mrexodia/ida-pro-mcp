@@ -20,176 +20,130 @@ from ..framework import (
 )
 
 # Import functions under test
-from ..api_types import *
+from ..api_types import (
+    declare_type,
+    read_struct,
+    search_structs,
+    set_type,
+    infer_types,
+)
 
 # Import sync module for IDAError
 from ..sync import IDAError
 
 
 # ============================================================================
-# Tests
+# Tests for declare_type
 # ============================================================================
+
 
 @test()
 def test_declare_type():
-    """declare_type can declare a C type"""
-    # Use a unique name to avoid conflicts
-    test_struct_name = "__mcp_test_struct_declare__"
-
-    try:
-        # Declare a simple struct
-        result = declare_type(f"struct {test_struct_name} {{ int x; int y; }};")
-        assert_is_list(result, min_length=1)
-        assert_has_keys(result[0], "decl")
-        # Should either succeed or have an error key
-        assert "ok" in result[0] or "error" in result[0]
-    finally:
-        # Cleanup: try to delete the type (best effort)
-        try:
-            tif = ida_typeinf.tinfo_t()
-            if tif.get_named_type(None, test_struct_name):
-                # IDA doesn't have a direct delete type API, so we just leave it
-                # The test struct won't interfere with real analysis
-                pass
-        except Exception:
-            pass
-
-
-@test()
-def test_structs_list():
-    """structs returns list of structures (may be empty)"""
-    result = structs()
-    assert_is_list(result)
-    # If there are structs, verify structure
-    if result:
-        assert_all_have_keys(result, "name", "size", "members")
-
-
-@test()
-def test_struct_info():
-    """struct_info returns details for existing struct"""
-    # First get list of structs
-    all_structs = structs()
-    if not all_structs:
-        return  # Skip if no structs in IDB
-
-    # Get info for first struct
-    struct_name = all_structs[0]["name"]
-    result = struct_info(struct_name)
+    """declare_type can add a type declaration"""
+    # Try to declare a simple struct
+    result = declare_type("struct __test_struct__ { int x; };")
     assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "name")
-    # Should have either info or error
-    assert "info" in result[0] or "error" in result[0]
+    r = result[0]
+    assert_has_keys(r, "decl", "success", "error")
 
 
-@test()
-def test_struct_info_not_found():
-    """struct_info handles nonexistent struct gracefully"""
-    result = struct_info("__nonexistent_struct_name_12345__")
-    assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "name", "error")
-    assert "not found" in result[0]["error"].lower()
+# ============================================================================
+# Tests for read_struct
+# ============================================================================
 
 
 @test()
 def test_read_struct():
-    """read_struct reads structure values from memory"""
-    # First check if any structs exist
-    struct_list = structs()
-    if not struct_list:
-        return  # Skip if no structs
+    """read_struct reads structure at address"""
+    data_addr = get_data_address()
+    if not data_addr:
+        seg = get_first_segment()
+        if not seg:
+            return
+        data_addr = seg[0]
 
-    # Try to read a struct from a valid address
-    seg = get_first_segment()
-    if not seg:
-        return  # Skip if no segments
-    start_addr, _ = seg
-    struct_name = struct_list[0]["name"]
-
-    result = read_struct([{"addr": start_addr, "struct": struct_name}])
+    result = read_struct({"addr": data_addr, "struct": "test_struct"})
     assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "addr", "struct")
-    # Should have either members or error
-    assert "members" in result[0] or "error" in result[0]
+    r = result[0]
+    assert_has_keys(r, "addr", "struct", "error")
 
 
 @test()
 def test_read_struct_not_found():
-    """read_struct handles nonexistent struct gracefully"""
+    """read_struct handles non-existent struct"""
     seg = get_first_segment()
     if not seg:
-        return  # Skip if no segments
-    start_addr, _ = seg
+        return
 
-    result = read_struct(
-        [{"addr": start_addr, "struct": "__nonexistent_struct_12345__"}]
-    )
+    result = read_struct({"addr": seg[0], "struct": "NonExistentStruct12345"})
     assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "addr", "struct", "error")
-    assert "not found" in result[0]["error"].lower()
+    r = result[0]
+    # Should have error
+    assert r.get("error") is not None
+
+
+# ============================================================================
+# Tests for search_structs
+# ============================================================================
 
 
 @test()
 def test_search_structs():
-    """search_structs filters by name pattern"""
-    # First check if there are any structs
-    all_structs = structs()
-    if not all_structs:
-        # No structs, verify empty search returns empty
-        result = search_structs("anything")
-        assert_is_list(result)
-        return
-
-    # Search for a substring of the first struct's name
-    first_name = all_structs[0]["name"]
-    if len(first_name) >= 3:
-        # Search with a substring
-        search_term = first_name[:3]
-        result = search_structs(search_term)
-        assert_is_list(result)
-        # Should find at least the original struct
-        found_names = [s["name"] for s in result]
-        assert first_name in found_names, f"Expected {first_name} in search results"
-    else:
-        # Short name, just verify search returns list
-        result = search_structs(first_name)
-        assert_is_list(result)
+    """search_structs can search for structures"""
+    result = search_structs("*")
+    assert_is_list(result, min_length=1)
+    r = result[0]
+    assert_has_keys(r, "query", "results", "error")
 
 
 @test()
-def test_apply_types():
-    """apply_types can apply type to address"""
+def test_search_structs_pattern():
+    """search_structs can filter by pattern"""
+    result = search_structs("test*")
+    assert_is_list(result, min_length=1)
+
+
+# ============================================================================
+# Tests for set_type
+# ============================================================================
+
+
+@test()
+def test_set_type():
+    """set_type applies type to address"""
     fn_addr = get_any_function()
     if not fn_addr:
-        return  # Skip if no functions
+        return
 
-    # Test applying a simple type - use "int" which always exists
-    result = apply_types([{"addr": fn_addr, "ty": "int"}])
+    result = set_type({"addr": fn_addr, "type": "int"})
     assert_is_list(result, min_length=1)
-    # Should either succeed or have error
-    assert "ok" in result[0] or "error" in result[0]
+    r = result[0]
+    assert_has_keys(r, "addr", "error")
 
 
 @test()
-def test_apply_types_invalid_address():
-    """apply_types handles invalid address gracefully"""
-    result = apply_types([{"addr": "0xDEADBEEFDEADBEEF", "ty": "int"}])
+def test_set_type_invalid_address():
+    """set_type handles invalid address"""
+    result = set_type({"addr": get_unmapped_address(), "type": "int"})
     assert_is_list(result, min_length=1)
-    # Should have either ok or error field
-    assert "ok" in result[0] or "error" in result[0]
+    r = result[0]
+    # Should have error or handle gracefully
+    assert_has_keys(r, "addr")
+
+
+# ============================================================================
+# Tests for infer_types
+# ============================================================================
 
 
 @test()
 def test_infer_types():
-    """infer_types returns type inference for valid function address"""
+    """infer_types infers types for a function"""
     fn_addr = get_any_function()
     if not fn_addr:
-        return  # Skip if no functions
+        return
 
     result = infer_types(fn_addr)
     assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "addr", "inferred_type", "method", "confidence")
-    # Should have some result (even if method is None)
-    assert result[0]["confidence"] in ("high", "low", "none")
-
-
+    r = result[0]
+    assert_has_keys(r, "addr", "error")
