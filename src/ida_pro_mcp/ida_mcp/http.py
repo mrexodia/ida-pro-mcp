@@ -1,18 +1,19 @@
 import html
 import json
+import re
 import ida_netnode
 from urllib.parse import urlparse, parse_qs
 from typing import TypeVar, cast
 from http.server import HTTPServer
 
-from .sync import idaread, idawrite
-from .rpc import McpRpcRegistry, McpHttpRequestHandler, MCP_SERVER, MCP_UNSAFE
+from .sync import idasync
+from .rpc import McpRpcRegistry, McpHttpRequestHandler, MCP_SERVER, MCP_UNSAFE, get_cached_output
 
 
 T = TypeVar("T")
 
 
-@idaread
+@idasync
 def config_json_get(key: str, default: T) -> T:
     node = ida_netnode.netnode(f"$ ida_mcp.{key}")
     json_blob: bytes | None = node.getblob(0, "C")
@@ -27,7 +28,7 @@ def config_json_get(key: str, default: T) -> T:
         return default
 
 
-@idawrite
+@idasync
 def config_json_set(key: str, value):
     node = ida_netnode.netnode(f"$ ida_mcp.{key}", 0, True)
     json_blob = json.dumps(value).encode("utf-8")
@@ -101,12 +102,50 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
 
     def do_GET(self):
         """Handles GET requests."""
-        if urlparse(self.path).path == "/config.html":
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/config.html":
             if not self._check_host():
                 return
             self._handle_config_get()
+            return
+
+        # Handle output download requests
+        output_match = re.match(r"^/output/([a-f0-9-]+)\.(\w+)$", path)
+        if output_match:
+            self._handle_output_download(output_match.group(1), output_match.group(2))
+            return
+
+        super().do_GET()
+
+    def _handle_output_download(self, output_id: str, extension: str):
+        """Handle download of cached output data."""
+        data = get_cached_output(output_id)
+        if data is None:
+            self.send_error(404, "Output not found or expired")
+            return
+
+        if extension == "json":
+            content = json.dumps(data, indent=2)
+        elif isinstance(data, dict) and "code" in data:
+            content = str(data["code"])
+        elif isinstance(data, list) and data and isinstance(data[0], dict):
+            content = "\n\n".join(
+                str(item.get("code", item.get("asm", item.get("lines", ""))))
+                for item in data
+            )
         else:
-            super().do_GET()
+            content = json.dumps(data, indent=2)
+
+        body = content.encode("utf-8")
+        self.send_response(200)
+        content_type = "application/json" if extension == "json" else "text/plain"
+        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Disposition", f'attachment; filename="{output_id}.{extension}"')
+        self.end_headers()
+        self.wfile.write(body)
 
     @property
     def server_port(self) -> int:
