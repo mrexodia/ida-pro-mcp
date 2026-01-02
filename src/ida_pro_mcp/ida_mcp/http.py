@@ -57,10 +57,39 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
     return original_tools
 
 
+DEFAULT_CORS_POLICY = "local"
+
+
+def get_cors_policy(port: int) -> str:
+    """Retrieve the current CORS policy from configuration."""
+    match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
+        case "unrestricted":
+            return "*"
+        case "local":
+            return "127.0.0.1 localhost"
+        case "direct":
+            return f"http://127.0.0.1:{port} http://localhost:{port}"
+        case _:
+            return "*"
+
+
 ORIGINAL_TOOLS = handle_enabled_tools(MCP_SERVER.tools, "enabled_tools")
 
 
 class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
+    def __init__(self, request, client_address, server):
+        super().__init__(request, client_address, server)
+        self.update_cors_policy()
+
+    def update_cors_policy(self):
+        match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
+            case "unrestricted":
+                self.mcp_server.cors_allowed_origins = "*"
+            case "local":
+                self.mcp_server.cors_allowed_origins = self.mcp_server.cors_localhost
+            case "direct":
+                self.mcp_server.cors_allowed_origins = None
+
     def do_POST(self):
         """Handles POST requests."""
         if urlparse(self.path).path == "/config":
@@ -79,13 +108,17 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         else:
             super().do_GET()
 
+    @property
+    def server_port(self) -> int:
+        return cast(HTTPServer, self.server).server_port
+
     def _check_origin(self) -> bool:
         """
         Prevents CSRF and DNS rebinding attacks by ensuring POST requests
         originate from pages served by this server, not external websites.
         """
         origin = self.headers.get("Origin")
-        port = cast(HTTPServer, self.server).server_port
+        port = self.server_port
         if origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
             self.send_error(403, "Invalid Origin")
             return False
@@ -97,7 +130,7 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         resolves to 127.0.0.1, allowing their page to read localhost resources.
         """
         host = self.headers.get("Host")
-        port = cast(HTTPServer, self.server).server_port
+        port = self.server_port
         if host not in (f"127.0.0.1:{port}", f"localhost:{port}"):
             self.send_error(403, "Invalid Host")
             return False
@@ -114,18 +147,25 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Content-Security-Policy", "; ".join([
-            "frame-ancestors 'none'",
-            "script-src 'self' 'unsafe-inline'",
-            "style-src 'self' 'unsafe-inline'",
-            "default-src 'self'",
-            "form-action 'self'",
-        ]))
+        self.send_header(
+            "Content-Security-Policy",
+            "; ".join(
+                [
+                    "frame-ancestors 'none'",
+                    "script-src 'self' 'unsafe-inline'",
+                    "style-src 'self' 'unsafe-inline'",
+                    "default-src 'self'",
+                    "form-action 'self'",
+                ]
+            ),
+        )
         self.end_headers()
         self.wfile.write(body)
 
     def _handle_config_get(self):
         """Sends the configuration page with checkboxes."""
+        cors_policy = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
+
         body = """<html>
 <head>
   <meta charset="UTF-8">
@@ -171,6 +211,12 @@ h1 {
   padding-bottom: 0.5rem;
 }
 
+h2 {
+  font-size: 1.1rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
 label {
   display: block;
   padding: 0.25rem 0.5rem;
@@ -182,7 +228,8 @@ label:hover {
   background: var(--hover);
 }
 
-input[type="checkbox"] {
+input[type="checkbox"],
+input[type="radio"] {
   margin-right: 0.5rem;
   accent-color: var(--accent);
 }
@@ -201,23 +248,70 @@ input[type="submit"] {
 input[type="submit"]:hover {
   opacity: 0.9;
 }
+
+.tooltip {
+  border-bottom: 1px dotted var(--text);
+}
   </style>
+  <script defer>
+  function setTools(mode) {
+    document.querySelectorAll('input[data-tool]').forEach(cb => {
+        if (mode === 'all') cb.checked = true;
+        else if (mode === 'none') cb.checked = false;
+        else if (mode === 'disable-unsafe' && cb.hasAttribute('data-unsafe')) cb.checked = false;
+    });
+  }
+  </script>
 </head>
 <body>
-<h1>Enabled Tools</h1>
+<h1>IDA Pro MCP Config</h1>
+
 <form method="post" action="/config">
+
+<h2>API Access</h2>
 """
+        cors_options = [
+            (
+                "unrestricted",
+                "⛔ Unrestricted",
+                "Any website can make requests to this server. A malicious site you visit could access or modify your IDA database.",
+            ),
+            (
+                "local",
+                "🏠 Local apps only",
+                "Only web apps running on localhost can connect. Remote websites are blocked, but local development tools work.",
+            ),
+            (
+                "direct",
+                "🔒 Direct connections only",
+                "Browser-based requests are blocked. Only direct clients like curl, MCP tools, or Claude Desktop can connect.",
+            ),
+        ]
+        for value, label, tooltip in cors_options:
+            checked = "checked" if cors_policy == value else ""
+            body += f'<label><input type="radio" name="cors_policy" value="{html.escape(value)}" {checked}><span class="tooltip" title="{html.escape(tooltip)}">{html.escape(label)}</span></label>'
+        body += "<br><input type='submit' value='Save'>"
+
+        quick_select = """<p style="font-size: 0.9rem; margin: 0.5rem 0;">
+  Select:
+  <a href="#" onclick="setTools('all'); return false;">All</a> ·
+  <a href="#" onclick="setTools('none'); return false;">None</a> ·
+  <a href="#" onclick="setTools('disable-unsafe'); return false;">Disable unsafe</a>
+</p>"""
+
+        body += "<h2>Enabled Tools</h2>"
+        body += quick_select
         for name, func in ORIGINAL_TOOLS.items():
             description = (
                 (func.__doc__ or "No description").strip().splitlines()[0].strip()
             )
-            unsafe = "⚠️ " if name in MCP_UNSAFE else ""
-            checked = (
-                "checked" if name in self.mcp_server.tools.methods else ""
-            )  # Preserve state
-            body += f"<label><input type='checkbox' name='{html.escape(name)}' value='{html.escape(name)}' {checked}>{unsafe}{html.escape(name)}: {html.escape(description)}</label>"
-        body += "<br><input type='submit' value='Save'></form>"
-        body += "</body></html>"
+            unsafe_prefix = "⚠️ " if name in MCP_UNSAFE else ""
+            checked = " checked" if name in self.mcp_server.tools.methods else ""
+            unsafe_attr = " data-unsafe" if name in MCP_UNSAFE else ""
+            body += f"<label><input type='checkbox' name='{html.escape(name)}' value='{html.escape(name)}'{checked}{unsafe_attr} data-tool>{unsafe_prefix}{html.escape(name)}: {html.escape(description)}</label>"
+        body += quick_select
+        body += "<br><input type='submit' value='Save'>"
+        body += "</form></body></html>"
         self._send_html(200, body)
 
     def _handle_config_post(self):
@@ -232,6 +326,11 @@ input[type="submit"]:hover {
         length = int(self.headers.get("content-length", "0"))
         postvars = parse_qs(self.rfile.read(length).decode("utf-8"))
 
+        # Update CORS policy
+        cors_policy = postvars.get("cors_policy", [DEFAULT_CORS_POLICY])[0]
+        config_json_set("cors_policy", cors_policy)
+        self.update_cors_policy()
+
         # Update the server's tools
         enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS.keys()}
         self.mcp_server.tools.methods = {
@@ -242,6 +341,6 @@ input[type="submit"]:hover {
         config_json_set("enabled_tools", enabled_tools)
 
         # Redirect back to the config page
-        self.send_response(302)  # 302 Found is a common redirect status
+        self.send_response(302)
         self.send_header("Location", "/config.html")
         self.end_headers()
