@@ -125,8 +125,15 @@ def sync_wrapper(ff, timeout_override: float | None = None):
     finally:
         idc.batch(old_batch)
 
-def idawrite(f):
-    """Decorator for marking a function as modifying the IDB."""
+
+def idasync(f):
+    """Run the function on the IDA main thread in write mode.
+    
+    This is the unified decorator for all IDA synchronization.
+    Previously there were separate @idaread and @idawrite decorators,
+    but since read-only operations in IDA might actually require write
+    access (e.g., decompilation), we now use a single decorator.
+    """
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
@@ -140,30 +147,20 @@ def idawrite(f):
     return wrapper
 
 
-def idaread(f):
-    """Decorator for marking a function as reading from the IDB."""
-
-    @functools.wraps(f)
-    def wrapper(*args, **kwargs):
-        ff = functools.partial(f, *args, **kwargs)
-        ff.__name__ = f.__name__
-        timeout_override = _normalize_timeout(
-            getattr(f, "__ida_mcp_timeout_sec__", None)
-        )
-        return sync_wrapper(ff, timeout_override)
-
-    return wrapper
+# Backwards compatibility aliases
+idaread = idasync
+idawrite = idasync
 
 
 def tool_timeout(seconds: float):
     """Decorator to override per-tool timeout (seconds).
 
-    IMPORTANT: Must be applied BEFORE @idaread/@idawrite (i.e., listed AFTER them)
-    so the attribute exists when they capture the function in closure.
+    IMPORTANT: Must be applied BEFORE @idasync (i.e., listed AFTER it)
+    so the attribute exists when it captures the function in closure.
 
     Correct order:
         @tool
-        @idaread  # or @idawrite
+        @idasync
         @tool_timeout(90.0)  # innermost
         def my_func(...):
     """
@@ -172,3 +169,18 @@ def tool_timeout(seconds: float):
         return func
     return decorator
 
+
+def is_window_active():
+    """Returns whether IDA is currently active."""
+    # Source: https://github.com/OALabs/hexcopy-ida/blob/8b0b2a3021d7dc9010c01821b65a80c47d491b61/hexcopy.py#L30
+    using_pyside6 = (ida_major > 9) or (ida_major == 9 and ida_minor >= 2)
+    
+    if using_pyside6:
+        from PySide6 import QtWidgets
+    else:
+        from PyQt5 import QtWidgets
+    
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return False
+    return app.activeWindow() is not None
