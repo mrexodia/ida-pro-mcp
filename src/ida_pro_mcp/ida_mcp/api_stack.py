@@ -10,7 +10,7 @@ import ida_frame
 import idaapi
 
 from .rpc import tool
-from .sync import idaread, idawrite
+from .sync import idasync
 from .utils import (
     normalize_list_input,
     normalize_dict_list,
@@ -28,7 +28,7 @@ from .utils import (
 
 
 @tool
-@idaread
+@idasync
 def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
     """Get stack vars"""
     addrs = normalize_list_input(addrs)
@@ -46,7 +46,7 @@ def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
 
 
 @tool
-@idawrite
+@idasync
 def declare_stack(
     items: list[StackVarDecl] | StackVarDecl,
 ):
@@ -91,7 +91,7 @@ def declare_stack(
 
 
 @tool
-@idawrite
+@idasync
 def delete_stack(
     items: list[StackVarDelete] | StackVarDelete,
 ):

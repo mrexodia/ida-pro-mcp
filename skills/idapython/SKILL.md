@@ -131,7 +131,7 @@ ida_auto.auto_wait()  # Block until autoanalysis completes
 
 1. **NEVER convert hex/decimal manually** — use `int_convert` MCP tool
 2. **Wait for analysis**: Call `ida_auto.auto_wait()` before reading results
-3. **Thread safety**: IDA SDK calls must run on main thread (use `@idaread`/`@idawrite`)
+3. **Thread safety**: IDA SDK calls must run on main thread (use `@idasync`)
 4. **64-bit addresses**: Always assume `ea_t` can be 64-bit
 
 ## Anti-Patterns

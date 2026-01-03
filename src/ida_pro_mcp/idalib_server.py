@@ -73,7 +73,7 @@ def main():
 
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread (this one) does not fake any
-    # work from @idaread, so we deadlock.
+    # work from @idasync, so we deadlock.
     MCP_SERVER.serve(host=args.host, port=args.port, background=False)
 
 

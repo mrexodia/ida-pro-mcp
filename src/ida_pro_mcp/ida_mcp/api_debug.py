@@ -19,7 +19,7 @@ import ida_name
 import idaapi
 
 from .rpc import tool, unsafe, ext
-from .sync import idaread, idawrite, IDAError
+from .sync import idasync, IDAError
 from .utils import (
     RegisterValue,
     ThreadRegisters,
@@ -160,7 +160,7 @@ def list_breakpoints():
 @ext("dbg")
 @unsafe
 @tool
-@idawrite
+@idasync
 def dbg_start():
     """Start debugger"""
     if len(list_breakpoints()) == 0:
@@ -180,7 +180,7 @@ def dbg_start():
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_exit():
     """Exit debugger"""
     dbg_ensure_running()
@@ -192,7 +192,7 @@ def dbg_exit():
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_continue() -> str:
     """Continue debugger"""
     dbg_ensure_running()
@@ -206,7 +206,7 @@ def dbg_continue() -> str:
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_run_to(
     addr: Annotated[str, "Address"],
 ):
@@ -223,7 +223,7 @@ def dbg_run_to(
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_step_into():
     """Step into"""
     dbg_ensure_running()
@@ -237,7 +237,7 @@ def dbg_step_into():
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_step_over():
     """Step over"""
     dbg_ensure_running()
@@ -256,7 +256,7 @@ def dbg_step_over():
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_bps():
     """List breakpoints"""
     return list_breakpoints()
@@ -265,7 +265,7 @@ def dbg_bps():
 @ext("dbg")
 @unsafe
 @tool
-@idawrite
+@idasync
 def dbg_add_bp(
     addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"],
 ) -> list[dict]:
@@ -295,7 +295,7 @@ def dbg_add_bp(
 @ext("dbg")
 @unsafe
 @tool
-@idawrite
+@idasync
 def dbg_delete_bp(
     addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"],
 ) -> list[dict]:
@@ -319,7 +319,7 @@ def dbg_delete_bp(
 @ext("dbg")
 @unsafe
 @tool
-@idawrite
+@idasync
 def dbg_toggle_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
     """Enable/disable breakpoints"""
 
@@ -355,7 +355,7 @@ def dbg_toggle_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_regs_all() -> list[ThreadRegisters]:
     """Get all registers"""
     result: list[ThreadRegisters] = []
@@ -369,7 +369,7 @@ def dbg_regs_all() -> list[ThreadRegisters]:
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_regs_remote(
     tids: Annotated[list[int] | int, "Thread ID(s) to get registers for"],
 ) -> list[dict]:
@@ -399,7 +399,7 @@ def dbg_regs_remote(
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_regs() -> ThreadRegisters:
     """Get current thread registers"""
     dbg = dbg_ensure_running()
@@ -410,7 +410,7 @@ def dbg_regs() -> ThreadRegisters:
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_gpregs_remote(
     tids: Annotated[list[int] | int, "Thread ID(s) to get GP registers for"],
 ) -> list[dict]:
@@ -440,7 +440,7 @@ def dbg_gpregs_remote(
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_gpregs() -> ThreadRegisters:
     """Get current thread GP registers"""
     dbg = dbg_ensure_running()
@@ -451,7 +451,7 @@ def dbg_gpregs() -> ThreadRegisters:
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_regs_named_remote(
     thread_id: Annotated[int, "Thread ID"],
     register_names: Annotated[
@@ -471,7 +471,7 @@ def dbg_regs_named_remote(
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_regs_named(
     register_names: Annotated[
         str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
@@ -492,7 +492,7 @@ def dbg_regs_named(
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_stacktrace() -> list[dict[str, str]]:
     """Get call stack"""
     callstack = []
@@ -544,7 +544,7 @@ def dbg_stacktrace() -> list[dict[str, str]]:
 @ext("dbg")
 @unsafe
 @tool
-@idaread
+@idasync
 def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     """Read debug memory"""
 
@@ -588,7 +588,7 @@ def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
 @ext("dbg")
 @unsafe
 @tool
-@idawrite
+@idasync
 def dbg_write(regions: list[MemoryPatch] | MemoryPatch) -> list[dict]:
     """Write debug memory"""
 

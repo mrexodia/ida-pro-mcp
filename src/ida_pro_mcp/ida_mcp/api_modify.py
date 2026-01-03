@@ -8,7 +8,7 @@ import ida_frame
 import ida_dirtree
 
 from .rpc import tool
-from .sync import idawrite, IDAError
+from .sync import idasync, IDAError
 from .utils import (
     parse_address,
     decompile_checked,
@@ -29,7 +29,7 @@ from .utils import (
 
 
 @tool
-@idawrite
+@idasync
 def set_comments(items: list[CommentOp] | CommentOp):
     """Set comments at addresses (both disassembly and decompiler views)"""
     if isinstance(items, dict):
@@ -111,7 +111,7 @@ def set_comments(items: list[CommentOp] | CommentOp):
 
 
 @tool
-@idawrite
+@idasync
 def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
     """Patch assembly instructions at addresses"""
     if isinstance(items, dict):
@@ -153,7 +153,7 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
 
 
 @tool
-@idawrite
+@idasync
 def rename(batch: RenameBatch) -> dict:
     """Unified rename operation for functions, globals, locals, and stack variables"""
 
