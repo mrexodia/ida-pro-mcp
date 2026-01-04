@@ -1,5 +1,7 @@
 """Core API Functions - IDB metadata and basic queries"""
 
+import re
+import time
 from typing import Annotated, Optional
 
 import ida_hexrays
@@ -11,6 +13,33 @@ import ida_segment
 
 from .rpc import tool
 from .sync import idasync
+
+# Cached strings list: [(ea, text), ...]
+_strings_cache: list[tuple[int, str]] | None = None
+
+
+def _get_strings_cache() -> list[tuple[int, str]]:
+    """Get cached strings, building cache on first access."""
+    global _strings_cache
+    if _strings_cache is None:
+        _strings_cache = [(s.ea, str(s)) for s in idautils.Strings() if s is not None]
+    return _strings_cache
+
+
+def invalidate_strings_cache():
+    """Clear the strings cache (call after IDB changes)."""
+    global _strings_cache
+    _strings_cache = None
+
+
+def init_caches():
+    """Build caches on plugin startup (called from Ctrl+M)."""
+    t0 = time.perf_counter()
+    strings = _get_strings_cache()
+    t1 = time.perf_counter()
+    print(f"[MCP] Cached {len(strings)} strings in {(t1-t0)*1000:.0f}ms")
+
+
 from .utils import (
     Metadata,
     Function,
@@ -26,12 +55,9 @@ from .utils import (
     parse_address,
     normalize_list_input,
     normalize_dict_list,
-    looks_like_address,
     get_function,
-    create_demangled_to_ea_map,
     paginate,
     pattern_filter,
-    DEMANGLED_TO_EA,
 )
 from .sync import IDAError
 from .tests import (
@@ -45,65 +71,48 @@ from .tests import (
 
 
 # ============================================================================
-# String Cache
-# ============================================================================
-
-# Cache for idautils.Strings() to avoid rebuilding on every call
-_strings_cache: Optional[list[String]] = None
-_strings_cache_md5: Optional[str] = None
-
-
-def _get_cached_strings() -> list[String]:
-    """Get cached strings, rebuilding if IDB changed"""
-    global _strings_cache, _strings_cache_md5
-
-    # Get current IDB modification hash
-    current_md5 = ida_nalt.retrieve_input_file_md5()
-
-    # Rebuild cache if needed
-    if _strings_cache is None or _strings_cache_md5 != current_md5:
-        _strings_cache = []
-        for item in idautils.Strings():
-            if item is None:
-                continue
-            try:
-                string = str(item)
-                if string:
-                    _strings_cache.append(
-                        String(addr=hex(item.ea), length=item.length, string=string)
-                    )
-            except Exception:
-                continue
-        _strings_cache_md5 = current_md5
-
-    return _strings_cache
-
-
-# ============================================================================
 # Core API Functions
 # ============================================================================
+
+
+def _parse_func_query(query: str) -> int:
+    """Fast path for common function query patterns. Returns ea or BADADDR."""
+    q = query.strip()
+
+    # 0x<hex> - direct address
+    if q.startswith("0x") or q.startswith("0X"):
+        try:
+            return int(q, 16)
+        except ValueError:
+            pass
+
+    # sub_<hex> - IDA auto-named function
+    if q.startswith("sub_"):
+        try:
+            return int(q[4:], 16)
+        except ValueError:
+            pass
+
+    return idaapi.BADADDR
 
 
 @tool
 @idasync
 def idb_meta() -> Metadata:
     """Get IDB metadata"""
-
-    def hash(f):
-        try:
-            return f().hex()
-        except Exception:
-            return ""
+    info = idaapi.get_inf_structure()
+    base = info.min_ea
+    image_size = get_image_size()
 
     return Metadata(
-        path=idaapi.get_input_file_path(),
+        path=ida_nalt.get_input_file_path(),
         module=idaapi.get_root_filename(),
-        base=hex(idaapi.get_imagebase()),
-        size=hex(get_image_size()),
-        md5=hash(ida_nalt.retrieve_input_file_md5),
-        sha256=hash(ida_nalt.retrieve_input_file_sha256),
+        base=hex(base),
+        size=hex(image_size),
+        md5=idaapi.retrieve_input_file_md5().hex(),
+        sha256=idaapi.retrieve_input_file_sha256().hex(),
         crc32=hex(ida_nalt.retrieve_input_file_crc32()),
-        filesize=hex(ida_nalt.retrieve_input_file_size()),
+        filesize=ida_nalt.retrieve_input_file_size(),
     )
 
 
@@ -128,31 +137,24 @@ def lookup_funcs(
     """Get functions by address or name (auto-detects)"""
     queries = normalize_list_input(queries)
 
-    # Treat empty/"*" as "all functions"
+    # Treat empty/"*" as "all functions" - but add limit
     if not queries or (len(queries) == 1 and queries[0] in ("*", "")):
-        all_funcs = [get_function(addr) for addr in idautils.Functions()]
+        all_funcs = []
+        for addr in idautils.Functions():
+            all_funcs.append(get_function(addr))
+            if len(all_funcs) >= 1000:
+                break
         return [{"query": "*", "fn": fn, "error": None} for fn in all_funcs]
-
-    if len(DEMANGLED_TO_EA) == 0:
-        create_demangled_to_ea_map()
 
     results = []
     for query in queries:
         try:
-            ea = idaapi.BADADDR
+            # Fast path: 0x<ea> or sub_<ea>
+            ea = _parse_func_query(query)
 
-            # Try as address first if it looks like one
-            if looks_like_address(query):
-                try:
-                    ea = parse_address(query)
-                except Exception:
-                    ea = idaapi.BADADDR
-
-            # Fall back to name lookup
+            # Slow path: name lookup
             if ea == idaapi.BADADDR:
                 ea = idaapi.get_name_ea(idaapi.BADADDR, query)
-                if ea == idaapi.BADADDR and query in DEMANGLED_TO_EA:
-                    ea = DEMANGLED_TO_EA[query]
 
             if ea != idaapi.BADADDR:
                 func = get_function(ea, raise_error=False)
@@ -580,6 +582,42 @@ def test_imports_pagination():
 
 @tool
 @idasync
+def find_regex(
+    pattern: Annotated[str, "Regex pattern to search for in strings"],
+    limit: Annotated[int, "Max matches (default: 30, max: 500)"] = 30,
+    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
+) -> dict:
+    """Search strings with case-insensitive regex patterns"""
+    if limit <= 0:
+        limit = 30
+    if limit > 500:
+        limit = 500
+
+    matches = []
+    regex = re.compile(pattern, re.IGNORECASE)
+    strings_list = _get_strings_cache()
+
+    skipped = 0
+    more = False
+    for ea, text in strings_list:
+        if regex.search(text):
+            if skipped < offset:
+                skipped += 1
+                continue
+            if len(matches) >= limit:
+                more = True
+                break
+            matches.append({"addr": hex(ea), "string": text})
+
+    return {
+        "n": len(matches),
+        "matches": matches,
+        "cursor": {"next": offset + limit} if more else {"done": True},
+    }
+
+
+@tool
+@idasync
 def strings(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
@@ -591,7 +629,10 @@ def strings(
         queries, lambda s: {"offset": 0, "count": 50, "filter": s}
     )
     # Use cached strings instead of rebuilding every time
-    all_strings = _get_cached_strings()
+    all_strings = [
+        String(addr=hex(ea), length=len(text), string=text)
+        for ea, text in _get_strings_cache()
+    ]
 
     results = []
     for query in queries:
@@ -644,13 +685,13 @@ def ida_segment_perm2str(perm: int) -> str:
 @idasync
 def segments() -> list[Segment]:
     """List all segments"""
-    segments = []
+    segs = []
     for i in range(ida_segment.get_segm_qty()):
         seg = ida_segment.getnseg(i)
         if not seg:
             continue
         seg_name = ida_segment.get_segm_name(seg)
-        segments.append(
+        segs.append(
             Segment(
                 name=seg_name,
                 start=hex(seg.start_ea),
@@ -659,7 +700,7 @@ def segments() -> list[Segment]:
                 permissions=ida_segment_perm2str(seg.perm),
             )
         )
-    return segments
+    return segs
 
 
 @test()
@@ -678,7 +719,7 @@ def test_segments():
 def local_types():
     """List local types"""
     error = ida_hexrays.hexrays_failure_t()
-    locals = []
+    locals_list = []
     idati = ida_typeinf.get_idati()
     type_count = ida_typeinf.get_ordinal_limit(idati)
     for ordinal in range(1, type_count):
@@ -688,7 +729,7 @@ def local_types():
                 type_name = tif.get_type_name()
                 if not type_name:
                     type_name = f"<Anonymous Type #{ordinal}>"
-                locals.append(f"\nType #{ordinal}: {type_name}")
+                locals_list.append(f"\nType #{ordinal}: {type_name}")
                 if tif.is_udt():
                     c_decl_flags = (
                         ida_typeinf.PRTYPE_MULTI
@@ -700,7 +741,7 @@ def local_types():
                     )
                     c_decl_output = tif._print(None, c_decl_flags)
                     if c_decl_output:
-                        locals.append(f"  C declaration:\n{c_decl_output}")
+                        locals_list.append(f"  C declaration:\n{c_decl_output}")
                 else:
                     simple_decl = tif._print(
                         None,
@@ -709,7 +750,7 @@ def local_types():
                         | ida_typeinf.PRTYPE_SEMI,
                     )
                     if simple_decl:
-                        locals.append(f"  Simple declaration:\n{simple_decl}")
+                        locals_list.append(f"  Simple declaration:\n{simple_decl}")
             else:
                 message = f"\nType #{ordinal}: Failed to retrieve information."
                 if error.str:
@@ -719,7 +760,7 @@ def local_types():
                 raise IDAError(message)
         except Exception:
             continue
-    return locals
+    return locals_list
 
 
 @test()

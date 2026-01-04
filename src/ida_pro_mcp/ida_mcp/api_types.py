@@ -20,15 +20,7 @@ from .utils import (
     StructureMember,
     StructureDefinition,
     StructRead,
-    TypeApplication,
-)
-from .tests import (
-    test,
-    assert_has_keys,
-    assert_is_list,
-    assert_all_have_keys,
-    get_any_function,
-    get_first_segment,
+    TypeEdit,
 )
 
 
@@ -64,171 +56,9 @@ def declare_type(
     return results
 
 
-@test()
-def test_declare_type():
-    """declare_type can declare a C type"""
-    # Use a unique name to avoid conflicts
-    test_struct_name = "__mcp_test_struct_declare__"
-
-    try:
-        # Declare a simple struct
-        result = declare_type(f"struct {test_struct_name} {{ int x; int y; }};")
-        assert_is_list(result, min_length=1)
-        assert_has_keys(result[0], "decl")
-        # Should either succeed or have an error key
-        assert "ok" in result[0] or "error" in result[0]
-    finally:
-        # Cleanup: try to delete the type (best effort)
-        try:
-            tif = ida_typeinf.tinfo_t()
-            if tif.get_named_type(None, test_struct_name):
-                # IDA doesn't have a direct delete type API, so we just leave it
-                # The test struct won't interfere with real analysis
-                pass
-        except Exception:
-            pass
-
-
 # ============================================================================
 # Structure Operations
 # ============================================================================
-
-
-@tool
-@idasync
-def structs() -> list[StructureDefinition]:
-    """List all structures"""
-    rv = []
-    limit = ida_typeinf.get_ordinal_limit()
-    for ordinal in range(1, limit):
-        tif = ida_typeinf.tinfo_t()
-        tif.get_numbered_type(None, ordinal)
-        if tif.is_udt():
-            udt = ida_typeinf.udt_type_data_t()
-            members = []
-            if tif.get_udt_details(udt):
-                members = [
-                    StructureMember(
-                        name=x.name,
-                        offset=hex(x.offset // 8),
-                        size=hex(x.size // 8),
-                        type=str(x.type),
-                    )
-                    for _, x in enumerate(udt)
-                ]
-
-            rv += [
-                StructureDefinition(
-                    name=tif.get_type_name(), size=hex(tif.get_size()), members=members
-                )
-            ]
-
-    return rv
-
-
-@test()
-def test_structs_list():
-    """structs returns list of structures (may be empty)"""
-    result = structs()
-    assert_is_list(result)
-    # If there are structs, verify structure
-    if result:
-        assert_all_have_keys(result, "name", "size", "members")
-
-
-@tool
-@idasync
-def struct_info(
-    names: Annotated[list[str] | str, "Structure names to query"],
-) -> list[dict]:
-    """Get struct info"""
-    names = normalize_list_input(names)
-    results = []
-
-    for name in names:
-        try:
-            tif = ida_typeinf.tinfo_t()
-            if not tif.get_named_type(None, name):
-                results.append({"name": name, "error": f"Struct '{name}' not found"})
-                continue
-
-            result = {
-                "name": name,
-                "type": str(tif._print()),
-                "size": tif.get_size(),
-                "is_udt": tif.is_udt(),
-            }
-
-            if not tif.is_udt():
-                result["error"] = "Not a user-defined type"
-                results.append({"name": name, "info": result})
-                continue
-
-            udt_data = ida_typeinf.udt_type_data_t()
-            if not tif.get_udt_details(udt_data):
-                result["error"] = "Failed to get struct details"
-                results.append({"name": name, "info": result})
-                continue
-
-            result["cardinality"] = udt_data.size()
-            result["is_union"] = udt_data.is_union
-            result["udt_type"] = "Union" if udt_data.is_union else "Struct"
-
-            members = []
-            for i, member in enumerate(udt_data):
-                offset = member.begin() // 8
-                size = member.size // 8 if member.size > 0 else member.type.get_size()
-                member_type = member.type._print()
-                member_name = member.name
-
-                member_info = {
-                    "index": i,
-                    "offset": f"0x{offset:08X}",
-                    "size": size,
-                    "type": member_type,
-                    "name": member_name,
-                    "is_nested_udt": member.type.is_udt(),
-                }
-
-                if member.type.is_udt():
-                    member_info["nested_size"] = member.type.get_size()
-
-                members.append(member_info)
-
-            result["members"] = members
-            result["total_size"] = tif.get_size()
-
-            results.append({"name": name, "info": result})
-        except Exception as e:
-            results.append({"name": name, "error": str(e)})
-
-    return results
-
-
-@test()
-def test_struct_info():
-    """struct_info returns details for existing struct"""
-    # First get list of structs
-    all_structs = structs()
-    if not all_structs:
-        return  # Skip if no structs in IDB
-
-    # Get info for first struct
-    struct_name = all_structs[0]["name"]
-    result = struct_info(struct_name)
-    assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "name")
-    # Should have either info or error
-    assert "info" in result[0] or "error" in result[0]
-
-
-@test()
-def test_struct_info_not_found():
-    """struct_info handles nonexistent struct gracefully"""
-    result = struct_info("__nonexistent_struct_name_12345__")
-    assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "name", "error")
-    assert "not found" in result[0]["error"].lower()
 
 
 @tool
@@ -347,44 +177,6 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
     return results
 
 
-@test()
-def test_read_struct():
-    """read_struct reads structure values from memory"""
-    # First check if any structs exist
-    struct_list = structs()
-    if not struct_list:
-        return  # Skip if no structs
-
-    # Try to read a struct from a valid address
-    seg = get_first_segment()
-    if not seg:
-        return  # Skip if no segments
-    start_addr, _ = seg
-    struct_name = struct_list[0]["name"]
-
-    result = read_struct([{"addr": start_addr, "struct": struct_name}])
-    assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "addr", "struct")
-    # Should have either members or error
-    assert "members" in result[0] or "error" in result[0]
-
-
-@test()
-def test_read_struct_not_found():
-    """read_struct handles nonexistent struct gracefully"""
-    seg = get_first_segment()
-    if not seg:
-        return  # Skip if no segments
-    start_addr, _ = seg
-
-    result = read_struct(
-        [{"addr": start_addr, "struct": "__nonexistent_struct_12345__"}]
-    )
-    assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "addr", "struct", "error")
-    assert "not found" in result[0]["error"].lower()
-
-
 @tool
 @idasync
 def search_structs(
@@ -424,33 +216,6 @@ def search_structs(
     return results
 
 
-@test()
-def test_search_structs():
-    """search_structs filters by name pattern"""
-    # First check if there are any structs
-    all_structs = structs()
-    if not all_structs:
-        # No structs, verify empty search returns empty
-        result = search_structs("anything")
-        assert_is_list(result)
-        return
-
-    # Search for a substring of the first struct's name
-    first_name = all_structs[0]["name"]
-    if len(first_name) >= 3:
-        # Search with a substring
-        search_term = first_name[:3]
-        result = search_structs(search_term)
-        assert_is_list(result)
-        # Should find at least the original struct
-        found_names = [s["name"] for s in result]
-        assert first_name in found_names, f"Expected {first_name} in search results"
-    else:
-        # Short name, just verify search returns list
-        result = search_structs(first_name)
-        assert_is_list(result)
-
-
 # ============================================================================
 # Type Inference & Application
 # ============================================================================
@@ -458,7 +223,7 @@ def test_search_structs():
 
 @tool
 @idasync
-def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[dict]:
+def set_type(edits: list[TypeEdit] | TypeEdit) -> list[dict]:
     """Apply types (function/global/local/stack)"""
 
     def parse_addr_type(s: str) -> dict:
@@ -469,24 +234,24 @@ def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[d
         # Just typename without address (invalid)
         return {"ty": s.strip()}
 
-    applications = normalize_dict_list(applications, parse_addr_type)
+    edits = normalize_dict_list(edits, parse_addr_type)
     results = []
 
-    for app in applications:
+    for edit in edits:
         try:
             # Auto-detect kind if not provided
-            kind = app.get("kind")
+            kind = edit.get("kind")
             if not kind:
-                if "signature" in app:
+                if "signature" in edit:
                     kind = "function"
-                elif "variable" in app:
+                elif "variable" in edit:
                     kind = "local"
-                elif "addr" in app:
+                elif "addr" in edit:
                     # Check if address points to a function
                     try:
-                        addr = parse_address(app["addr"])
+                        addr = parse_address(edit["addr"])
                         func = idaapi.get_func(addr)
-                        if func and "name" in app and "ty" in app:
+                        if func and "name" in edit and "ty" in edit:
                             kind = "stack"
                         else:
                             kind = "global"
@@ -496,14 +261,14 @@ def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[d
                     kind = "global"
 
             if kind == "function":
-                func = idaapi.get_func(parse_address(app["addr"]))
+                func = idaapi.get_func(parse_address(edit["addr"]))
                 if not func:
-                    results.append({"edit": app, "error": "Function not found"})
+                    results.append({"edit": edit, "error": "Function not found"})
                     continue
 
-                tif = ida_typeinf.tinfo_t(app["signature"], None, ida_typeinf.PT_SIL)
+                tif = ida_typeinf.tinfo_t(edit["signature"], None, ida_typeinf.PT_SIL)
                 if not tif.is_func():
-                    results.append({"edit": app, "error": "Not a function type"})
+                    results.append({"edit": edit, "error": "Not a function type"})
                     continue
 
                 success = ida_typeinf.apply_tinfo(
@@ -511,58 +276,58 @@ def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[d
                 )
                 results.append(
                     {
-                        "edit": app,
+                        "edit": edit,
                         "ok": success,
                         "error": None if success else "Failed to apply type",
                     }
                 )
 
             elif kind == "global":
-                ea = idaapi.get_name_ea(idaapi.BADADDR, app.get("name", ""))
+                ea = idaapi.get_name_ea(idaapi.BADADDR, edit.get("name", ""))
                 if ea == idaapi.BADADDR:
-                    ea = parse_address(app["addr"])
+                    ea = parse_address(edit["addr"])
 
-                tif = get_type_by_name(app["ty"])
+                tif = get_type_by_name(edit["ty"])
                 success = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL)
                 results.append(
                     {
-                        "edit": app,
+                        "edit": edit,
                         "ok": success,
                         "error": None if success else "Failed to apply type",
                     }
                 )
 
             elif kind == "local":
-                func = idaapi.get_func(parse_address(app["addr"]))
+                func = idaapi.get_func(parse_address(edit["addr"]))
                 if not func:
-                    results.append({"edit": app, "error": "Function not found"})
+                    results.append({"edit": edit, "error": "Function not found"})
                     continue
 
-                new_tif = ida_typeinf.tinfo_t(app["ty"], None, ida_typeinf.PT_SIL)
-                modifier = my_modifier_t(app["variable"], new_tif)
+                new_tif = ida_typeinf.tinfo_t(edit["ty"], None, ida_typeinf.PT_SIL)
+                modifier = my_modifier_t(edit["variable"], new_tif)
                 success = ida_hexrays.modify_user_lvars(func.start_ea, modifier)
                 results.append(
                     {
-                        "edit": app,
+                        "edit": edit,
                         "ok": success,
                         "error": None if success else "Failed to apply type",
                     }
                 )
 
             elif kind == "stack":
-                func = idaapi.get_func(parse_address(app["addr"]))
+                func = idaapi.get_func(parse_address(edit["addr"]))
                 if not func:
-                    results.append({"edit": app, "error": "No function found"})
+                    results.append({"edit": edit, "error": "No function found"})
                     continue
 
                 frame_tif = ida_typeinf.tinfo_t()
                 if not ida_frame.get_func_frame(frame_tif, func):
-                    results.append({"edit": app, "error": "No frame"})
+                    results.append({"edit": edit, "error": "No frame"})
                     continue
 
-                idx, udm = frame_tif.get_udm(app["name"])
+                idx, udm = frame_tif.get_udm(edit["name"])
                 if not udm:
-                    results.append({"edit": app, "error": f"{app['name']} not found"})
+                    results.append({"edit": edit, "error": f"{edit['name']} not found"})
                     continue
 
                 tid = frame_tif.get_udm_tid(idx)
@@ -570,46 +335,23 @@ def apply_types(applications: list[TypeApplication] | TypeApplication) -> list[d
                 frame_tif.get_udm_by_tid(udm, tid)
                 offset = udm.offset // 8
 
-                tif = get_type_by_name(app["ty"])
+                tif = get_type_by_name(edit["ty"])
                 success = ida_frame.set_frame_member_type(func, offset, tif)
                 results.append(
                     {
-                        "edit": app,
+                        "edit": edit,
                         "ok": success,
                         "error": None if success else "Failed to set type",
                     }
                 )
 
             else:
-                results.append({"edit": app, "error": f"Unknown kind: {kind}"})
+                results.append({"edit": edit, "error": f"Unknown kind: {kind}"})
 
         except Exception as e:
-            results.append({"edit": app, "error": str(e)})
+            results.append({"edit": edit, "error": str(e)})
 
     return results
-
-
-@test()
-def test_apply_types():
-    """apply_types can apply type to address"""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return  # Skip if no functions
-
-    # Test applying a simple type - use "int" which always exists
-    result = apply_types([{"addr": fn_addr, "ty": "int"}])
-    assert_is_list(result, min_length=1)
-    # Should either succeed or have error
-    assert "ok" in result[0] or "error" in result[0]
-
-
-@test()
-def test_apply_types_invalid_address():
-    """apply_types handles invalid address gracefully"""
-    result = apply_types([{"addr": "0xDEADBEEFDEADBEEF", "ty": "int"}])
-    assert_is_list(result, min_length=1)
-    # Should have either ok or error field
-    assert "ok" in result[0] or "error" in result[0]
 
 
 @tool
@@ -691,17 +433,3 @@ def infer_types(
             )
 
     return results
-
-
-@test()
-def test_infer_types():
-    """infer_types returns type inference for valid function address"""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return  # Skip if no functions
-
-    result = infer_types(fn_addr)
-    assert_is_list(result, min_length=1)
-    assert_has_keys(result[0], "addr", "inferred_type", "method", "confidence")
-    # Should have some result (even if method is None)
-    assert result[0]["confidence"] in ("high", "low", "none")

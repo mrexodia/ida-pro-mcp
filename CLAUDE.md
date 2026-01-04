@@ -112,6 +112,7 @@ def my_api(param: Annotated[str, "description"]) -> ReturnType:
 ### Thread Safety
 
 **All IDA SDK calls MUST run on main thread** - enforced by `@idasync`:
+- Use `@idasync` for all IDA SDK operations (both read and write)
 - Implementation: `sync_wrapper()` uses `idaapi.execute_sync()` with queue-based result passing
 
 ### Type Annotations

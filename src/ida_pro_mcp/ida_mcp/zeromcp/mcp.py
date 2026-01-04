@@ -12,7 +12,7 @@ from types import UnionType
 from urllib.parse import urlparse, parse_qs
 from io import BufferedIOBase
 
-from .jsonrpc import JsonRpcRegistry, JsonRpcError, JsonRpcException
+from .jsonrpc import JsonRpcRegistry, JsonRpcError, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
 
 class McpToolError(Exception):
     def __init__(self, message: str):
@@ -68,36 +68,22 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.mcp_server: "McpServer" = getattr(server, "mcp_server")
         super().__init__(request, client_address, server)
 
+    def _parse_extensions(self, path: str) -> set[str]:
+        """Parse ?ext=dbg,foo query param into set of enabled extensions"""
+        query = parse_qs(urlparse(path).query)
+        ext_param = query.get("ext", [""])[0]
+        if not ext_param:
+            return set()
+        return {e.strip() for e in ext_param.split(",") if e.strip()}
+
     def log_message(self, format, *args):
         """Override to suppress default logging or customize"""
         pass
 
-    def send_cors_headers(self, *, preflight = False):
-        origin = self.headers.get("Origin", "")
-        if not origin:
-            return
-        def is_allowed():
-            allowed = self.mcp_server.cors_allowed_origins
-            if allowed is None:
-                return False
-            if callable(allowed):
-                return allowed(origin)
-            if isinstance(allowed, str):
-                allowed = [allowed]
-            return "*" in allowed or origin in allowed
-        if not is_allowed():
-            return
-        self.send_header("Access-Control-Allow-Origin", origin)
-        if preflight:
-            self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, Mcp-Session-Id, Mcp-Protocol-Version")
-            if self.headers.get("Access-Control-Request-Private-Network") == "true":
-                self.send_header("Access-Control-Allow-Private-Network", "true")
-
     def send_error(self, code, message=None, explain=None):
         self.send_response(code)
         self.send_header("Content-Type", "text/plain")
-        self.send_cors_headers()
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(f"{message}\n".encode("utf-8"))
 
@@ -119,13 +105,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(404, "Not Found")
 
     def do_POST(self):
-        # Read request body
+        # Read request body (TODO: do we need to handle chunked encoding and what about no Content-Length?)
         content_length = int(self.headers.get("Content-Length", 0))
-
-        if content_length > self.mcp_server.post_body_limit:
-            self.send_error(413, f"Payload Too Large: exceeds {self.mcp_server.post_body_limit} bytes")
-            return
-
         body = self.rfile.read(content_length) if content_length > 0 else b""
 
         match urlparse(self.path).path:
@@ -139,7 +120,10 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         """Handle CORS preflight requests"""
         self.send_response(200)
-        self.send_cors_headers(preflight=True)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, Mcp-Session-Id, Mcp-Protocol-Version")
+        self.send_header("Access-Control-Max-Age", "86400")
         self.end_headers()
 
     def _handle_sse_get(self):
@@ -153,7 +137,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
-            self.send_cors_headers()
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
 
             # Send endpoint event with session ID for routing
@@ -181,6 +165,10 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_error(400, "Missing ?session for SSE POST")
             return
 
+        # Parse extensions from query params and store in thread-local
+        extensions = self._parse_extensions(self.path)
+        setattr(self.mcp_server._enabled_extensions, "data", extensions)
+
         # Dispatch to MCP registry
         setattr(self.mcp_server._protocol_version, "data", "2024-11-05")
         response = self.mcp_server.registry.dispatch(body)
@@ -200,11 +188,15 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.send_response(202)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_cors_headers()
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
     def _handle_mcp_post(self, body: bytes):
+        # Parse extensions from query params and store in thread-local
+        extensions = self._parse_extensions(self.path)
+        setattr(self.mcp_server._enabled_extensions, "data", extensions)
+
         # Dispatch to MCP registry
         setattr(self.mcp_server._protocol_version, "data", "2025-06-18")
         response = self.mcp_server.registry.dispatch(body)
@@ -213,7 +205,9 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
-            self.send_cors_headers()
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version")
             self.end_headers()
             self.wfile.write(body)
 
@@ -224,20 +218,19 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             send_response(200, json.dumps(response).encode("utf-8"))
 
 class McpServer:
-    def __init__(self, name: str, version = "1.0.0"):
+    def __init__(self, name: str, version = "1.0.0", *, extensions: dict[str, set[str]] | None = None):
         self.name = name
         self.version = version
-        self.post_body_limit = 10 * 1024 * 1024
-        self.cors_allowed_origins: Callable[[str], bool] | list[str] | str | None = self.cors_localhost
         self.tools = McpRpcRegistry()
         self.resources = McpRpcRegistry()
-        self.prompts = McpRpcRegistry()
 
         self._http_server: HTTPServer | None = None
         self._server_thread: threading.Thread | None = None
         self._running = False
         self._sse_connections: dict[str, _McpSseConnection] = {}
         self._protocol_version = threading.local()
+        self._enabled_extensions = threading.local()  # set[str] per request
+        self._extensions_registry = extensions if extensions is not None else {}  # group -> set of tool names
 
         # Register MCP protocol methods with correct names
         self.registry = JsonRpcRegistry()
@@ -248,14 +241,10 @@ class McpServer:
         self.registry.methods["resources/list"] = self._mcp_resources_list
         self.registry.methods["resources/templates/list"] = self._mcp_resource_templates_list
         self.registry.methods["resources/read"] = self._mcp_resources_read
-        self.registry.methods["prompts/list"] = self._mcp_prompts_list
-        self.registry.methods["prompts/get"] = self._mcp_prompts_get
+        self.registry.methods["notifications/cancelled"] = self._mcp_notifications_cancelled
 
     def tool(self, func: Callable) -> Callable:
         return self.tools.method(func)
-
-    def prompt(self, func: Callable) -> Callable:
-        return self.prompts.method(func)
 
     def resource(self, uri: str) -> Callable[[Callable], Callable]:
         def decorator(func: Callable) -> Callable:
@@ -271,9 +260,13 @@ class McpServer:
         # Create server with deferred binding
         assert issubclass(request_handler, McpHttpRequestHandler)
         self._http_server = (ThreadingHTTPServer if background else HTTPServer)(
-            (host, port), request_handler, bind_and_activate=False
+            (host, port),
+            request_handler,
+            bind_and_activate=False
         )
-        self._http_server.allow_reuse_address = False
+        self._http_server.allow_reuse_address = True
+        if hasattr(self._http_server, "allow_reuse_port"):
+            self._http_server.allow_reuse_port = True
 
         # Set the MCPServer instance on the handler class
         setattr(self._http_server, "mcp_server", self)
@@ -297,7 +290,7 @@ class McpServer:
 
         def serve_forever():
             try:
-                self._http_server.serve_forever()  # type: ignore
+                self._http_server.serve_forever() # type: ignore
             except Exception as e:
                 print(f"[MCP] Server error: {e}")
                 traceback.print_exc()
@@ -341,7 +334,7 @@ class McpServer:
         while True:
             try:
                 request = stdin.readline()
-                if not request:  # EOF
+                if not request: # EOF
                     break
 
                 # Strip whitespace (trailing newline) before parsing
@@ -353,12 +346,8 @@ class McpServer:
                 if response is not None:
                     stdout.write(json.dumps(response).encode("utf-8") + b"\n")
                     stdout.flush()
-            except (BrokenPipeError, KeyboardInterrupt):  # Client disconnected
+            except (BrokenPipeError, KeyboardInterrupt): # Client disconnected
                 break
-
-    def cors_localhost(self, origin: str) -> bool:
-        """Allow CORS requests from localhost on ANY port."""
-        return urlparse(origin).hostname in ("localhost", "127.0.0.1", "::1")
 
     def _mcp_ping(self, _meta: dict | None = None) -> dict:
         """MCP ping method"""
@@ -374,7 +363,6 @@ class McpServer:
                     "subscribe": False,
                     "listChanged": False,
                 },
-                "prompts": {},
             },
             "serverInfo": {
                 "name": self.name,
@@ -384,80 +372,117 @@ class McpServer:
 
     def _mcp_tools_list(self, _meta: dict | None = None) -> dict:
         """MCP tools/list method"""
-        return {
-            "tools": [
-                self._generate_tool_schema(func_name, func)
-                for func_name, func in self.tools.methods.items()
-            ],
-        }
+        enabled = getattr(self._enabled_extensions, "data", set())
+        tools = []
+        for func_name, func in self.tools.methods.items():
+            # Check if tool belongs to an extension group
+            tool_group = self._get_tool_extension(func_name)
+            if tool_group and tool_group not in enabled:
+                continue  # Skip tools from disabled extension groups
+            tools.append(self._generate_tool_schema(func_name, func))
+        return {"tools": tools}
+
+    def _get_tool_extension(self, func_name: str) -> str | None:
+        """Return extension group name if tool belongs to one, else None"""
+        for group, tools in self._extensions_registry.items():
+            if func_name in tools:
+                return group
+        return None
 
     def _mcp_tools_call(self, name: str, arguments: dict | None = None, _meta: dict | None = None) -> dict:
         """MCP tools/call method"""
-        # Wrap tool call in JSON-RPC request
-        tool_response = self.tools.dispatch({
-            "jsonrpc": "2.0",
-            "method": name,
-            "params": arguments,
-            "id": None,
-        })
-        assert tool_response is not None, "Only notification requests return None"
-
-        # Check for error response
-        if "error" in tool_response:
-            error = tool_response["error"]
+        # Check if tool requires an extension that isn't enabled
+        enabled = getattr(self._enabled_extensions, "data", set())
+        tool_group = self._get_tool_extension(name)
+        if tool_group and tool_group not in enabled:
             return {
-                "content": [{"type": "text", "text": error["message"] or "Unknown error"}],
+                "content": [{"type": "text", "text": f"Tool '{name}' requires extension '{tool_group}'. Enable with ?ext={tool_group}"}],
                 "isError": True,
             }
 
-        result = tool_response.get("result")
-        return {
-            "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
-            "structuredContent": result if isinstance(result, dict) else {"result": result},
-            "isError": False,
-        }
+        # Register request for cancellation tracking
+        request_id = get_current_request_id()
+        if request_id is not None:
+            register_pending_request(request_id)
 
-    def _enumerate_resources(self):
-        for name, func in self.resources.methods.items():
-            uri: str = getattr(func, "__resource_uri__")
-            description = (func.__doc__ or f"Read {uri}").strip()
-            yield uri, name, description
+        try:
+            # Wrap tool call in JSON-RPC request
+            tool_response = self.tools.dispatch({
+                "jsonrpc": "2.0",
+                "method": name,
+                "params": arguments,
+                "id": None,
+            })
+
+            # Check for error response
+            if tool_response and "error" in tool_response:
+                error = tool_response["error"]
+                return {
+                    "content": [{"type": "text", "text": error.get("message", "Unknown error")}],
+                    "isError": True,
+                }
+
+            result = tool_response.get("result") if tool_response else None
+            return {
+                "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
+                "structuredContent": result if isinstance(result, dict) else {"result": result},
+                "isError": False,
+            }
+        finally:
+            if request_id is not None:
+                unregister_pending_request(request_id)
+
+    def _mcp_notifications_cancelled(self, requestId: int | str, reason: str | None = None) -> None:
+        """MCP notifications/cancelled - cancel an in-flight request"""
+        if cancel_request(requestId):
+            print(f"[MCP] Cancelled request {requestId}: {reason or 'no reason'}")
+        # Notifications don't return a response
 
     def _mcp_resources_list(self, _meta: dict | None = None) -> dict:
         """MCP resources/list method - returns static resources only (no URI parameters)"""
-        return {
-            "resources": [
-                {
-                    "uri": uri,
-                    "name": name,
-                    "description": description,
-                    "mimeType": "application/json",
-                }
-                for uri, name, description in self._enumerate_resources()
-                if "{" not in uri
-            ]
-        }
+        resources = []
+        for func_name, func in self.resources.methods.items():
+            uri: str = getattr(func, "__resource_uri__")
+
+            # Skip templates (resources with parameters like {addr})
+            if "{" in uri:
+                continue
+
+            resources.append({
+                "uri": uri,
+                "name": func_name,
+                "description": (func.__doc__ or f"Read {uri}").strip(),
+                "mimeType": "application/json",
+            })
+
+        return {"resources": resources}
 
     def _mcp_resource_templates_list(self, _meta: dict | None = None) -> dict:
         """MCP resources/templates/list method - returns parameterized resource templates"""
-        return {
-            "resourceTemplates": [
-                {
-                    "uriTemplate": uri,
-                    "name": name,
-                    "description": description,
-                    "mimeType": "application/json",
-                }
-                for uri, name, description in self._enumerate_resources()
-                if "{" in uri
-            ]
-        }
+        templates = []
+        for func_name, func in self.resources.methods.items():
+            uri: str = getattr(func, "__resource_uri__")
+
+            # Only include templates (resources with parameters like {addr})
+            if "{" not in uri:
+                continue
+
+            templates.append({
+                "uriTemplate": uri,
+                "name": func_name,
+                "description": (func.__doc__ or f"Read {uri}").strip(),
+                "mimeType": "application/json",
+            })
+
+        return {"resourceTemplates": templates}
 
     def _mcp_resources_read(self, uri: str, _meta: dict | None = None) -> dict:
         """MCP resources/read method"""
 
         # Try to match URI against all registered resource patterns
-        for pattern, name, _ in self._enumerate_resources():
+        for func_name, func in self.resources.methods.items():
+            pattern: str = getattr(func, "__resource_uri__")
+
             # Convert pattern to regex, replacing {param} with named capture groups
             regex_pattern = re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", pattern)
             regex_pattern = f"^{regex_pattern}$"
@@ -467,108 +492,46 @@ class McpServer:
                 # Found matching resource - call it via JSON-RPC
                 params = list(match.groupdict().values())
 
-                resource_response = self.resources.dispatch({
+                tool_response = self.resources.dispatch({
                     "jsonrpc": "2.0",
-                    "method": name,
+                    "method": func_name,
                     "params": params,
                     "id": None,
                 })
-                assert resource_response is not None, "Only notification requests return None"
 
-                if "error" in resource_response:
-                    error = resource_response["error"]
-                    raise JsonRpcException(error["code"], error["message"], error.get("data"))
+                if tool_response and "error" in tool_response:
+                    error = tool_response["error"]
+                    return {
+                        "contents": [{
+                            "uri": uri,
+                            "mimeType": "application/json",
+                            "text": json.dumps({"error": error.get("message", "Unknown error")}, indent=2),
+                        }],
+                        "isError": True,
+                    }
 
+                result = tool_response.get("result") if tool_response else None
                 return {
                     "contents": [{
                         "uri": uri,
                         "mimeType": "application/json",
-                        "text": json.dumps(resource_response.get("result"), indent=2),
+                        "text": json.dumps(result, indent=2),
                     }]
                 }
 
-        raise JsonRpcException(-32002, "Resource not found", {"uri": uri})
-
-    def _mcp_prompts_list(self, _meta: dict | None = None) -> dict:
-        """MCP prompts/list method"""
+        # No matching resource found
+        available: list[str] = [getattr(f, "__resource_uri__") for f in self.resources.methods.values()]
         return {
-            "prompts": [
-                self._generate_prompt_schema(func_name, func)
-                for func_name, func in self.prompts.methods.items()
-            ],
+            "contents": [{
+                "uri": uri,
+                "mimeType": "application/json",
+                "text": json.dumps({
+                    "error": f"Resource not found: {uri}",
+                    "available_patterns": available,
+                }, indent=2),
+            }],
+            "isError": True,
         }
-
-    def _mcp_prompts_get(
-        self, name: str, arguments: dict | None = None, _meta: dict | None = None
-    ) -> dict:
-        """MCP prompts/get method"""
-        # Dispatch to prompts registry
-        prompt_response = self.prompts.dispatch(
-            {
-                "jsonrpc": "2.0",
-                "method": name,
-                "params": arguments,
-                "id": None,
-            }
-        )
-        assert prompt_response is not None, "Only notification requests return None"
-
-        # Check for error response
-        if "error" in prompt_response:
-            error = prompt_response["error"]
-            raise JsonRpcException(error["code"], error["message"], error.get("data"))
-
-        result = prompt_response.get("result")
-
-        # Pass through list of messages directly
-        if isinstance(result, list):
-            return {"messages": result}
-
-        # Convert non-string results to JSON
-        if not isinstance(result, str):
-            result = json.dumps(result, indent=2)
-        return {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": {"type": "text", "text": result},
-                },
-            ],
-        }
-
-    def _generate_prompt_schema(self, func_name: str, func: Callable) -> dict:
-        """Generate MCP prompt schema from a function"""
-        hints = get_type_hints(func, include_extras=True)
-        hints.pop("return", None)
-        sig = inspect.signature(func)
-
-        # Build arguments list (PromptArgument format)
-        arguments = []
-        for param_name, param_type in hints.items():
-            arg: dict[str, Any] = {"name": param_name}
-
-            # Extract description from Annotated
-            origin = get_origin(param_type)
-            if origin is Annotated:
-                args = get_args(param_type)
-                arg["description"] = str(args[-1])
-
-            # Check if required (no default value)
-            param = sig.parameters.get(param_name)
-            if not param or param.default is inspect.Parameter.empty:
-                arg["required"] = True
-
-            arguments.append(arg)
-
-        schema: dict[str, Any] = {
-            "name": func_name,
-            "description": (func.__doc__ or f"Prompt {func_name}").strip(),
-        }
-
-        if arguments:
-            schema["arguments"] = arguments
-
-        return schema
 
     def _type_to_json_schema(self, py_type: Any) -> dict:
         """Convert Python type hint to JSON schema object"""
@@ -623,7 +586,7 @@ class McpServer:
     def _typed_dict_to_schema(self, typed_dict_class) -> dict:
         """Convert TypedDict to JSON schema"""
         hints = get_type_hints(typed_dict_class, include_extras=True)
-        required_keys = getattr(typed_dict_class, "__required_keys__", set(hints.keys()))
+        required_keys = getattr(typed_dict_class, '__required_keys__', set(hints.keys()))
 
         return {
             "type": "object",
@@ -632,7 +595,7 @@ class McpServer:
                 for field_name, field_type in hints.items()
             },
             "required": [key for key in hints.keys() if key in required_keys],
-            "additionalProperties": False,
+            "additionalProperties": False
         }
 
     def _generate_tool_schema(self, func_name: str, func: Callable) -> dict:
@@ -660,7 +623,7 @@ class McpServer:
                 "type": "object",
                 "properties": properties,
                 "required": required,
-            },
+            }
         }
 
         # Add outputSchema if return type exists and is not None

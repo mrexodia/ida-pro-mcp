@@ -17,17 +17,28 @@ The test framework is a custom, lightweight testing solution designed specifical
 ```
 src/ida_pro_mcp/
 ├── ida_mcp/
-│   ├── tests.py              # Test framework core
+│   ├── framework.py          # Test framework core
 │   │   ├── @test decorator   # Register test functions
 │   │   ├── run_tests()       # Test runner
 │   │   ├── TestResults       # Result aggregation
 │   │   ├── assert_*          # Assertion helpers
 │   │   └── get_any_*         # Test data helpers
-│   ├── api_core.py           # Functions + tests
-│   ├── api_analysis.py       # Functions + tests
+│   ├── tests/                # Separate test files
+│   │   ├── test_api_core.py
+│   │   ├── test_api_analysis.py
+│   │   ├── test_api_memory.py
+│   │   ├── test_api_modify.py
+│   │   ├── test_api_types.py
+│   │   ├── test_api_stack.py
+│   │   └── test_api_resources.py
+│   ├── api_core.py           # API implementations
+│   ├── api_analysis.py
 │   └── ...
 ├── test.py                   # Standalone runner (idalib)
 └── ...
+tests/
+├── crackme03.elf             # Test binary
+└── binary_info.py            # Binary info extraction
 ```
 
 ## Test Registration

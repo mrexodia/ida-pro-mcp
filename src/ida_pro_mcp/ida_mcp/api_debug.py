@@ -18,7 +18,7 @@ import ida_idaapi
 import ida_name
 import idaapi
 
-from .rpc import tool, unsafe
+from .rpc import tool, unsafe, ext
 from .sync import idasync, IDAError
 from .utils import (
     RegisterValue,
@@ -157,9 +157,15 @@ def list_breakpoints():
 # ============================================================================
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
+@tool
+@idasync
 def dbg_start():
     """Start debugger"""
     if len(list_breakpoints()) == 0:
@@ -176,9 +182,15 @@ def dbg_start():
     raise IDAError("Failed to start debugger")
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
+@tool
+@idasync
 def dbg_exit():
     """Exit debugger"""
     dbg_ensure_running()
@@ -187,9 +199,15 @@ def dbg_exit():
     raise IDAError("Failed to exit debugger")
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
+@tool
+@idasync
 def dbg_continue() -> str:
     """Continue debugger"""
     dbg_ensure_running()
@@ -200,9 +218,15 @@ def dbg_continue() -> str:
     raise IDAError("Failed to continue debugger")
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
+@tool
+@idasync
 def dbg_run_to(
     addr: Annotated[str, "Address"],
 ):
@@ -216,9 +240,15 @@ def dbg_run_to(
     raise IDAError(f"Failed to run to address {hex(ea)}")
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
+@tool
+@idasync
 def dbg_step_into():
     """Step into"""
     dbg_ensure_running()
@@ -229,9 +259,15 @@ def dbg_step_into():
     raise IDAError("Failed to step into")
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
+@tool
+@idasync
 def dbg_step_over():
     """Step over"""
     dbg_ensure_running()
@@ -247,17 +283,29 @@ def dbg_step_over():
 # ============================================================================
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_list_bps():
+@tool
+@idasync
+def dbg_bps():
     """List breakpoints"""
     return list_breakpoints()
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
+@tool
+@idasync
 def dbg_add_bp(
     addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"],
 ) -> list[dict]:
@@ -284,9 +332,15 @@ def dbg_add_bp(
     return results
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
+@tool
+@idasync
 def dbg_delete_bp(
     addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"],
 ) -> list[dict]:
@@ -307,10 +361,16 @@ def dbg_delete_bp(
     return results
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_enable_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
+@tool
+@idasync
+def dbg_toggle_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
     """Enable/disable breakpoints"""
 
     items = normalize_dict_list(items)
@@ -342,10 +402,16 @@ def dbg_enable_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
 # ============================================================================
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_regs() -> list[ThreadRegisters]:
+@tool
+@idasync
+def dbg_regs_all() -> list[ThreadRegisters]:
     """Get all registers"""
     result: list[ThreadRegisters] = []
     dbg = dbg_ensure_running()
@@ -355,10 +421,16 @@ def dbg_regs() -> list[ThreadRegisters]:
     return result
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_regs_thread(
+@tool
+@idasync
+def dbg_regs_remote(
     tids: Annotated[list[int] | int, "Thread ID(s) to get registers for"],
 ) -> list[dict]:
     """Get thread registers"""
@@ -384,20 +456,32 @@ def dbg_regs_thread(
     return results
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_regs_cur() -> ThreadRegisters:
+@tool
+@idasync
+def dbg_regs() -> ThreadRegisters:
     """Get current thread registers"""
     dbg = dbg_ensure_running()
     tid = ida_dbg.get_current_thread()
     return _get_registers_for_thread(dbg, tid)
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_gpregs_thread(
+@tool
+@idasync
+def dbg_gpregs_remote(
     tids: Annotated[list[int] | int, "Thread ID(s) to get GP registers for"],
 ) -> list[dict]:
     """Get GP registers for threads"""
@@ -423,20 +507,32 @@ def dbg_gpregs_thread(
     return results
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_current_gpregs() -> ThreadRegisters:
+@tool
+@idasync
+def dbg_gpregs() -> ThreadRegisters:
     """Get current thread GP registers"""
     dbg = dbg_ensure_running()
     tid = ida_dbg.get_current_thread()
     return _get_registers_general_for_thread(dbg, tid)
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_regs_for_thread(
+@tool
+@idasync
+def dbg_regs_named_remote(
     thread_id: Annotated[int, "Thread ID"],
     register_names: Annotated[
         str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
@@ -452,10 +548,16 @@ def dbg_regs_for_thread(
     return _get_registers_specific_for_thread(dbg, thread_id, names)
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_current_regs(
+@tool
+@idasync
+def dbg_regs_named(
     register_names: Annotated[
         str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
     ],
@@ -472,10 +574,16 @@ def dbg_current_regs(
 # ============================================================================
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_callstack() -> list[dict[str, str]]:
+@tool
+@idasync
+def dbg_stacktrace() -> list[dict[str, str]]:
     """Get call stack"""
     callstack = []
     try:
@@ -523,10 +631,16 @@ def dbg_callstack() -> list[dict[str, str]]:
 # ============================================================================
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_read_mem(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
+@tool
+@idasync
+def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     """Read debug memory"""
 
     regions = normalize_dict_list(regions)
@@ -566,10 +680,16 @@ def dbg_read_mem(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     return results
 
 
+<<<<<<< HEAD
 @tool
 @idasync
+=======
+@ext("dbg")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 @unsafe
-def dbg_write_mem(regions: list[MemoryPatch] | MemoryPatch) -> list[dict]:
+@tool
+@idasync
+def dbg_write(regions: list[MemoryPatch] | MemoryPatch) -> list[dict]:
     """Write debug memory"""
 
     regions = normalize_dict_list(regions)

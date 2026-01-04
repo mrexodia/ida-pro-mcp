@@ -1,8 +1,10 @@
 """Memory reading and writing operations for IDA Pro MCP.
 
 This module provides batch operations for reading and writing memory at various
-granularities (bytes, u8, u16, u32, u64, strings) and patching binary data.
+granularities (bytes, integers, strings) and patching binary data.
 """
+
+import re
 
 from typing import Annotated
 import ida_bytes
@@ -12,7 +14,14 @@ import idaapi
 
 from .rpc import tool
 from .sync import idasync, IDAError
-from .utils import normalize_list_input, parse_address, MemoryRead, MemoryPatch
+from .utils import (
+    IntRead,
+    IntWrite,
+    MemoryPatch,
+    MemoryRead,
+    normalize_list_input,
+    parse_address,
+)
 from .tests import (
     test,
     assert_has_keys,
@@ -50,6 +59,7 @@ def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     return results
 
 
+<<<<<<< HEAD
 @test()
 def test_get_bytes():
     """get_bytes reads raw bytes from a valid address"""
@@ -86,16 +96,42 @@ def get_u8(
     """Read 8-bit unsigned integers from memory addresses"""
     addrs = normalize_list_input(addrs)
     results = []
+=======
+_INT_CLASS_RE = re.compile(r"^(?P<sign>[iu])(?P<bits>8|16|32|64)(?P<endian>le|be)?$")
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 
-    for addr in addrs:
-        try:
-            ea = parse_address(addr)
-            value = ida_bytes.get_wide_byte(ea)
-            results.append({"addr": addr, "value": value})
-        except Exception as e:
-            results.append({"addr": addr, "value": None, "error": str(e)})
 
-    return results
+def _parse_int_class(text: str) -> tuple[int, bool, str, str]:
+    if not text:
+        raise ValueError("Missing integer class")
+
+    cleaned = text.strip().lower()
+    match = _INT_CLASS_RE.match(cleaned)
+    if not match:
+        raise ValueError(f"Invalid integer class: {text}")
+
+    bits = int(match.group("bits"))
+    signed = match.group("sign") == "i"
+    endian = match.group("endian") or "le"
+    byte_order = "little" if endian == "le" else "big"
+    normalized = f"{'i' if signed else 'u'}{bits}{endian}"
+    return bits, signed, byte_order, normalized
+
+
+def _parse_int_value(text: str, signed: bool, bits: int) -> int:
+    if text is None:
+        raise ValueError("Missing integer value")
+
+    value_text = str(text).strip()
+    try:
+        value = int(value_text, 0)
+    except ValueError:
+        raise ValueError(f"Invalid integer value: {text}")
+
+    if not signed and value < 0:
+        raise ValueError(f"Negative value not allowed for u{bits}")
+
+    return value
 
 
 @test()
@@ -117,22 +153,43 @@ def test_get_u8():
 
 @tool
 @idasync
+<<<<<<< HEAD
 def get_u16(
     addrs: Annotated[
         list[str] | str, "Addresses to read 16-bit unsigned integers from"
+=======
+def get_int(
+    queries: Annotated[
+        list[IntRead] | IntRead,
+        "Integer read requests (ty, addr). ty: i8/u64/i16le/i16be/etc",
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
     ],
 ) -> list[dict]:
-    """Read 16-bit unsigned integers from memory addresses"""
-    addrs = normalize_list_input(addrs)
-    results = []
+    """Read integer values from memory addresses"""
+    if isinstance(queries, dict):
+        queries = [queries]
 
-    for addr in addrs:
+    results = []
+    for item in queries:
+        addr = item.get("addr", "")
+        ty = item.get("ty", "")
+
         try:
+            bits, signed, byte_order, normalized = _parse_int_class(ty)
             ea = parse_address(addr)
-            value = ida_bytes.get_wide_word(ea)
-            results.append({"addr": addr, "value": value})
+            size = bits // 8
+            data = ida_bytes.get_bytes(ea, size)
+            if not data or len(data) != size:
+                raise ValueError(f"Failed to read {size} bytes at {addr}")
+
+            value = int.from_bytes(data, byte_order, signed=signed)
+            results.append(
+                {"addr": addr, "ty": normalized, "value": value, "error": None}
+            )
         except Exception as e:
-            results.append({"addr": addr, "value": None, "error": str(e)})
+            results.append(
+                {"addr": addr, "ty": ty, "value": None, "error": str(e)}
+            )
 
     return results
 
@@ -156,6 +213,7 @@ def test_get_u16():
 
 @tool
 @idasync
+<<<<<<< HEAD
 def get_u32(
     addrs: Annotated[
         list[str] | str, "Addresses to read 32-bit unsigned integers from"
@@ -234,6 +292,8 @@ def test_get_u64():
 
 @tool
 @idasync
+=======
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96
 def get_string(
     addrs: Annotated[list[str] | str, "Addresses to read strings from"],
 ) -> list[dict]:
@@ -244,7 +304,13 @@ def get_string(
     for addr in addrs:
         try:
             ea = parse_address(addr)
-            value = idaapi.get_strlit_contents(ea, -1, 0).decode("utf-8")
+            raw = idaapi.get_strlit_contents(ea, -1, 0)
+            if not raw:
+                results.append(
+                    {"addr": addr, "value": None, "error": "No string at address"}
+                )
+                continue
+            value = raw.decode("utf-8", errors="replace")
             results.append({"addr": addr, "value": value})
         except Exception as e:
             results.append({"addr": addr, "value": None, "error": str(e)})
@@ -282,7 +348,10 @@ def get_global_variable_value_internal(ea: int) -> str:
         size = tif.get_size()
 
     if size == 0 and tif.is_array() and tif.get_array_element().is_decl_char():
-        return_string = idaapi.get_strlit_contents(ea, -1, 0).decode("utf-8").strip()
+        raw = idaapi.get_strlit_contents(ea, -1, 0)
+        if not raw:
+            return "\"\""
+        return_string = raw.decode("utf-8", errors="replace").strip()
         return f'"{return_string}"'
     elif size == 1:
         return hex(ida_bytes.get_byte(ea))
@@ -384,6 +453,7 @@ def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[dict]:
     return results
 
 
+<<<<<<< HEAD
 @test()
 def test_patch():
     """patch modifies bytes and can be restored"""
@@ -438,3 +508,55 @@ def test_patch_invalid_hex_data():
     assert_is_list(result, min_length=1)
     assert_has_keys(result[0], "addr", "error")
     assert result[0]["error"] is not None
+=======
+@tool
+@idasync
+def put_int(
+    items: Annotated[
+        list[IntWrite] | IntWrite,
+        "Integer write requests (ty, addr, value). value is a string; supports 0x.. and negatives",
+    ],
+) -> list[dict]:
+    """Write integer values to memory addresses"""
+    if isinstance(items, dict):
+        items = [items]
+
+    results = []
+    for item in items:
+        addr = item.get("addr", "")
+        ty = item.get("ty", "")
+        value_text = item.get("value")
+
+        try:
+            bits, signed, byte_order, normalized = _parse_int_class(ty)
+            value = _parse_int_value(value_text, signed, bits)
+            size = bits // 8
+            try:
+                data = value.to_bytes(size, byte_order, signed=signed)
+            except OverflowError:
+                raise ValueError(f"Value {value_text} does not fit in {normalized}")
+
+            ea = parse_address(addr)
+            ida_bytes.patch_bytes(ea, data)
+            results.append(
+                {
+                    "addr": addr,
+                    "ty": normalized,
+                    "value": str(value_text),
+                    "ok": True,
+                    "error": None,
+                }
+            )
+        except Exception as e:
+            results.append(
+                {
+                    "addr": addr,
+                    "ty": ty,
+                    "value": str(value_text) if value_text is not None else None,
+                    "ok": False,
+                    "error": str(e),
+                }
+            )
+
+    return results
+>>>>>>> 780e83ed6acfe35d15874fc89e785c963b807a96

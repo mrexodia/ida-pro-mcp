@@ -110,7 +110,18 @@ With coverage:
     try:
         # Import test framework and API modules AFTER idalib is initialized
         # This triggers the @test decorators to register tests
-        from ida_pro_mcp.ida_mcp.tests import run_tests, TESTS, set_sample_size
+        from ida_pro_mcp.ida_mcp.framework import run_tests, TESTS, set_sample_size
+        
+        # Import all test modules to register the tests
+        from ida_pro_mcp.ida_mcp.tests import (
+            test_api_core,
+            test_api_analysis,
+            test_api_memory,
+            test_api_modify,
+            test_api_types,
+            test_api_stack,
+            test_api_resources,
+        )
 
         # Configure sample size for deterministic sampling helpers
         set_sample_size(args.sample_size)
