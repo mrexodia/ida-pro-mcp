@@ -12,7 +12,7 @@ from types import UnionType
 from urllib.parse import urlparse, parse_qs
 from io import BufferedIOBase
 
-from .jsonrpc import JsonRpcRegistry, JsonRpcError, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
+from .jsonrpc import JsonRpcRegistry, JsonRpcError, JsonRpcException, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
 
 class McpToolError(Exception):
     def __init__(self, message: str):
@@ -128,8 +128,13 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(404, "Not Found")
 
     def do_POST(self):
-        # Read request body (TODO: do we need to handle chunked encoding and what about no Content-Length?)
+        # Read request body
         content_length = int(self.headers.get("Content-Length", 0))
+
+        if content_length > self.mcp_server.post_body_limit:
+            self.send_error(413, f"Payload Too Large: exceeds {self.mcp_server.post_body_limit} bytes")
+            return
+
         body = self.rfile.read(content_length) if content_length > 0 else b""
 
         match urlparse(self.path).path:
@@ -240,8 +245,10 @@ class McpServer:
         self.name = name
         self.version = version
         self.cors_allowed_origins: Callable[[str], bool] | list[str] | str | None = self.cors_localhost
+        self.post_body_limit = 10 * 1024 * 1024  # 10MB
         self.tools = McpRpcRegistry()
         self.resources = McpRpcRegistry()
+        self.prompts = McpRpcRegistry()
 
         self._http_server: HTTPServer | None = None
         self._server_thread: threading.Thread | None = None
@@ -260,6 +267,8 @@ class McpServer:
         self.registry.methods["resources/list"] = self._mcp_resources_list
         self.registry.methods["resources/templates/list"] = self._mcp_resource_templates_list
         self.registry.methods["resources/read"] = self._mcp_resources_read
+        self.registry.methods["prompts/list"] = self._mcp_prompts_list
+        self.registry.methods["prompts/get"] = self._mcp_prompts_get
         self.registry.methods["notifications/cancelled"] = self._mcp_notifications_cancelled
 
     def tool(self, func: Callable) -> Callable:
@@ -270,6 +279,9 @@ class McpServer:
             setattr(func, "__resource_uri__", uri)
             return self.resources.method(func)
         return decorator
+
+    def prompt(self, func: Callable) -> Callable:
+        return self.prompts.method(func)
 
     def serve(self, host: str, port: int, *, background = True, request_handler = McpHttpRequestHandler):
         if self._running:
@@ -386,6 +398,7 @@ class McpServer:
                     "subscribe": False,
                     "listChanged": False,
                 },
+                "prompts": {},
             },
             "serverInfo": {
                 "name": self.name,
@@ -555,6 +568,87 @@ class McpServer:
             }],
             "isError": True,
         }
+
+    def _mcp_prompts_list(self, _meta: dict | None = None) -> dict:
+        """MCP prompts/list method"""
+        return {
+            "prompts": [
+                self._generate_prompt_schema(func_name, func)
+                for func_name, func in self.prompts.methods.items()
+            ],
+        }
+
+    def _mcp_prompts_get(
+        self, name: str, arguments: dict | None = None, _meta: dict | None = None
+    ) -> dict:
+        """MCP prompts/get method"""
+        # Dispatch to prompts registry
+        prompt_response = self.prompts.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "method": name,
+                "params": arguments,
+                "id": None,
+            }
+        )
+        assert prompt_response is not None, "Only notification requests return None"
+
+        # Check for error response
+        if "error" in prompt_response:
+            error = prompt_response["error"]
+            raise JsonRpcException(error["code"], error["message"], error.get("data"))
+
+        result = prompt_response.get("result")
+
+        # Pass through list of messages directly
+        if isinstance(result, list):
+            return {"messages": result}
+
+        # Convert non-string results to JSON
+        if not isinstance(result, str):
+            result = json.dumps(result, indent=2)
+        return {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": {"type": "text", "text": result},
+                },
+            ],
+        }
+
+    def _generate_prompt_schema(self, func_name: str, func: Callable) -> dict:
+        """Generate MCP prompt schema from a function"""
+        hints = get_type_hints(func, include_extras=True)
+        hints.pop("return", None)
+        sig = inspect.signature(func)
+
+        # Build arguments list (PromptArgument format)
+        arguments = []
+        for param_name, param_type in hints.items():
+            arg: dict[str, Any] = {"name": param_name}
+
+            # Extract description from Annotated
+            origin = get_origin(param_type)
+            if origin is Annotated:
+                args = get_args(param_type)
+                arg["description"] = str(args[-1])
+
+            # Check if required (no default value)
+            param = sig.parameters.get(param_name)
+            if not param or param.default is inspect.Parameter.empty:
+                arg["required"] = True
+
+            arguments.append(arg)
+
+        schema: dict[str, Any] = {
+            "name": func_name,
+            "description": (func.__doc__ or f"Prompt {func_name}").strip(),
+        }
+
+        if arguments:
+            schema["arguments"] = arguments
+
+        return schema
 
     def _type_to_json_schema(self, py_type: Any) -> dict:
         """Convert Python type hint to JSON schema object"""
