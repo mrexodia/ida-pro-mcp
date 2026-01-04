@@ -221,6 +221,7 @@ class McpServer:
     def __init__(self, name: str, version = "1.0.0", *, extensions: dict[str, set[str]] | None = None):
         self.name = name
         self.version = version
+        self.cors_allowed_origins: Callable[[str], bool] | list[str] | str | None = self.cors_localhost
         self.tools = McpRpcRegistry()
         self.resources = McpRpcRegistry()
 
@@ -348,6 +349,10 @@ class McpServer:
                     stdout.flush()
             except (BrokenPipeError, KeyboardInterrupt): # Client disconnected
                 break
+
+    def cors_localhost(self, origin: str) -> bool:
+        """Allow CORS requests from localhost on ANY port."""
+        return urlparse(origin).hostname in ("localhost", "127.0.0.1", "::1")
 
     def _mcp_ping(self, _meta: dict | None = None) -> dict:
         """MCP ping method"""
