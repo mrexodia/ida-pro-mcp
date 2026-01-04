@@ -80,10 +80,33 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         """Override to suppress default logging or customize"""
         pass
 
+    def send_cors_headers(self, *, preflight = False):
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return
+        def is_allowed():
+            allowed = self.mcp_server.cors_allowed_origins
+            if allowed is None:
+                return False
+            if callable(allowed):
+                return allowed(origin)
+            if isinstance(allowed, str):
+                allowed = [allowed]
+            assert isinstance(allowed, list)
+            return "*" in allowed or origin in allowed
+        if not is_allowed():
+            return
+        self.send_header("Access-Control-Allow-Origin", origin)
+        if preflight:
+            self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, Mcp-Session-Id, Mcp-Protocol-Version")
+            if self.headers.get("Access-Control-Request-Private-Network") == "true":
+                self.send_header("Access-Control-Allow-Private-Network", "true")
+
     def send_error(self, code, message=None, explain=None):
         self.send_response(code)
         self.send_header("Content-Type", "text/plain")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_cors_headers()
         self.end_headers()
         self.wfile.write(f"{message}\n".encode("utf-8"))
 
@@ -120,10 +143,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         """Handle CORS preflight requests"""
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, Mcp-Session-Id, Mcp-Protocol-Version")
-        self.send_header("Access-Control-Max-Age", "86400")
+        self.send_cors_headers(preflight=True)
         self.end_headers()
 
     def _handle_sse_get(self):
@@ -137,7 +157,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_cors_headers()
             self.end_headers()
 
             # Send endpoint event with session ID for routing
@@ -188,7 +208,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.send_response(202)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_cors_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -205,9 +225,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version")
+            self.send_cors_headers()
             self.end_headers()
             self.wfile.write(body)
 
