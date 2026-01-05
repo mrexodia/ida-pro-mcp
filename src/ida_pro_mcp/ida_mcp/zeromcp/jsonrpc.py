@@ -282,6 +282,15 @@ class JsonRpcRegistry:
                 # Handle Union types (int | str, Optional[int], etc.)
                 if origin in (Union, UnionType):
                     type_matched = False
+
+                    # Try to parse str as JSON for non-str unions
+                    if type(str) not in args and isinstance(value, str):
+                        try:
+                            value = json.loads(value)
+                            print(f"[MCP] Note: parsed param {param_name} from string as JSON")
+                        except json.JSONDecodeError:
+                            pass
+
                     for arg_type in args:
                         if arg_type is type(None):
                             continue
