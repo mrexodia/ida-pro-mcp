@@ -307,7 +307,14 @@ class JsonRpcRegistry:
                             break
 
                     if not type_matched:
-                        raise JsonRpcException(-32602, f"Invalid params: {param_name} union does not contain {type(value).__name__}")
+                        raise JsonRpcException(-32602, "Invalid params: expected {} for {}, got {}".format(
+                            " | ".join(
+                                t.__name__ if isinstance(t, type) else str(t)
+                                for t in args
+                            ),
+                            param_name,
+                            type(value).__name__
+                        ))
                     validated_params[param_name] = value
                     continue
 
