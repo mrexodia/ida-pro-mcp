@@ -282,6 +282,23 @@ class JsonRpcRegistry:
                 # Handle Union types (int | str, Optional[int], etc.)
                 if origin in (Union, UnionType):
                     type_matched = False
+
+                    # HACK: Try to parse str as JSON for non-str unions
+                    # 
+                    # When JSON schema says one field is "object", Claude Code
+                    # (and maybe other MCP clients) can't (or won't) detect
+                    # that the field is actually a dict/list. Instead, they
+                    # treat the field as a string containing JSON object.
+                    #
+                    # To work around this, if the expected type is a Union
+                    # that does not include str, and the provided value is
+                    # a str, we try to parse it as JSON first.
+                    if type(str) not in args and isinstance(value, str):
+                        try:
+                            value = json.loads(value)
+                        except json.JSONDecodeError:
+                            pass
+
                     for arg_type in args:
                         if arg_type is type(None):
                             continue
@@ -298,7 +315,14 @@ class JsonRpcRegistry:
                             break
 
                     if not type_matched:
-                        raise JsonRpcException(-32602, f"Invalid params: {param_name} union does not contain {type(value).__name__}")
+                        raise JsonRpcException(-32602, "Invalid params: expected {} for {}, got {}".format(
+                            " | ".join(
+                                t.__name__ if isinstance(t, type) else str(t)
+                                for t in args
+                            ),
+                            param_name,
+                            type(value).__name__
+                        ))
                     validated_params[param_name] = value
                     continue
 
