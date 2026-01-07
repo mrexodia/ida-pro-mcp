@@ -283,11 +283,19 @@ class JsonRpcRegistry:
                 if origin in (Union, UnionType):
                     type_matched = False
 
-                    # Try to parse str as JSON for non-str unions
+                    # HACK: Try to parse str as JSON for non-str unions
+                    # 
+                    # When JSON schema says one field is "object", Claude Code
+                    # (and maybe other MCP clients) can't (or won't) detect
+                    # that the field is actually a dict/list. Instead, they
+                    # treat the field as a string containing JSON object.
+                    #
+                    # To work around this, if the expected type is a Union
+                    # that does not include str, and the provided value is
+                    # a str, we try to parse it as JSON first.
                     if type(str) not in args and isinstance(value, str):
                         try:
                             value = json.loads(value)
-                            print(f"[MCP] Note: parsed param {param_name} from string as JSON")
                         except json.JSONDecodeError:
                             pass
 
