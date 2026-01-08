@@ -64,29 +64,24 @@ def declare_type(
 @tool
 @idasync
 def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
-    """Read struct fields
+    """Read struct fields and parse memory at specified address
 
-    Supports three input formats:
-    - "addr:struct" - Read struct fields at specific address with values
-    - "addr" - Read struct at address (auto-detect struct type)
-    - "struct" - Read struct definition only (no address, no values)
+    Reads struct type definition and parses actual memory values at the given address
+    as instances of that struct type.
+
+    Input format (dict required):
+    - {"addr": "0x401000", "struct": "MyStruct"} - Explicit address and struct type
+    - {"addr": "0x401000"} - Auto-detect struct type from address
+
+    Auto-detection (addr-only format):
+    - Only works if IDA already has type information applied at that address
+    - The type must be a struct/union (UDT), not a primitive type
+    - Common use cases: global variables or stack variables already typed as structs
+
+    Returns struct layout with actual memory values for each field.
     """
 
-    def parse_addr_struct(s: str) -> dict:
-        # Support "addr:struct", just "addr", or just "struct"
-        if ":" in s:
-            parts = s.split(":", 1)
-            return {"addr": parts[0].strip(), "struct": parts[1].strip()}
-        # Try to parse as address, if it fails, treat as struct name
-        s_stripped = s.strip()
-        try:
-            parse_address(s_stripped)
-            return {"addr": s_stripped, "struct": ""}
-        except Exception:
-            # Not an address, treat as struct name
-            return {"addr": "", "struct": s_stripped}
-
-    queries = normalize_dict_list(queries, parse_addr_struct)
+    queries = normalize_dict_list(queries)
 
     results = []
     for query in queries:
@@ -94,7 +89,7 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
         struct_name = query.get("struct", "")
 
         try:
-            # Determine if we have an address
+            # Parse address - this is required
             addr = None
             if addr_str:
                 try:
@@ -113,9 +108,20 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
                             }
                         )
                         continue
+            else:
+                # Address is required
+                results.append(
+                    {
+                        "addr": None,
+                        "struct": struct_name,
+                        "members": None,
+                        "error": "Address is required for reading struct fields",
+                    }
+                )
+                continue
 
             # If struct name not provided, try to auto-detect from address
-            if not struct_name and addr is not None:
+            if not struct_name:
                 tif_auto = ida_typeinf.tinfo_t()
                 if ida_nalt.get_tinfo(tif_auto, addr) and tif_auto.is_udt():
                     struct_name = tif_auto.get_type_name()
@@ -123,7 +129,7 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
             if not struct_name:
                 results.append(
                     {
-                        "addr": addr_str or None,
+                        "addr": addr_str,
                         "struct": None,
                         "members": None,
                         "error": "No struct specified and could not auto-detect from address",
@@ -135,7 +141,7 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
             if not tif.get_named_type(None, struct_name):
                 results.append(
                     {
-                        "addr": addr_str or None,
+                        "addr": addr_str,
                         "struct": struct_name,
                         "members": None,
                         "error": f"Struct '{struct_name}' not found",
@@ -147,7 +153,7 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
             if not tif.get_udt_details(udt_data):
                 results.append(
                     {
-                        "addr": addr_str or None,
+                        "addr": addr_str,
                         "struct": struct_name,
                         "members": None,
                         "error": "Failed to get struct details",
@@ -216,12 +222,12 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
                 members.append(member_info)
 
             results.append(
-                {"addr": addr_str or None, "struct": struct_name, "members": members}
+                {"addr": addr_str, "struct": struct_name, "members": members}
             )
         except Exception as e:
             results.append(
                 {
-                    "addr": addr_str or None,
+                    "addr": addr_str,
                     "struct": struct_name,
                     "members": None,
                     "error": str(e),

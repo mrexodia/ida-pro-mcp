@@ -133,55 +133,6 @@ def test_read_struct_not_found():
 
 
 @test()
-def test_read_struct_by_name():
-    """read_struct can read struct definition by name (no address)"""
-    # Create a test struct first
-    if not create_test_struct("__TestStruct__"):
-        return  # Skip if struct creation failed
-
-    result = read_struct("__TestStruct__")
-    assert_is_list(result, min_length=1)
-    r = result[0]
-    # Should have members
-    assert_has_keys(r, "addr", "struct", "members")
-    # addr should be null when no address provided
-    assert r["addr"] is None
-    assert r["struct"] == "__TestStruct__"
-    # Members should not have "value" field (no address provided)
-    if r.get("members"):
-        for member in r["members"]:
-            assert_has_keys(member, "offset", "type", "name", "size")
-            # Value field should NOT be present when no address
-            assert "value" not in member
-
-
-@test()
-def test_read_struct_string_format():
-    """read_struct handles string format input (struct name only)"""
-    # Create a test struct first
-    if not create_test_struct("__TestStruct2__"):
-        return  # Skip if struct creation failed
-
-    # Test with just struct name as string
-    result = read_struct("__TestStruct2__")
-    assert_is_list(result, min_length=1)
-    r = result[0]
-    assert r["struct"] == "__TestStruct2__"
-    assert r["addr"] is None
-
-
-@test()
-def test_read_struct_invalid_struct_name():
-    """read_struct handles invalid struct name gracefully"""
-    result = read_struct("NonExistentStruct12345")
-    assert_is_list(result, min_length=1)
-    r = result[0]
-    # Should have error
-    assert r.get("error") is not None
-    assert "not found" in r["error"].lower()
-
-
-@test()
 def test_read_struct_name_resolution():
     """read_struct can resolve named addresses (e.g., function names)"""
     # Create a test struct first
