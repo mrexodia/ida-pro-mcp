@@ -64,19 +64,12 @@ def declare_type(
 @tool
 @idasync
 def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
-    """Read struct fields and parse memory at specified address
+    """Reads struct type definition and parses actual memory values at the
+    given address as instances of that struct type.
 
-    Reads struct type definition and parses actual memory values at the given address
-    as instances of that struct type.
-
-    Input format (dict required):
-    - {"addr": "0x401000", "struct": "MyStruct"} - Explicit address and struct type
-    - {"addr": "0x401000"} - Auto-detect struct type from address
-
-    Auto-detection (addr-only format):
-    - Only works if IDA already has type information applied at that address
-    - The type must be a struct/union (UDT), not a primitive type
-    - Common use cases: global variables or stack variables already typed as structs
+    If struct name is not provided, attempts to auto-detect from address.
+    Auto-detection only works if IDA already has type information applied
+    at that address
 
     Returns struct layout with actual memory values for each field.
     """
@@ -90,26 +83,7 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
 
         try:
             # Parse address - this is required
-            addr = None
-            if addr_str:
-                try:
-                    addr = parse_address(addr_str)
-                except Exception:
-                    # Try to resolve as a name (e.g., "main", function names)
-                    addr = idaapi.get_name_ea(idaapi.BADADDR, addr_str)
-                    if addr == idaapi.BADADDR:
-                        # Not a valid address or name
-                        results.append(
-                            {
-                                "addr": addr_str,
-                                "struct": struct_name,
-                                "members": None,
-                                "error": f"Failed to resolve address: {addr_str}",
-                            }
-                        )
-                        continue
-            else:
-                # Address is required
+            if not addr_str:
                 results.append(
                     {
                         "addr": None,
@@ -120,7 +94,23 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
                 )
                 continue
 
-            # If struct name not provided, try to auto-detect from address
+            # Try to parse as address, then try name resolution
+            try:
+                addr = parse_address(addr_str)
+            except Exception:
+                addr = idaapi.get_name_ea(idaapi.BADADDR, addr_str)
+                if addr == idaapi.BADADDR:
+                    results.append(
+                        {
+                            "addr": addr_str,
+                            "struct": struct_name,
+                            "members": None,
+                            "error": f"Failed to resolve address: {addr_str}",
+                        }
+                    )
+                    continue
+
+            # Auto-detect struct type from address if not provided
             if not struct_name:
                 tif_auto = ida_typeinf.tinfo_t()
                 if ida_nalt.get_tinfo(tif_auto, addr) and tif_auto.is_udt():
@@ -168,56 +158,51 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
                 member_name = member.name
                 member_size = member.type.get_size()
 
-                # Only read memory values if address was provided
-                if addr is not None:
-                    member_addr = addr + offset
-                    try:
-                        if member.type.is_ptr():
-                            is_64bit = (
-                                ida_ida.inf_is_64bit()
-                                if ida_major >= 9
-                                else idaapi.get_inf_structure().is_64bit()
-                            )
-                            if is_64bit:
-                                value = idaapi.get_qword(member_addr)
-                                value_str = f"0x{value:016X}"
-                            else:
-                                value = idaapi.get_dword(member_addr)
-                                value_str = f"0x{value:08X}"
-                        elif member_size == 1:
-                            value = idaapi.get_byte(member_addr)
-                            value_str = f"0x{value:02X} ({value})"
-                        elif member_size == 2:
-                            value = idaapi.get_word(member_addr)
-                            value_str = f"0x{value:04X} ({value})"
-                        elif member_size == 4:
-                            value = idaapi.get_dword(member_addr)
-                            value_str = f"0x{value:08X} ({value})"
-                        elif member_size == 8:
+                # Read memory value at member address
+                member_addr = addr + offset
+                try:
+                    if member.type.is_ptr():
+                        is_64bit = (
+                            ida_ida.inf_is_64bit()
+                            if ida_major >= 9
+                            else idaapi.get_inf_structure().is_64bit()
+                        )
+                        if is_64bit:
                             value = idaapi.get_qword(member_addr)
-                            value_str = f"0x{value:016X} ({value})"
+                            value_str = f"0x{value:016X}"
                         else:
-                            bytes_data = []
-                            for i in range(min(member_size, 16)):
-                                try:
-                                    byte_val = idaapi.get_byte(member_addr + i)
-                                    bytes_data.append(f"{byte_val:02X}")
-                                except Exception:
-                                    break
-                            value_str = f"[{' '.join(bytes_data)}{'...' if member_size > 16 else ''}]"
-                    except Exception:
-                        value_str = "<failed to read>"
-                else:
-                    value_str = None
+                            value = idaapi.get_dword(member_addr)
+                            value_str = f"0x{value:08X}"
+                    elif member_size == 1:
+                        value = idaapi.get_byte(member_addr)
+                        value_str = f"0x{value:02X} ({value})"
+                    elif member_size == 2:
+                        value = idaapi.get_word(member_addr)
+                        value_str = f"0x{value:04X} ({value})"
+                    elif member_size == 4:
+                        value = idaapi.get_dword(member_addr)
+                        value_str = f"0x{value:08X} ({value})"
+                    elif member_size == 8:
+                        value = idaapi.get_qword(member_addr)
+                        value_str = f"0x{value:016X} ({value})"
+                    else:
+                        bytes_data = []
+                        for i in range(min(member_size, 16)):
+                            try:
+                                bytes_data.append(f"{idaapi.get_byte(member_addr + i):02X}")
+                            except Exception:
+                                break
+                        value_str = f"[{' '.join(bytes_data)}{'...' if member_size > 16 else ''}]"
+                except Exception:
+                    value_str = "<failed to read>"
 
                 member_info = {
                     "offset": f"0x{offset:08X}",
                     "type": member_type,
                     "name": member_name,
                     "size": member_size,
+                    "value": value_str,
                 }
-                if value_str is not None:
-                    member_info["value"] = value_str
 
                 members.append(member_info)
 
