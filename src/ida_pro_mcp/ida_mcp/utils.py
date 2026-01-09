@@ -198,7 +198,7 @@ class StructRead(TypedDict, total=False):
     """
 
     addr: Annotated[str, "Memory address (hex or decimal)"]
-    struct: Annotated[str, "Structure name (optional - auto-detect if omitted)"]
+    struct: Annotated[NotRequired[str], "Structure name (optional, auto-detect if omitted)"]
 
 
 class TypeEdit(TypedDict, total=False):
