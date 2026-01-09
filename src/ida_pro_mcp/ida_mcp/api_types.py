@@ -64,16 +64,17 @@ def declare_type(
 @tool
 @idasync
 def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
-    """Read struct fields"""
+    """Reads struct type definition and parses actual memory values at the
+    given address as instances of that struct type.
 
-    def parse_addr_struct(s: str) -> dict:
-        # Support "addr:struct" or just "addr" (auto-detect struct)
-        if ":" in s:
-            parts = s.split(":", 1)
-            return {"addr": parts[0].strip(), "struct": parts[1].strip()}
-        return {"addr": s.strip(), "struct": ""}
+    If struct name is not provided, attempts to auto-detect from address.
+    Auto-detection only works if IDA already has type information applied
+    at that address
 
-    queries = normalize_dict_list(queries, parse_addr_struct)
+    Returns struct layout with actual memory values for each field.
+    """
+
+    queries = normalize_dict_list(queries)
 
     results = []
     for query in queries:
@@ -81,7 +82,50 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
         struct_name = query.get("struct", "")
 
         try:
-            addr = parse_address(addr_str)
+            # Parse address - this is required
+            if not addr_str:
+                results.append(
+                    {
+                        "addr": None,
+                        "struct": struct_name,
+                        "members": None,
+                        "error": "Address is required for reading struct fields",
+                    }
+                )
+                continue
+
+            # Try to parse as address, then try name resolution
+            try:
+                addr = parse_address(addr_str)
+            except Exception:
+                addr = idaapi.get_name_ea(idaapi.BADADDR, addr_str)
+                if addr == idaapi.BADADDR:
+                    results.append(
+                        {
+                            "addr": addr_str,
+                            "struct": struct_name,
+                            "members": None,
+                            "error": f"Failed to resolve address: {addr_str}",
+                        }
+                    )
+                    continue
+
+            # Auto-detect struct type from address if not provided
+            if not struct_name:
+                tif_auto = ida_typeinf.tinfo_t()
+                if ida_nalt.get_tinfo(tif_auto, addr) and tif_auto.is_udt():
+                    struct_name = tif_auto.get_type_name()
+
+            if not struct_name:
+                results.append(
+                    {
+                        "addr": addr_str,
+                        "struct": None,
+                        "members": None,
+                        "error": "No struct specified and could not auto-detect from address",
+                    }
+                )
+                continue
 
             tif = ida_typeinf.tinfo_t()
             if not tif.get_named_type(None, struct_name):
@@ -110,11 +154,12 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
             members = []
             for member in udt_data:
                 offset = member.begin() // 8
-                member_addr = addr + offset
                 member_type = member.type._print()
                 member_name = member.name
                 member_size = member.type.get_size()
 
+                # Read memory value at member address
+                member_addr = addr + offset
                 try:
                     if member.type.is_ptr():
                         is_64bit = (
@@ -144,8 +189,7 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
                         bytes_data = []
                         for i in range(min(member_size, 16)):
                             try:
-                                byte_val = idaapi.get_byte(member_addr + i)
-                                bytes_data.append(f"{byte_val:02X}")
+                                bytes_data.append(f"{idaapi.get_byte(member_addr + i):02X}")
                             except Exception:
                                 break
                         value_str = f"[{' '.join(bytes_data)}{'...' if member_size > 16 else ''}]"
@@ -156,6 +200,7 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
                     "offset": f"0x{offset:08X}",
                     "type": member_type,
                     "name": member_name,
+                    "size": member_size,
                     "value": value_str,
                 }
 

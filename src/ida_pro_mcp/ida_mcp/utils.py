@@ -190,11 +190,15 @@ class NumberConversion(TypedDict, total=False):
     size: Annotated[int, "Byte size for conversion (omit for auto)"]
 
 
-class StructRead(TypedDict):
-    """Structure read request"""
+class StructRead(TypedDict, total=False):
+    """Structure read request
+
+    Address is required. Struct name is optional - if omitted, will attempt
+    to auto-detect from type information already applied at the address.
+    """
 
     addr: Annotated[str, "Memory address (hex or decimal)"]
-    struct: Annotated[str, "Structure name"]
+    struct: Annotated[NotRequired[str], "Structure name (optional, auto-detect if omitted)"]
 
 
 class TypeEdit(TypedDict, total=False):
