@@ -57,6 +57,17 @@ https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
 
 _Note_: You need to load a binary in IDA before the plugin menu will show up.
 
+### Skills (Optional)
+
+This repository also includes an `idapython` skill for AI coding assistants. If you're using Claude Code, Codex, OpenCode, or another compatible agent, you can install it via [sk](https://github.com/803/skills-supply):
+
+```sh
+sk pkg add gh mrexodia/ida-pro-mcp --path skills
+sk sync
+```
+
+This gives your AI assistant knowledge of IDAPython APIs and patterns for writing IDA scripts.
+
 ## Prompt Engineering
 
 LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
