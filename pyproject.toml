@@ -15,6 +15,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
+    "idapro>=0.0.7",
     "mcp>=1.16.0",
 ]
 

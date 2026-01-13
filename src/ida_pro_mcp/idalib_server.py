@@ -8,6 +8,11 @@ import importlib
 from pathlib import Path
 import typing_inspection.introspection as intro
 
+# Reference: https://errors.pydantic.dev/2.11/u/typed-dict-version
+if sys.version_info < (3, 12):
+    import typing, typing_extensions
+    typing.TypedDict = typing_extensions.TypedDict
+
 from mcp.server.fastmcp import FastMCP
 
 # idapro must go first to initialize idalib
