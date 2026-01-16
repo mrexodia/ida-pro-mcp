@@ -12,6 +12,13 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 import glob
 
+# Terminal raw mode support (Unix only)
+if sys.platform != "win32":
+    import tty
+    import termios
+else:
+    import msvcrt
+
 if TYPE_CHECKING:
     from ida_pro_mcp.ida_mcp.zeromcp import McpServer
     from ida_pro_mcp.ida_mcp.zeromcp.jsonrpc import JsonRpcResponse, JsonRpcRequest
@@ -180,17 +187,22 @@ def print_mcp_config():
     )
 
 
-def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
-    # Map client names to their JSON key paths for clients that don't use "mcpServers"
-    # Format: client_name -> (top_level_key, nested_key)
-    # None means use default "mcpServers" at top level
-    special_json_structures = {
-        "VS Code": ("mcp", "servers"),
-        "Visual Studio 2022": (None, "servers"),  # servers at top level
-    }
+# Map client names to their JSON key paths for clients that don't use "mcpServers"
+# Format: client_name -> (top_level_key, nested_key)
+# None means use default "mcpServers" at top level
+SPECIAL_JSON_STRUCTURES = {
+    "VS Code": ("mcp", "servers"),
+    "Visual Studio 2022": (None, "servers"),  # servers at top level
+}
 
+
+def get_mcp_client_configs() -> dict[str, tuple[str, str]]:
+    """Get the MCP client configurations for the current platform.
+    
+    Returns a dict mapping client name to (config_dir, config_file).
+    """
     if sys.platform == "win32":
-        configs = {
+        return {
             "Cline": (
                 os.path.join(
                     os.getenv("APPDATA", ""),
@@ -309,7 +321,7 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             ),
         }
     elif sys.platform == "darwin":
-        configs = {
+        return {
             "Cline": (
                 os.path.join(
                     os.path.expanduser("~"),
@@ -462,7 +474,7 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             ),
         }
     elif sys.platform == "linux":
-        configs = {
+        return {
             "Cline": (
                 os.path.join(
                     os.path.expanduser("~"),
@@ -584,11 +596,365 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             ),
         }
     else:
+        return {}
+
+
+def read_config_file(config_path: str, is_toml: bool) -> dict | None:
+    """Read a config file (JSON or TOML). Returns None if invalid."""
+    if not os.path.exists(config_path):
+        return {}
+    
+    with open(
+        config_path,
+        "rb" if is_toml else "r",
+        encoding=None if is_toml else "utf-8",
+    ) as f:
+        if is_toml:
+            data = f.read()
+            if len(data) == 0:
+                return {}
+            try:
+                return tomllib.loads(data.decode("utf-8"))
+            except tomllib.TOMLDecodeError:
+                return None
+        else:
+            data = f.read().strip()
+            if len(data) == 0:
+                return {}
+            try:
+                return json.loads(data)
+            except json.decoder.JSONDecodeError:
+                return None
+
+
+def get_mcp_servers_dict(config: dict, client_name: str, is_toml: bool) -> dict:
+    """Get the mcp_servers dict from a config, creating nested structure if needed."""
+    if is_toml:
+        if "mcp_servers" not in config:
+            config["mcp_servers"] = {}
+        return config["mcp_servers"]
+    
+    # Check if this client uses a special JSON structure
+    if client_name in SPECIAL_JSON_STRUCTURES:
+        top_key, nested_key = SPECIAL_JSON_STRUCTURES[client_name]
+        if top_key is None:
+            # servers at top level (e.g., Visual Studio 2022)
+            if nested_key not in config:
+                config[nested_key] = {}
+            return config[nested_key]
+        else:
+            # nested structure (e.g., VS Code uses mcp.servers)
+            if top_key not in config:
+                config[top_key] = {}
+            if nested_key not in config[top_key]:
+                config[top_key][nested_key] = {}
+            return config[top_key][nested_key]
+    else:
+        # Default: mcpServers at top level
+        if "mcpServers" not in config:
+            config["mcpServers"] = {}
+        return config["mcpServers"]
+
+
+def check_client_status(name: str, config_dir: str, config_file: str) -> tuple[bool, bool]:
+    """Check if a client is available and if the MCP server is installed.
+    
+    Returns (available, installed).
+    """
+    config_path = os.path.join(config_dir, config_file)
+    is_toml = config_file.endswith(".toml")
+    
+    # Check if client is available (config dir exists)
+    if not os.path.exists(config_dir):
+        return False, False
+    
+    # Read config file
+    config = read_config_file(config_path, is_toml)
+    if config is None:
+        return True, False  # Available but invalid config
+    
+    # Get mcp_servers dict
+    mcp_servers = get_mcp_servers_dict(config, name, is_toml)
+    
+    # Check for old name migration
+    old_name = "github.com/mrexodia/ida-pro-mcp"
+    installed = mcp.name in mcp_servers or old_name in mcp_servers
+    
+    return True, installed
+
+
+def get_available_clients() -> list[tuple[str, bool]]:
+    """Get list of available MCP clients and their installation status.
+    
+    Returns list of (client_name, is_installed).
+    """
+    configs = get_mcp_client_configs()
+    result = []
+    
+    for name, (config_dir, config_file) in configs.items():
+        available, installed = check_client_status(name, config_dir, config_file)
+        if available:
+            result.append((name, installed))
+    
+    return result
+
+
+def is_interactive_terminal() -> bool:
+    """Check if we're running in an interactive terminal."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def getch() -> str:
+    """Read a single character from stdin without echoing."""
+    if sys.platform == "win32":
+        ch = msvcrt.getwch()
+        # Handle special keys on Windows
+        if ch in ('\x00', '\xe0'):  # Special key prefix
+            ch2 = msvcrt.getwch()
+            if ch2 == 'H':  # Up arrow
+                return '\x1b[A'
+            elif ch2 == 'P':  # Down arrow
+                return '\x1b[B'
+        return ch
+    else:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            # Handle escape sequences (arrow keys)
+            if ch == '\x1b':
+                ch += sys.stdin.read(2)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return ch
+
+
+def interactive_checkbox_selection(
+    items: list[tuple[str, bool]], 
+    title: str = "Select items"
+) -> list[str] | None:
+    """Display an interactive checkbox selection UI.
+    
+    Args:
+        items: List of (item_name, initially_checked) tuples
+        title: Title to display above the list
+        
+    Returns:
+        List of selected item names, or None if cancelled (Ctrl+C/Escape)
+    """
+    if not items:
+        return []
+    
+    selected = [checked for _, checked in items]
+    cursor = 0
+    
+    def render():
+        # Clear screen and move cursor to top
+        sys.stdout.write("\033[2J\033[H")
+        print(f"{title}\n")
+        print("Use ↑/↓ to navigate, Space to toggle, Enter to confirm, Ctrl+C to cancel\n")
+        
+        for i, (name, _) in enumerate(items):
+            checkbox = "[x]" if selected[i] else "[ ]"
+            prefix = ">" if i == cursor else " "
+            print(f" {prefix} {checkbox} {name}")
+        
+        print()
+        sys.stdout.flush()
+    
+    render()
+    
+    while True:
+        try:
+            ch = getch()
+            
+            if ch == '\x03':  # Ctrl+C
+                return None
+            elif ch == '\x1b':  # Escape (single escape, not part of sequence)
+                return None
+            elif ch == '\x1b[A':  # Up arrow
+                cursor = (cursor - 1) % len(items)
+            elif ch == '\x1b[B':  # Down arrow
+                cursor = (cursor + 1) % len(items)
+            elif ch == ' ':  # Space - toggle
+                selected[cursor] = not selected[cursor]
+            elif ch in ('\r', '\n'):  # Enter - confirm
+                return [name for (name, _), sel in zip(items, selected) if sel]
+            elif ch == 'k':  # vim-style up
+                cursor = (cursor - 1) % len(items)
+            elif ch == 'j':  # vim-style down
+                cursor = (cursor + 1) % len(items)
+            
+            render()
+        except (KeyboardInterrupt, EOFError):
+            return None
+
+
+def interactive_option_selection(
+    options: list[str],
+    title: str = "Select an option",
+    default: int = 0
+) -> str | None:
+    """Display an interactive single-choice selection UI.
+    
+    Args:
+        options: List of option strings
+        title: Title to display above the list
+        default: Index of default selected option
+        
+    Returns:
+        Selected option string, or None if cancelled (Ctrl+C/Escape)
+    """
+    if not options:
+        return None
+    
+    cursor = default
+    
+    def render():
+        # Clear screen and move cursor to top
+        sys.stdout.write("\033[2J\033[H")
+        print(f"{title}\n")
+        print("Use ↑/↓ to navigate, Enter to confirm, Ctrl+C to cancel\n")
+        
+        for i, option in enumerate(options):
+            prefix = ">" if i == cursor else " "
+            print(f" {prefix} {option}")
+        
+        print()
+        sys.stdout.flush()
+    
+    render()
+    
+    while True:
+        try:
+            ch = getch()
+            
+            if ch == '\x03':  # Ctrl+C
+                return None
+            elif ch == '\x1b':  # Escape (single escape, not part of sequence)
+                return None
+            elif ch == '\x1b[A':  # Up arrow
+                cursor = (cursor - 1) % len(options)
+            elif ch == '\x1b[B':  # Down arrow
+                cursor = (cursor + 1) % len(options)
+            elif ch in ('\r', '\n'):  # Enter - confirm
+                return options[cursor]
+            elif ch == 'k':  # vim-style up
+                cursor = (cursor - 1) % len(options)
+            elif ch == 'j':  # vim-style down
+                cursor = (cursor + 1) % len(options)
+            
+            render()
+        except (KeyboardInterrupt, EOFError):
+            return None
+
+
+def install_local_mcp_config(
+    *,
+    stdio: bool = False,
+    uninstall: bool = False,
+    quiet: bool = False,
+    directory: str | None = None
+):
+    """Install or uninstall MCP server configuration locally in a project directory.
+    
+    Creates/updates .mcp.json in the specified directory (or current directory).
+    
+    Args:
+        stdio: Use stdio transport (vs HTTP)
+        uninstall: Uninstall instead of install
+        quiet: Suppress output
+        directory: Directory to install in (default: current working directory)
+    """
+    if directory is None:
+        directory = os.getcwd()
+    
+    config_path = os.path.join(directory, ".mcp.json")
+    
+    # Read existing config
+    config = read_config_file(config_path, is_toml=False)
+    if config is None:
+        if not quiet:
+            print(f"Skipping local installation\n  Config: {config_path} (invalid JSON)")
+        return
+    
+    # Get mcp_servers dict (local configs use standard mcpServers)
+    if "mcpServers" not in config:
+        config["mcpServers"] = {}
+    mcp_servers = config["mcpServers"]
+    
+    # Migrate old name
+    old_name = "github.com/mrexodia/ida-pro-mcp"
+    if old_name in mcp_servers:
+        mcp_servers[mcp.name] = mcp_servers[old_name]
+        del mcp_servers[old_name]
+    
+    if uninstall:
+        if mcp.name not in mcp_servers:
+            if not quiet:
+                print(f"Skipping local uninstall\n  Config: {config_path} (not installed)")
+            return
+        del mcp_servers[mcp.name]
+        
+        # Remove file if empty
+        if not mcp_servers:
+            if os.path.exists(config_path):
+                os.remove(config_path)
+                if not quiet:
+                    print(f"Removed local MCP config\n  Config: {config_path}")
+            return
+    else:
+        mcp_servers[mcp.name] = generate_mcp_config(stdio=stdio)
+    
+    # Atomic write: temp file + rename
+    fd, temp_path = tempfile.mkstemp(
+        dir=directory, prefix=".tmp_", suffix=".json", text=True
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        os.replace(temp_path, config_path)
+    except:
+        os.unlink(temp_path)
+        raise
+    
+    if not quiet:
+        action = "Uninstalled" if uninstall else "Installed"
+        print(f"{action} local MCP server config\n  Config: {config_path}")
+
+
+def install_mcp_servers(
+    *, 
+    stdio: bool = False, 
+    uninstall: bool = False, 
+    quiet: bool = False,
+    clients: list[str] | None = None
+):
+    """Install or uninstall MCP server configuration for MCP clients.
+    
+    Args:
+        stdio: Use stdio transport (vs HTTP)
+        uninstall: Uninstall instead of install
+        quiet: Suppress output
+        clients: List of specific client names to install/uninstall (None = all available)
+    """
+    configs = get_mcp_client_configs()
+    if not configs:
         print(f"Unsupported platform: {sys.platform}")
         return
 
+    # Normalize client filter to lowercase for case-insensitive matching
+    client_filter = None
+    if clients is not None:
+        client_filter = {c.lower() for c in clients}
+
     installed = 0
     for name, (config_dir, config_file) in configs.items():
+        # Filter by client names if specified
+        if client_filter is not None and name.lower() not in client_filter:
+            continue
+
         config_path = os.path.join(config_dir, config_file)
         is_toml = config_file.endswith(".toml")
 
@@ -599,67 +965,15 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             continue
 
         # Read existing config
-        if not os.path.exists(config_path):
-            config = {}
-        else:
-            with open(
-                config_path,
-                "rb" if is_toml else "r",
-                encoding=None if is_toml else "utf-8",
-            ) as f:
-                if is_toml:
-                    data = f.read()
-                    if len(data) == 0:
-                        config = {}
-                    else:
-                        try:
-                            config = tomllib.loads(data.decode("utf-8"))
-                        except tomllib.TOMLDecodeError:
-                            if not quiet:
-                                print(
-                                    f"Skipping {name} uninstall\n  Config: {config_path} (invalid TOML)"
-                                )
-                            continue
-                else:
-                    data = f.read().strip()
-                    if len(data) == 0:
-                        config = {}
-                    else:
-                        try:
-                            config = json.loads(data)
-                        except json.decoder.JSONDecodeError:
-                            if not quiet:
-                                print(
-                                    f"Skipping {name} uninstall\n  Config: {config_path} (invalid JSON)"
-                                )
-                            continue
+        config = read_config_file(config_path, is_toml)
+        if config is None:
+            if not quiet:
+                file_type = "TOML" if is_toml else "JSON"
+                print(f"Skipping {name}\n  Config: {config_path} (invalid {file_type})")
+            continue
 
-        # Handle TOML vs JSON structure
-        if is_toml:
-            if "mcp_servers" not in config:
-                config["mcp_servers"] = {}
-            mcp_servers = config["mcp_servers"]
-        else:
-            # Check if this client uses a special JSON structure
-            if name in special_json_structures:
-                top_key, nested_key = special_json_structures[name]
-                if top_key is None:
-                    # servers at top level (e.g., Visual Studio 2022)
-                    if nested_key not in config:
-                        config[nested_key] = {}
-                    mcp_servers = config[nested_key]
-                else:
-                    # nested structure (e.g., VS Code uses mcp.servers)
-                    if top_key not in config:
-                        config[top_key] = {}
-                    if nested_key not in config[top_key]:
-                        config[top_key][nested_key] = {}
-                    mcp_servers = config[top_key][nested_key]
-            else:
-                # Default: mcpServers at top level
-                if "mcpServers" not in config:
-                    config["mcpServers"] = {}
-                mcp_servers = config["mcpServers"]
+        # Get mcp_servers dict
+        mcp_servers = get_mcp_servers_dict(config, name, is_toml)
 
         # Migrate old name
         old_name = "github.com/mrexodia/ida-pro-mcp"
@@ -702,11 +1016,15 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 f"{action} {name} MCP server (restart required)\n  Config: {config_path}"
             )
         installed += 1
+    
     if not uninstall and installed == 0:
-        print(
-            "No MCP servers installed. For unsupported MCP clients, use the following config:\n"
-        )
-        print_mcp_config()
+        if client_filter:
+            print(f"No matching MCP clients found for: {', '.join(clients or [])}")
+        else:
+            print(
+                "No MCP servers installed. For unsupported MCP clients, use the following config:\n"
+            )
+            print_mcp_config()
 
 
 def install_ida_plugin(
@@ -817,16 +1135,90 @@ def install_ida_plugin(
                 print("Skipping IDA plugin installation (already up to date)")
 
 
+def run_interactive_installer(*, uninstall: bool = False, stdio: bool = True):
+    """Run the interactive installer with checkbox selection.
+    
+    Note: IDA plugin should be installed/uninstalled by caller before this.
+    
+    Args:
+        uninstall: If True, uninstall selected clients instead of installing
+        stdio: Use stdio transport (vs HTTP)
+    """
+    # Ask about installation scope (global vs local)
+    scope_title = "Select installation scope:"
+    scope_options = [
+        "Global (user-wide, applies to all projects)",
+        "Local (current directory only, creates .mcp.json)",
+    ]
+    scope = interactive_option_selection(scope_options, scope_title)
+    
+    if scope is None:
+        print("\nInstallation cancelled.")
+        return
+    
+    is_local = scope.startswith("Local")
+    
+    if is_local:
+        # Local installation - just create .mcp.json in current directory
+        sys.stdout.write("\033[2J\033[H")
+        install_local_mcp_config(stdio=stdio, uninstall=uninstall)
+        return
+    
+    # Global installation - show client selection
+    available_clients = get_available_clients()
+    
+    if not available_clients:
+        sys.stdout.write("\033[2J\033[H")
+        print("No MCP clients detected on this system.")
+        print("For manual configuration, use the following config:\n")
+        print_mcp_config()
+        return
+    
+    # For interactive selection, pre-check clients that are already installed
+    title = "Select MCP clients to uninstall:" if uninstall else "Select MCP clients to install:"
+    selected = interactive_checkbox_selection(available_clients, title)
+    
+    if selected is None:
+        # User cancelled
+        print("\nInstallation cancelled.")
+        return
+    
+    if not selected:
+        print("\nNo clients selected.")
+        return
+    
+    # Clear screen and show results
+    sys.stdout.write("\033[2J\033[H")
+    
+    # Install/uninstall selected clients
+    install_mcp_servers(
+        stdio=stdio,
+        uninstall=uninstall,
+        clients=selected
+    )
+
+
 def main():
     global IDA_HOST, IDA_PORT
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
     parser.add_argument(
-        "--install", action="store_true", help="Install the MCP Server and IDA plugin"
+        "--install",
+        nargs="*",
+        metavar="CLIENT",
+        help="Install the MCP Server and IDA plugin. Optionally specify client names (e.g., 'claude-code', 'cursor'). "
+             "Without arguments: interactive mode if terminal, IDA plugin only otherwise.",
     )
     parser.add_argument(
         "--uninstall",
+        nargs="*",
+        metavar="CLIENT",
+        help="Uninstall the MCP Server and IDA plugin. Optionally specify client names. "
+             "Without arguments: interactive mode if terminal, IDA plugin only otherwise.",
+    )
+    parser.add_argument(
+        "--local",
         action="store_true",
-        help="Uninstall the MCP Server and IDA plugin",
+        help="Install/uninstall to local .mcp.json in current directory instead of global config",
     )
     parser.add_argument(
         "--allow-ida-free",
@@ -857,18 +1249,48 @@ def main():
     IDA_HOST = ida_rpc.hostname
     IDA_PORT = ida_rpc.port
 
-    if args.install and args.uninstall:
+    if args.install is not None and args.uninstall is not None:
         print("Cannot install and uninstall at the same time")
         return
 
-    if args.install:
+    stdio = args.transport == "stdio"
+
+    if args.install is not None:
+        # Always install IDA plugin first
         install_ida_plugin(allow_ida_free=args.allow_ida_free)
-        install_mcp_servers(stdio=(args.transport == "stdio"))
+        
+        if args.local:
+            # Local installation to .mcp.json
+            install_local_mcp_config(stdio=stdio)
+        elif len(args.install) > 0:
+            # Specific clients specified: install those clients globally
+            install_mcp_servers(stdio=stdio, clients=args.install)
+        elif is_interactive_terminal():
+            # No clients specified, interactive terminal: show interactive UI
+            run_interactive_installer(
+                uninstall=False,
+                stdio=stdio
+            )
+        # else: non-interactive without clients - IDA plugin already installed above
         return
 
-    if args.uninstall:
+    if args.uninstall is not None:
+        # Always uninstall IDA plugin first
         install_ida_plugin(uninstall=True, allow_ida_free=args.allow_ida_free)
-        install_mcp_servers(uninstall=True)
+        
+        if args.local:
+            # Local uninstallation from .mcp.json
+            install_local_mcp_config(uninstall=True)
+        elif len(args.uninstall) > 0:
+            # Specific clients specified: uninstall those clients globally
+            install_mcp_servers(uninstall=True, clients=args.uninstall)
+        elif is_interactive_terminal():
+            # No clients specified, interactive terminal: show interactive UI
+            run_interactive_installer(
+                uninstall=True,
+                stdio=stdio
+            )
+        # else: non-interactive without clients - IDA plugin already uninstalled above
         return
 
     if args.config:
