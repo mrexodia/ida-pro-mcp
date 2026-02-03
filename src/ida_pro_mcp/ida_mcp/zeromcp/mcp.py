@@ -1,4 +1,6 @@
 import re
+import select
+import socket
 import sys
 import time
 import uuid
@@ -206,15 +208,37 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             # Send endpoint event with session ID for routing
             conn.send_event("endpoint", f"/sse?session={conn.session_id}")
 
-            # Keep connection alive with periodic pings
+            # TCP disconnect: kernel gets FIN/RST immediately, but Python only sees it when we
+            # read (EOF) or write (BrokenPipeError). We only write every 30s, so we never "see"
+            # the disconnect until then. Fix: use select() to wait for socket readable; when
+            # client closes, socket becomes readable and recv() returns 0 (EOF).
+            sock = self.connection
+            if sock and hasattr(sock, "settimeout"):
+                try:
+                    sock.settimeout(1.0)
+                except OSError:
+                    pass
+
             last_ping = time.time()
             while conn.alive and self.mcp_server._running:
                 now = time.time()
+                # Detect disconnect without writing: select() says when socket is readable
+                if sock:
+                    try:
+                        r, _, _ = select.select([sock], [], [], 1.0)
+                        if r:
+                            # Readable: peer closed (EOF) or sent data. SSE client sends nothing.
+                            if sock.recv(1, socket.MSG_PEEK) == b"":
+                                break
+                    except (OSError, socket.error, ConnectionResetError, BrokenPipeError):
+                        break
+                else:
+                    time.sleep(1)
+
                 if now - last_ping > 30:  # Ping every 30 seconds
                     if not conn.send_event("ping", {}):
                         break
                     last_ping = now
-                time.sleep(1)
 
         finally:
             conn.alive = False
