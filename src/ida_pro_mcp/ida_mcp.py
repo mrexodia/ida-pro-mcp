@@ -6,6 +6,7 @@ It loads the actual implementation from the ida_mcp package.
 
 import sys
 import idaapi
+import ida_kernwin
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,6 +24,34 @@ def unload_package(package_name: str):
         del sys.modules[mod_name]
 
 
+CONFIG_ACTION_ID = "mcp:configure"
+CONFIG_ACTION_LABEL = "MCP Configuration"
+
+
+class MCPConfigHandler(idaapi.action_handler_t):
+    def __init__(self, plugin: "MCP"):
+        idaapi.action_handler_t.__init__(self)
+        self.plugin = plugin
+
+    def activate(self, ctx):
+        host = ida_kernwin.ask_str(self.plugin.host, 0, "MCP server host:")
+        if host is None:
+            return 0
+        port = ida_kernwin.ask_long(self.plugin.port, "MCP server port (1-65535):")
+        if port is None:
+            return 0
+        if port < 1 or port > 65535:
+            print(f"[MCP] Invalid port: {port}")
+            return 0
+        self.plugin.host = host
+        self.plugin.port = port
+        print(f"[MCP] Configuration updated: {host}:{port}")
+        return 1
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
+
+
 class MCP(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
     comment = "MCP Plugin"
@@ -30,9 +59,8 @@ class MCP(idaapi.plugin_t):
     wanted_name = "MCP"
     wanted_hotkey = "Ctrl-Alt-M"
 
-    # TODO: make these configurable
-    HOST = "127.0.0.1"
-    PORT = 13337
+    DEFAULT_HOST = "127.0.0.1"
+    DEFAULT_PORT = 13337
 
     def init(self):
         hotkey = MCP.wanted_hotkey.replace("-", "+")
@@ -43,6 +71,21 @@ class MCP(idaapi.plugin_t):
             f"[MCP] Plugin loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server"
         )
         self.mcp: "ida_mcp.rpc.McpServer | None" = None
+        self.host = self.DEFAULT_HOST
+        self.port = self.DEFAULT_PORT
+
+        # Register a separate menu item for host/port configuration
+        ida_kernwin.register_action(
+            ida_kernwin.action_desc_t(
+                CONFIG_ACTION_ID,
+                CONFIG_ACTION_LABEL,
+                MCPConfigHandler(self),
+            )
+        )
+        ida_kernwin.attach_action_to_menu(
+            "Edit/Plugins/", CONFIG_ACTION_ID, idaapi.SETMENU_APP
+        )
+
         return idaapi.PLUGIN_KEEP
 
     def run(self, arg):
@@ -64,17 +107,18 @@ class MCP(idaapi.plugin_t):
 
         try:
             MCP_SERVER.serve(
-                self.HOST, self.PORT, request_handler=IdaMcpHttpRequestHandler
+                self.host, self.port, request_handler=IdaMcpHttpRequestHandler
             )
-            print(f"  Config: http://{self.HOST}:{self.PORT}/config.html")
+            print(f"  Config: http://{self.host}:{self.port}/config.html")
             self.mcp = MCP_SERVER
         except OSError as e:
             if e.errno in (48, 98, 10048):  # Address already in use
-                print(f"[MCP] Error: Port {self.PORT} is already in use")
+                print(f"[MCP] Error: Port {self.port} is already in use")
             else:
                 raise
 
     def term(self):
+        ida_kernwin.unregister_action(CONFIG_ACTION_ID)
         if self.mcp:
             self.mcp.stop()
 
