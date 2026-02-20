@@ -190,22 +190,27 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_error(400, "Missing ?session for SSE POST")
             return
 
+        sse_conn = self.mcp_server._sse_connections.get(session_id)
+        if sse_conn is None or not sse_conn.alive:
+            self.send_error(400, f"No active SSE connection found for session {session_id}")
+            return
+
         # Parse extensions from query params and store in thread-local
         extensions = self._parse_extensions(self.path)
         setattr(self.mcp_server._enabled_extensions, "data", extensions)
+        setattr(self.mcp_server._transport_session_id, "data", f"sse:{session_id}")
 
-        # Dispatch to MCP registry
-        setattr(self.mcp_server._protocol_version, "data", "2024-11-05")
-        response = self.mcp_server.registry.dispatch(body)
+        try:
+            # Dispatch to MCP registry
+            setattr(self.mcp_server._protocol_version, "data", "2024-11-05")
+            response = self.mcp_server.registry.dispatch(body)
+        finally:
+            setattr(self.mcp_server._enabled_extensions, "data", set())
+            setattr(self.mcp_server._protocol_version, "data", None)
+            setattr(self.mcp_server._transport_session_id, "data", None)
 
         # Send SSE response if necessary
         if response is not None:
-            sse_conn = self.mcp_server._sse_connections.get(session_id)
-            if sse_conn is None or not sse_conn.alive:
-                # No SSE connection found
-                self.send_error(400, f"No active SSE connection found for session {session_id}")
-                return
-
             # Send response via SSE event stream
             sse_conn.send_event("message", response)
 
@@ -218,18 +223,62 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _handle_mcp_post(self, body: bytes):
+        request_method: str | None = None
+        try:
+            parsed = json.loads(body)
+            if isinstance(parsed, dict):
+                method = parsed.get("method")
+                if isinstance(method, str):
+                    request_method = method
+        except Exception:
+            pass
+
+        mcp_session_id = self.headers.get("Mcp-Session-Id")
+        if self.mcp_server.require_streamable_http_session:
+            if request_method == "initialize":
+                if mcp_session_id is None:
+                    mcp_session_id = str(uuid.uuid4())
+                self.mcp_server.register_http_session(mcp_session_id)
+            else:
+                if mcp_session_id is None:
+                    self.send_error(
+                        400,
+                        "Missing Mcp-Session-Id header. Call initialize first and "
+                        "reuse the returned Mcp-Session-Id.",
+                    )
+                    return
+                if not self.mcp_server.has_http_session(mcp_session_id):
+                    self.send_error(
+                        400,
+                        "Invalid Mcp-Session-Id header. Call initialize first to "
+                        "create a valid MCP session.",
+                    )
+                    return
+
         # Parse extensions from query params and store in thread-local
         extensions = self._parse_extensions(self.path)
         setattr(self.mcp_server._enabled_extensions, "data", extensions)
+        setattr(
+            self.mcp_server._transport_session_id,
+            "data",
+            f"http:{mcp_session_id}" if mcp_session_id else "http:anonymous",
+        )
 
         # Dispatch to MCP registry
         setattr(self.mcp_server._protocol_version, "data", "2025-06-18")
-        response = self.mcp_server.registry.dispatch(body)
+        try:
+            response = self.mcp_server.registry.dispatch(body)
+        finally:
+            setattr(self.mcp_server._enabled_extensions, "data", set())
+            setattr(self.mcp_server._protocol_version, "data", None)
+            setattr(self.mcp_server._transport_session_id, "data", None)
 
         def send_response(status: int, body: bytes):
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            if mcp_session_id is not None:
+                self.send_header("Mcp-Session-Id", mcp_session_id)
             self.send_cors_headers()
             self.end_headers()
             self.wfile.write(body)
@@ -254,9 +303,13 @@ class McpServer:
         self._server_thread: threading.Thread | None = None
         self._running = False
         self._sse_connections: dict[str, _McpSseConnection] = {}
+        self._http_sessions: set[str] = set()
+        self._http_sessions_lock = threading.Lock()
         self._protocol_version = threading.local()
+        self._transport_session_id = threading.local()
         self._enabled_extensions = threading.local()  # set[str] per request
         self._extensions_registry = extensions if extensions is not None else {}  # group -> set of tool names
+        self.require_streamable_http_session = False
 
         # Register MCP protocol methods with correct names
         self.registry = JsonRpcRegistry()
@@ -373,12 +426,27 @@ class McpServer:
                 if not request:
                     continue
 
-                response = self.registry.dispatch(request)
+                setattr(self._transport_session_id, "data", "stdio:default")
+                try:
+                    response = self.registry.dispatch(request)
+                finally:
+                    setattr(self._transport_session_id, "data", None)
                 if response is not None:
                     stdout.write(json.dumps(response).encode("utf-8") + b"\n")
                     stdout.flush()
             except (BrokenPipeError, KeyboardInterrupt): # Client disconnected
                 break
+
+    def get_current_transport_session_id(self) -> str | None:
+        return getattr(self._transport_session_id, "data", None)
+
+    def register_http_session(self, session_id: str) -> None:
+        with self._http_sessions_lock:
+            self._http_sessions.add(session_id)
+
+    def has_http_session(self, session_id: str) -> bool:
+        with self._http_sessions_lock:
+            return session_id in self._http_sessions
 
     def cors_localhost(self, origin: str) -> bool:
         """Allow CORS requests from localhost on ANY port."""
