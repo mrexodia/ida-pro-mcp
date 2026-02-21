@@ -248,12 +248,10 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                     )
                     return
                 if not self.mcp_server.has_http_session(mcp_session_id):
-                    self.send_error(
-                        400,
-                        "Invalid Mcp-Session-Id header. Call initialize first to "
-                        "create a valid MCP session.",
+                    print(
+                        f"[MCP] Re-registering HTTP session {mcp_session_id} after reconnect"
                     )
-                    return
+                    self.mcp_server.register_http_session(mcp_session_id)
 
         # Parse extensions from query params and store in thread-local
         extensions = self._parse_extensions(self.path)
