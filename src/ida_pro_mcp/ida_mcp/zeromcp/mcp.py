@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import sys
 import time
@@ -9,12 +11,42 @@ import inspect
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer, HTTPServer
-from typing import Any, Callable, Union, Annotated, BinaryIO, NotRequired, get_origin, get_args, get_type_hints, is_typeddict
-from types import UnionType
+from typing import Any, Callable, Union, Annotated, BinaryIO, get_origin, get_args, get_type_hints
+try:
+    from types import UnionType
+except ImportError:
+    UnionType = None
 from urllib.parse import urlparse, parse_qs
 from io import BufferedIOBase
 
+try:
+    from typing import NotRequired, is_typeddict
+except ImportError:
+    try:
+        from typing_extensions import NotRequired, is_typeddict
+    except ImportError:
+        class _NotRequiredFallback:
+            pass
+        NotRequired = _NotRequiredFallback
+
+        def is_typeddict(tp):
+            return hasattr(tp, "__annotations__") and hasattr(tp, "__total__")
+
 from .jsonrpc import JsonRpcRegistry, JsonRpcError, JsonRpcException, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
+
+_UNION_ORIGINS = (Union, UnionType) if UnionType is not None else (Union,)
+
+
+def _safe_get_type_hints(obj: Any, *, include_extras: bool = False) -> dict[str, Any]:
+    """Best-effort get_type_hints that tolerates Python 3.9 PEP 604 eval failures."""
+    try:
+        return get_type_hints(obj, include_extras=include_extras)
+    except TypeError as e:
+        if "unsupported operand type(s) for |" not in str(e):
+            raise
+    except Exception:
+        pass
+    return dict(getattr(obj, "__annotations__", {}) or {})
 
 class McpToolError(Exception):
     def __init__(self, message: str):
@@ -121,26 +153,26 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
-        match urlparse(self.path).path:
-            case "/sse":
-                self._handle_sse_get()
-            case "/mcp":
-                self.send_error(405, "Method Not Allowed")
-            case _:
-                self.send_error(404, "Not Found")
+        path = urlparse(self.path).path
+        if path == "/sse":
+            self._handle_sse_get()
+        elif path == "/mcp":
+            self.send_error(405, "Method Not Allowed")
+        else:
+            self.send_error(404, "Not Found")
 
     def do_POST(self):
         body = self._read_body()
         if body is None:
             return
 
-        match urlparse(self.path).path:
-            case "/sse":
-                self._handle_sse_post(body)
-            case "/mcp":
-                self._handle_mcp_post(body)
-            case _:
-                self.send_error(404, "Not Found")
+        path = urlparse(self.path).path
+        if path == "/sse":
+            self._handle_sse_post(body)
+        elif path == "/mcp":
+            self._handle_mcp_post(body)
+        else:
+            self.send_error(404, "Not Found")
 
     def do_OPTIONS(self):
         """Handle CORS preflight requests"""
@@ -656,7 +688,7 @@ class McpServer:
 
     def _generate_prompt_schema(self, func_name: str, func: Callable) -> dict:
         """Generate MCP prompt schema from a function"""
-        hints = get_type_hints(func, include_extras=True)
+        hints = _safe_get_type_hints(func, include_extras=True)
         hints.pop("return", None)
         sig = inspect.signature(func)
 
@@ -704,7 +736,7 @@ class McpServer:
             return self._type_to_json_schema(get_args(py_type)[0])
 
         # Union[Ts..], Optional[T] and T1 | T2
-        if origin in (Union, UnionType):
+        if origin in _UNION_ORIGINS:
             return {"anyOf": [self._type_to_json_schema(t) for t in get_args(py_type)]}
 
         # list[T]
@@ -740,7 +772,7 @@ class McpServer:
 
     def _typed_dict_to_schema(self, typed_dict_class) -> dict:
         """Convert TypedDict to JSON schema"""
-        hints = get_type_hints(typed_dict_class, include_extras=True)
+        hints = _safe_get_type_hints(typed_dict_class, include_extras=True)
         required_keys = getattr(typed_dict_class, '__required_keys__', set(hints.keys()))
 
         return {
@@ -755,7 +787,7 @@ class McpServer:
 
     def _generate_tool_schema(self, func_name: str, func: Callable) -> dict:
         """Generate MCP tool schema from a function"""
-        hints = get_type_hints(func, include_extras=True)
+        hints = _safe_get_type_hints(func, include_extras=True)
         return_type = hints.pop("return", None)
         sig = inspect.signature(func)
 

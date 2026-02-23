@@ -1,5 +1,7 @@
 """Core API Functions - IDB metadata and basic queries"""
 
+from __future__ import annotations
+
 import re
 import time
 from typing import Annotated

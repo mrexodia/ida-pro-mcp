@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from itertools import islice
 import struct
 from typing import Annotated, Optional

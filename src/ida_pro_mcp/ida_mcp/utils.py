@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import fnmatch
 import json
 import os
@@ -9,14 +11,16 @@ from typing import (
     Annotated,
     Any,
     Callable,
-    Generic,
     Literal,
-    NotRequired,
     Optional,
     TypedDict,
-    TypeVar,
     overload,
 )
+
+try:
+    from typing import NotRequired
+except ImportError:
+    from typing_extensions import NotRequired
 
 import ida_funcs
 import ida_hexrays
@@ -402,11 +406,8 @@ class BasicBlock(TypedDict):
     predecessors: list[str]
 
 
-T = TypeVar("T")
-
-
-class Page(TypedDict, Generic[T]):
-    data: list[T]
+class Page(TypedDict):
+    data: list[Any]
     next_offset: Optional[int]
 
 

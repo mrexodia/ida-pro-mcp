@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import idaapi
 import idautils
 import idc

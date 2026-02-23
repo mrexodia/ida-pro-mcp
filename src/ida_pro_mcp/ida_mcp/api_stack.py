@@ -4,6 +4,8 @@ This module provides batch operations for managing stack frame variables,
 including reading, creating, and deleting stack variables in functions.
 """
 
+from __future__ import annotations
+
 from typing import Annotated
 import ida_typeinf
 import ida_frame

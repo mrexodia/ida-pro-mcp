@@ -1,20 +1,41 @@
+from __future__ import annotations
+
 import json
 import inspect
 import os
 import threading
 import time
 import traceback
-from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, is_typeddict
-from types import UnionType
+from typing import Any, Callable, get_type_hints, get_origin, get_args, Optional, Union, TypedDict
 
-JsonRpcId: TypeAlias = str | int | float | None
+try:
+    from types import UnionType
+except ImportError:
+    UnionType = None
+
+try:
+    from typing import NotRequired, is_typeddict
+except ImportError:
+    try:
+        from typing_extensions import NotRequired, is_typeddict
+    except ImportError:
+        class _NotRequiredFallback:
+            pass
+        NotRequired = _NotRequiredFallback
+
+        def is_typeddict(tp):
+            return hasattr(tp, "__annotations__") and hasattr(tp, "__total__")
+
+_UNION_ORIGINS = (Union, UnionType) if UnionType is not None else (Union,)
+
+JsonRpcId = Union[str, int, float, None]
 
 # Thread-local storage for current request context (ID + cancel event)
 _current_request = threading.local()
 
 # Global pending requests for cancellation
 _pending_requests_lock = threading.Lock()
-_pending_requests: dict[int | str, threading.Event] = {}
+_pending_requests: dict[Union[int, str], threading.Event] = {}
 
 
 def get_current_request_id() -> JsonRpcId:
@@ -22,12 +43,12 @@ def get_current_request_id() -> JsonRpcId:
     return getattr(_current_request, "id", None)
 
 
-def get_current_cancel_event() -> threading.Event | None:
+def get_current_cancel_event() -> Optional[threading.Event]:
     """Get the cancel event for the currently executing request."""
     return getattr(_current_request, "cancel_event", None)
 
 
-def register_pending_request(request_id: int | str) -> threading.Event:
+def register_pending_request(request_id: Union[int, str]) -> threading.Event:
     """Register a request as pending and return its cancel event."""
     event = threading.Event()
     with _pending_requests_lock:
@@ -36,14 +57,14 @@ def register_pending_request(request_id: int | str) -> threading.Event:
     return event
 
 
-def unregister_pending_request(request_id: int | str) -> None:
+def unregister_pending_request(request_id: Union[int, str]) -> None:
     """Unregister a pending request."""
     with _pending_requests_lock:
         _pending_requests.pop(request_id, None)
     _current_request.cancel_event = None
 
 
-def cancel_request(request_id: int | str) -> bool:
+def cancel_request(request_id: Union[int, str]) -> bool:
     """Signal cancellation for a pending request. Returns True if request was found."""
     with _pending_requests_lock:
         event = _pending_requests.get(request_id)
@@ -71,7 +92,7 @@ _LOG_SKIP_METHODS = {
     for m in os.getenv("IDA_MCP_LOG_SKIP_METHODS", "tools/call").split(",")
     if m.strip()
 }
-JsonRpcParams: TypeAlias = dict[str, Any] | list[Any] | None
+JsonRpcParams = Optional[Union[dict[str, Any], list[Any]]]
 
 class JsonRpcRequest(TypedDict):
     jsonrpc: str
@@ -107,11 +128,11 @@ class JsonRpcRegistry:
         self._cache: dict[Callable, tuple[inspect.Signature, dict, list[str]]] = {}
         self.redact_exceptions = False
 
-    def method(self, func: Callable, name: str | None = None) -> Callable:
+    def method(self, func: Callable, name: Optional[str] = None) -> Callable:
         self.methods[name or func.__name__] = func # type: ignore
         return func
 
-    def dispatch(self, request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
+    def dispatch(self, request: Union[dict, str, bytes, bytearray]) -> Optional[JsonRpcResponse]:
         try:
             if not isinstance(request, dict):
                 request = json.loads(request)
@@ -192,7 +213,7 @@ class JsonRpcRegistry:
             }
         return {
             "code": -32603,
-            "message": "\n".join(traceback.format_exception(e)).strip() + "\n\nPlease report a bug!",
+            "message": "\n".join(traceback.format_exception(type(e), e, e.__traceback__)).strip() + "\n\nPlease report a bug!",
         }
 
     def _call(self, method: str, params: Any) -> Any:
@@ -204,7 +225,13 @@ class JsonRpcRegistry:
         # Check for cached reflection data
         if func not in self._cache:
             sig = inspect.signature(func)
-            hints = get_type_hints(func)
+            try:
+                hints = get_type_hints(func)
+            except TypeError as e:
+                if "unsupported operand type(s) for |" in str(e):
+                    hints = dict(getattr(func, "__annotations__", {}) or {})
+                else:
+                    raise
             hints.pop("return", None)
 
             # Determine required vs optional parameters
@@ -266,6 +293,11 @@ class JsonRpcRegistry:
                 # Has type hint, validate
                 expected_type = hints[param_name]
 
+                # Python 3.9 fallback path when annotations are unevaluated strings
+                if isinstance(expected_type, str):
+                    validated_params[param_name] = value
+                    continue
+
                 # Inline type validation
                 origin = get_origin(expected_type)
                 args = get_args(expected_type)
@@ -274,13 +306,13 @@ class JsonRpcRegistry:
                 if value is None:
                     if expected_type is not type(None):
                         # Check if None is allowed in a Union
-                        if not (origin in (Union, UnionType) and type(None) in args):
+                        if not (origin in _UNION_ORIGINS and type(None) in args):
                             raise JsonRpcException(-32602, f"Invalid params: {param_name} cannot be null")
                     validated_params[param_name] = None
                     continue
 
                 # Handle Union types (int | str, Optional[int], etc.)
-                if origin in (Union, UnionType):
+                if origin in _UNION_ORIGINS:
                     type_matched = False
 
                     # HACK: Try to parse str as JSON for non-str unions
@@ -370,7 +402,7 @@ class JsonRpcRegistry:
         else:
             raise JsonRpcException(-32602, "Invalid params: must be array or object")
 
-    def _error(self, request_id: JsonRpcId, code: int, message: str, data: Any = None) -> JsonRpcResponse | None:
+    def _error(self, request_id: JsonRpcId, code: int, message: str, data: Any = None) -> Optional[JsonRpcResponse]:
         error: JsonRpcError = {
             "code": code,
             "message": message,

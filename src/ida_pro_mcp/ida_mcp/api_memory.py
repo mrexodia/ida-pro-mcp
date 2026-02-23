@@ -4,6 +4,8 @@ This module provides batch operations for reading and writing memory at various
 granularities (bytes, integers, strings) and patching binary data.
 """
 
+from __future__ import annotations
+
 import re
 
 from typing import Annotated
