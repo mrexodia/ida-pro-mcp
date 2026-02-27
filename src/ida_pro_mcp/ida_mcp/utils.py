@@ -545,7 +545,7 @@ def get_function(addr, *, raise_error=True):
     except AttributeError:
         name = ida_funcs.get_func_name(fn.start_ea)
 
-    return Function(addr=hex(addr), name=name, size=hex(fn.end_ea - fn.start_ea))
+    return Function(addr=hex(fn.start_ea), name=name, size=hex(fn.end_ea - fn.start_ea))
 
 
 def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
