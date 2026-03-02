@@ -6,7 +6,6 @@ Use tools for actions that modify state or perform expensive computations.
 
 from typing import Annotated
 
-import ida_funcs
 import ida_nalt
 import ida_segment
 import ida_typeinf
@@ -126,10 +125,7 @@ def cursor_resource() -> dict:
 
     result = {"addr": hex(ea)}
     if func:
-        try:
-            func_name = compat.get_func_name(func)
-        except AttributeError:
-            func_name = ida_funcs.get_func_name(func.start_ea)
+        func_name = compat.get_func_name(func)
 
         result["function"] = {
             "addr": hex(func.start_ea),
