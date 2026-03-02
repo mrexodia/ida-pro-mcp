@@ -33,6 +33,7 @@ from .utils import (
     StructFieldQuery,
     InsnPattern,
 )
+from . import compat
 
 # ============================================================================
 # Instruction Helpers
@@ -48,23 +49,10 @@ def _raw_bin_search(
 
     Returns the match address, or idaapi.BADADDR if not found.
     """
-    if hasattr(ida_bytes, "find_bytes"):
-        # IDA 9.0+: high-level API accepting bytes + mask directly
-        search_flags = flags or (
-            ida_bytes.BIN_SEARCH_FORWARD | ida_bytes.BIN_SEARCH_NOSHOW
-        )
-        return ida_bytes.find_bytes(
-            data, ea, range_end=max_ea, mask=mask, flags=search_flags
-        )
-    if hasattr(ida_bytes, "bin_search"):
-        # Older IDA: low-level 6-param API
-        search_flags = flags or (
-            ida_bytes.BIN_SEARCH_FORWARD | ida_bytes.BIN_SEARCH_NOSHOW
-        )
-        return ida_bytes.bin_search(ea, max_ea, data, mask, len(data), search_flags)
-    raise RuntimeError(
-        "No binary search API available (tried ida_bytes.find_bytes, ida_bytes.bin_search)"
+    search_flags = flags or (
+        ida_bytes.BIN_SEARCH_FORWARD | ida_bytes.BIN_SEARCH_NOSHOW
     )
+    return compat.raw_bin_search(ea, max_ea, data, mask, search_flags)
 
 
 def _decode_insn_at(ea: int) -> ida_ua.insn_t | None:
@@ -566,52 +554,12 @@ def find_bytes(
         limit = 10000
 
     # Build a reusable search closure based on available IDA API
-    _use_find_bytes = hasattr(ida_bytes, "find_bytes")
-    _use_bin_search = hasattr(ida_bytes, "bin_search")
-
     def _make_searcher(pattern: str):
         """Return a (searcher_fn, error_str|None) for the given pattern.
 
         searcher_fn(ea, max_ea) -> ea_t  (BADADDR if not found)
         """
-        tokens = pattern.strip().split()
-        if not tokens:
-            return None, "Empty pattern"
-
-        if _use_find_bytes:
-            # IDA 9.0+ high-level API: accepts pattern string directly.
-            # Normalize "??" to "?" (IDA uses single ? per wildcard byte).
-            normalized = " ".join("?" if t in ("??", "?") else t for t in tokens)
-
-            def _search(ea, max_ea):
-                return ida_bytes.find_bytes(normalized, ea, range_end=max_ea)
-
-            return _search, None
-
-        if _use_bin_search:
-            # Older IDA: manual parse into bytes + mask
-            pat = bytearray()
-            msk = bytearray()
-            for t in tokens:
-                if t in ("??", "?"):
-                    pat.append(0)
-                    msk.append(0)
-                else:
-                    pat.append(int(t, 16))
-                    msk.append(0xFF)
-            data = bytes(pat)
-            mask = bytes(msk)
-            flags = ida_bytes.BIN_SEARCH_FORWARD | ida_bytes.BIN_SEARCH_NOSHOW
-
-            def _search(ea, max_ea):
-                return ida_bytes.bin_search(ea, max_ea, data, mask, len(data), flags)
-
-            return _search, None
-
-        return (
-            None,
-            "No binary search API available (tried ida_bytes.find_bytes, ida_bytes.bin_search)",
-        )
+        return compat.make_bytes_searcher(pattern)
 
     results = []
     for pattern in patterns:

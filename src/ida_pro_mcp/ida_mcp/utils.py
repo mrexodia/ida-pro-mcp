@@ -416,15 +416,10 @@ class Page(TypedDict, Generic[T]):
 
 
 def get_image_size() -> int:
-    try:
-        info = idaapi.get_inf_structure()
-        omin_ea = info.omin_ea
-        omax_ea = info.omax_ea
-    except AttributeError:
-        import ida_ida
+    from . import compat
+    omin_ea = compat.inf_get_omin_ea()
+    omax_ea = compat.inf_get_omax_ea()
 
-        omin_ea = ida_ida.inf_get_omin_ea()
-        omax_ea = ida_ida.inf_get_omax_ea()
     image_size = omax_ea - omin_ea
     header = idautils.peutils_t().header()
     if header and header[:4] == b"PE\0\0":
@@ -534,38 +529,33 @@ def get_function(addr: int, *, raise_error: Literal[False]) -> Optional[Function
 
 
 def get_function(addr, *, raise_error=True):
+    from . import compat
+    
     fn = idaapi.get_func(addr)
     if fn is None:
         if raise_error:
             raise IDAError(f"No function found at address {hex(addr)}")
         return None
 
-    try:
-        name = fn.get_name()
-    except AttributeError:
-        name = ida_funcs.get_func_name(fn.start_ea)
+    name = compat.get_func_name(fn)
 
     return Function(addr=hex(addr), name=name, size=hex(fn.end_ea - fn.start_ea))
 
 
 def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
+    from . import compat
+    
+    prototype = compat.get_func_prototype(fn)
+    if prototype is not None:
+        return str(prototype)
+    
+    # Fallback: try idc.get_type
     try:
-        prototype: ida_typeinf.tinfo_t = fn.get_prototype()
-        if prototype is not None:
-            return str(prototype)
-        else:
-            return None
-    except AttributeError:
-        try:
-            return idc.get_type(fn.start_ea)
-        except Exception:
-            tif = ida_typeinf.tinfo_t()
-            if ida_nalt.get_tinfo(tif, fn.start_ea):
-                return str(tif)
-            return None
-    except Exception as e:
-        print(f"Error getting function prototype: {e}")
-        return None
+        return idc.get_type(fn.start_ea)
+    except Exception:
+        pass
+    
+    return None
 
 
 DEMANGLED_TO_EA = {}
