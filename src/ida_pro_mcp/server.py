@@ -93,6 +93,53 @@ if not os.path.exists(IDA_PLUGIN_LOADER):
         f"IDA plugin loader not found at {IDA_PLUGIN_LOADER} (did you move it?)"
     )
 
+# Client name aliases: lowercase alias -> exact name in configs dict
+CLIENT_ALIASES: dict[str, str] = {
+    "vscode": "VS Code",
+    "vs-code": "VS Code",
+    "vscode-insiders": "VS Code Insiders",
+    "vs-code-insiders": "VS Code Insiders",
+    "vs2022": "Visual Studio 2022",
+    "visual-studio": "Visual Studio 2022",
+    "claude-desktop": "Claude",
+    "claude-app": "Claude",
+    "claude-code": "Claude Code",
+    "roo": "Roo Code",
+    "roocode": "Roo Code",
+    "kilo": "Kilo Code",
+    "kilocode": "Kilo Code",
+    "gemini": "Gemini CLI",
+    "qwen": "Qwen Coder",
+    "copilot": "Copilot CLI",
+    "amazonq": "Amazon Q",
+    "amazon-q": "Amazon Q",
+    "lmstudio": "LM Studio",
+    "lm-studio": "LM Studio",
+    "augment": "Augment Code",
+    "qodo": "Qodo Gen",
+    "antigravity": "Antigravity IDE",
+    "boltai": "BoltAI",
+    "bolt": "BoltAI",
+}
+
+# Project-level config definitions: name -> (subdirectory, config_file)
+# Empty subdirectory means config file is in project root
+PROJECT_LEVEL_CONFIGS: dict[str, tuple[str, str]] = {
+    "Claude Code": ("", ".mcp.json"),
+    "Cursor": (".cursor", "mcp.json"),
+    "VS Code": (".vscode", "mcp.json"),
+    "VS Code Insiders": (".vscode", "mcp.json"),
+    "Windsurf": (".windsurf", "mcp.json"),
+    "Zed": (".zed", "settings.json"),
+}
+
+# Special JSON structures for project-level configs
+# VS Code project-level .vscode/mcp.json uses {"servers": {...}} at top level
+PROJECT_SPECIAL_JSON_STRUCTURES: dict[str, tuple[str | None, str]] = {
+    "VS Code": (None, "servers"),
+    "VS Code Insiders": (None, "servers"),
+}
+
 
 def get_python_executable():
     """Get the path to the Python executable"""
@@ -180,18 +227,46 @@ def print_mcp_config():
     )
 
 
-def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
-    # Map client names to their JSON key paths for clients that don't use "mcpServers"
-    # Format: client_name -> (top_level_key, nested_key)
-    # None means use default "mcpServers" at top level
-    special_json_structures = {
-        "VS Code": ("mcp", "servers"),
-        "VS Code Insiders": ("mcp", "servers"),
-        "Visual Studio 2022": (None, "servers"),  # servers at top level
-    }
+def resolve_client_name(
+    input_name: str, available_clients: list[str]
+) -> str | None:
+    """Resolve user input to an exact client name from available_clients.
 
+    Priority: exact match (case-insensitive) -> alias -> unique substring match.
+    """
+    lower_input = input_name.strip().lower()
+
+    # Exact match (case-insensitive)
+    for client in available_clients:
+        if client.lower() == lower_input:
+            return client
+
+    # Alias match
+    if lower_input in CLIENT_ALIASES:
+        alias_target = CLIENT_ALIASES[lower_input]
+        if alias_target in available_clients:
+            return alias_target
+
+    # Unique substring match
+    matches = [c for c in available_clients if lower_input in c.lower()]
+    if len(matches) == 1:
+        return matches[0]
+
+    return None
+
+
+# Global special JSON structures for user-level configs
+GLOBAL_SPECIAL_JSON_STRUCTURES: dict[str, tuple[str | None, str]] = {
+    "VS Code": ("mcp", "servers"),
+    "VS Code Insiders": ("mcp", "servers"),
+    "Visual Studio 2022": (None, "servers"),  # servers at top level
+}
+
+
+def get_global_configs() -> dict[str, tuple[str, str]]:
+    """Return platform-specific global (user-level) MCP client config paths."""
     if sys.platform == "win32":
-        configs = {
+        return {
             "Cline": (
                 os.path.join(
                     os.getenv("APPDATA", ""),
@@ -318,7 +393,7 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             ),
         }
     elif sys.platform == "darwin":
-        configs = {
+        return {
             "Cline": (
                 os.path.join(
                     os.path.expanduser("~"),
@@ -481,7 +556,7 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             ),
         }
     elif sys.platform == "linux":
-        configs = {
+        return {
             "Cline": (
                 os.path.join(
                     os.path.expanduser("~"),
@@ -612,8 +687,82 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
             ),
         }
     else:
+        return {}
+
+
+def get_project_configs(project_dir: str) -> dict[str, tuple[str, str]]:
+    """Return project-level MCP client config paths for the given directory."""
+    result = {}
+    for name, (subdir, config_file) in PROJECT_LEVEL_CONFIGS.items():
+        if subdir:
+            config_dir = os.path.join(project_dir, subdir)
+        else:
+            config_dir = project_dir
+        result[name] = (config_dir, config_file)
+    return result
+
+
+def list_available_clients():
+    """List all available installation targets."""
+    configs = get_global_configs()
+    if not configs:
         print(f"Unsupported platform: {sys.platform}")
         return
+
+    print("Available installation targets:\n")
+    print(f"  {'ida-plugin':<25} IDA Pro plugin (user-level only)")
+    print()
+    print("  MCP Clients:")
+    for name in configs:
+        supports_project = name in PROJECT_LEVEL_CONFIGS
+        project_marker = " [supports --project]" if supports_project else ""
+        config_dir, config_file = configs[name]
+        exists = os.path.exists(config_dir)
+        status = "found" if exists else "not found"
+        print(f"    {name:<25} ({status}){project_marker}")
+
+    print()
+    print("Usage examples:")
+    print("  ida-pro-mcp --install --only claude,cursor,ida-plugin")
+    print("  ida-pro-mcp --install --only vscode --project")
+    print("  ida-pro-mcp --install --project")
+
+
+def install_mcp_servers(
+    *,
+    stdio: bool = False,
+    uninstall: bool = False,
+    quiet: bool = False,
+    only: list[str] | None = None,
+    project: bool = False,
+):
+    # Select config source and special JSON structures based on project flag
+    if project:
+        configs = get_project_configs(os.getcwd())
+        special_json_structures = PROJECT_SPECIAL_JSON_STRUCTURES
+    else:
+        configs = get_global_configs()
+        special_json_structures = GLOBAL_SPECIAL_JSON_STRUCTURES
+
+    if not configs:
+        print(f"Unsupported platform: {sys.platform}")
+        return
+
+    # Filter configs by --only targets
+    if only is not None:
+        available = list(configs.keys())
+        filtered_configs: dict[str, tuple[str, str]] = {}
+        for target_name in only:
+            resolved = resolve_client_name(target_name, available)
+            if resolved is None:
+                print(
+                    f"Unknown client: '{target_name}'. Use --list-clients to see available targets."
+                )
+            elif resolved not in filtered_configs:
+                filtered_configs[resolved] = configs[resolved]
+        configs = filtered_configs
+        if not configs:
+            return
 
     installed = 0
     for name, (config_dir, config_file) in configs.items():
@@ -621,10 +770,15 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
         is_toml = config_file.endswith(".toml")
 
         if not os.path.exists(config_dir):
-            action = "uninstall" if uninstall else "installation"
-            if not quiet:
-                print(f"Skipping {name} {action}\n  Config: {config_path} (not found)")
-            continue
+            if project and not uninstall:
+                os.makedirs(config_dir, exist_ok=True)
+            else:
+                action = "uninstall" if uninstall else "installation"
+                if not quiet:
+                    print(
+                        f"Skipping {name} {action}\n  Config: {config_path} (not found)"
+                    )
+                continue
 
         # Read existing config
         if not os.path.exists(config_path):
@@ -876,7 +1030,29 @@ def main():
     parser.add_argument(
         "--config", action="store_true", help="Generate MCP config JSON"
     )
+    parser.add_argument(
+        "--only",
+        type=str,
+        default=None,
+        help="Comma-separated list of targets to install/uninstall "
+        "(e.g., 'ida-plugin,claude,cursor'). Use --list-clients to see all targets.",
+    )
+    parser.add_argument(
+        "--project",
+        action="store_true",
+        help="Install MCP config to project-level (current directory) instead of user-level",
+    )
+    parser.add_argument(
+        "--list-clients",
+        action="store_true",
+        help="List all available MCP client targets for --only",
+    )
     args = parser.parse_args()
+
+    # Handle --list-clients independently
+    if args.list_clients:
+        list_available_clients()
+        return
 
     # Parse IDA RPC server argument
     ida_rpc = urlparse(args.ida_rpc)
@@ -885,18 +1061,62 @@ def main():
     IDA_HOST = ida_rpc.hostname
     IDA_PORT = ida_rpc.port
 
+    # Validate --only and --project usage
+    if args.only and not (args.install or args.uninstall):
+        print("--only requires --install or --uninstall")
+        return
+    if args.project and not (args.install or args.uninstall):
+        print("--project requires --install or --uninstall")
+        return
+
     if args.install and args.uninstall:
         print("Cannot install and uninstall at the same time")
         return
 
+    # Parse --only targets: separate ida-plugin from client names
+    install_ida = True
+    only_clients: list[str] | None = None
+    if args.only:
+        targets = [t.strip() for t in args.only.split(",") if t.strip()]
+        install_ida = False
+        client_targets = []
+        for target in targets:
+            if target.lower() == "ida-plugin":
+                install_ida = True
+            else:
+                client_targets.append(target)
+        only_clients = client_targets if client_targets else None
+        install_clients = bool(client_targets)
+    else:
+        install_clients = True
+        # --project without --only: skip IDA plugin (project-level only installs clients)
+        if args.project:
+            install_ida = False
+
     if args.install:
-        install_ida_plugin(allow_ida_free=args.allow_ida_free)
-        install_mcp_servers(stdio=(args.transport == "stdio"))
+        if install_ida:
+            if args.project:
+                print(
+                    "[NOTE] IDA plugin is always installed at user-level (global)"
+                )
+            install_ida_plugin(allow_ida_free=args.allow_ida_free)
+        if install_clients:
+            install_mcp_servers(
+                stdio=(args.transport == "stdio"),
+                only=only_clients,
+                project=args.project,
+            )
         return
 
     if args.uninstall:
-        install_ida_plugin(uninstall=True, allow_ida_free=args.allow_ida_free)
-        install_mcp_servers(uninstall=True)
+        if install_ida:
+            install_ida_plugin(uninstall=True, allow_ida_free=args.allow_ida_free)
+        if install_clients:
+            install_mcp_servers(
+                uninstall=True,
+                only=only_clients,
+                project=args.project,
+            )
         return
 
     if args.config:
