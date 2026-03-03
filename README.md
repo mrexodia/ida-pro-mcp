@@ -146,6 +146,19 @@ uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
 
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
+## Toolsets (避免 tool 描述过多)
+
+默认启用 **compact** 工具集，只暴露 3 个聚合工具：
+
+- `main_flow(...)`: 从 main 出发查看调用走向，并可附带 main 的 CFG basic blocks
+- `list_user_funcs(...)`: 列出“更像用户代码”的函数（排除库/导入/跳板，支持分页/过滤）
+- `view_func(...)`: 查看函数反编译与带地址汇编（可分页），并返回 callers/callees
+
+如需原始完整工具集（包含修改/内存/调试/Python 执行等），启动 IDA 前设置环境变量：
+
+```sh
+IDA_MCP_TOOLSET=full
+```
 
 ## MCP Resources
 
@@ -171,6 +184,9 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 - `ida://xrefs/from/{addr}` - Cross-references from address
 
 ## Core Functions
+
+> 说明：本节列出的工具属于 **full** 工具集。默认的 **compact** 工具集只暴露 `main_flow` / `list_user_funcs` / `view_func`。
+
 
 - `lookup_funcs(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).
 - `int_convert(inputs)`: Convert numbers to different formats (decimal, hex, bytes, ASCII, binary).
