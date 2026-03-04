@@ -14,7 +14,7 @@
 
 在你 fork 的仓库根目录执行。
 
-### 方式 A：用 uv（推荐）
+### 用 uv（推荐）
 
 ```sh
 # 1) 创建并同步虚拟环境（会读取 pyproject.toml / uv.lock）
@@ -23,22 +23,9 @@ uv sync
 # 2) 以可编辑模式安装（你改源码会立刻影响这个 venv 里的包）
 uv pip install -e .
 
-# 3) 安装/更新 IDA 插件 + 写入 MCP client 配置（如 Claude/Cursor/VS Code 等）
-ida-pro-mcp --install
-```
-
-### 方式 B：用 pip
-
-```sh
-python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-# source .venv/bin/activate
-
-pip install -e .
-ida-pro-mcp --install
+# 3) 安装/更新 IDA 插件 + 写入 MCP client 配置（如 Claude/Cursor/VS
+# 注意：使用 Python 模块方式运行，因为命令行工具可能不在 PATH 中
+uv run python -m ida_pro_mcp.server --install
 ```
 
 `--install` 做了两件事：
@@ -135,9 +122,18 @@ compact 生效时，你应该只看到 3 个工具：
 
 ## 5. 你改完代码后，如何让 IDA 立刻用到新代码
 
-关键取决于 `ida-pro-mcp --install` 当时是 **软链（symlink）** 还是 **复制（copy）** 安装：
+关键取决于安装时是 **软链（symlink）** 还是 **复制（copy）** 安装：
 
 - **软链**：通常你改完仓库代码后，重启 IDA 即可；甚至可以在 IDA 里再次触发插件启动（它会先 `unload_package("ida_mcp")` 再 import，相当于热重载）。
-- **复制**：你改完代码后需要再跑一次 `ida-pro-mcp --install` 把新代码复制到 `plugins/`，再重启 IDA。
+- **复制**：你改完代码后需要再跑一次安装命令把新代码复制到 `plugins/`，再重启 IDA。
 
-Windows 下如果你希望尽量走软链模式，一般需要开启“开发者模式”或使用管理员权限运行安装命令。
+Windows 下如果你希望尽量走软链模式，一般需要开启"开发者模式"或使用管理员权限运行安装命令。
+
+### 重新安装命令
+
+如果需要重新安装插件：
+
+**使用 uv（推荐）：**
+```sh
+uv run python -m ida_pro_mcp.server --install
+```
