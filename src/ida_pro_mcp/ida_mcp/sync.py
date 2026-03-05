@@ -37,7 +37,7 @@ class CancelledError(RequestCancelledError):
 
 logger = logging.getLogger(__name__)
 _TOOL_TIMEOUT_ENV = "IDA_MCP_TOOL_TIMEOUT_SEC"
-_DEFAULT_TOOL_TIMEOUT_SEC = 15.0
+_DEFAULT_TOOL_TIMEOUT_SEC = 60.0
 
 
 def _get_tool_timeout_seconds() -> float:
