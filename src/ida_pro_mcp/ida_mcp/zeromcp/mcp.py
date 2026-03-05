@@ -333,9 +333,11 @@ class McpServer:
             request_handler,
             bind_and_activate=False
         )
+        # allow_reuse_address=True allows fast restarts (skip TCP TIME_WAIT).
+        # Do NOT set allow_reuse_port: on macOS SO_REUSEPORT lets multiple
+        # processes silently bind the same port, causing request mis-routing
+        # and SIGPIPE crashes when one instance closes.
         self._http_server.allow_reuse_address = True
-        if hasattr(self._http_server, "allow_reuse_port"):
-            self._http_server.allow_reuse_port = True
 
         # Set the MCPServer instance on the handler class
         setattr(self._http_server, "mcp_server", self)
