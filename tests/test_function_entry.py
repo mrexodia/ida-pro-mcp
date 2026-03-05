@@ -91,12 +91,12 @@ if __name__ == "__main__":
             f"error={r.get('error')}",
         )
 
-    # disasm: header must use func.start_ea when querying an interior address
+    # disasm: start_ea reflects the queried address (pagination cursor), not the function entry
     r = call("disasm", addr=CHECK_PW_INTERIOR)
     asm = r.get("asm", {})
     test(
-        "disasm: header start_ea is the function entry, not the queried interior address",
-        asm.get("start_ea") == CHECK_PW_EA,
+        "disasm: start_ea is the queried address, not the function entry",
+        asm.get("start_ea") == CHECK_PW_INTERIOR,
         f"start_ea={asm.get('start_ea')}, queried={CHECK_PW_INTERIOR}",
     )
 

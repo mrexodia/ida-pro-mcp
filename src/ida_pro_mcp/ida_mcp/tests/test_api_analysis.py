@@ -71,6 +71,32 @@ def test_decompile_batch():
     assert len(result) == len(addrs)
 
 
+@test()
+def test_decompile_by_name():
+    """decompile accepts a function name string"""
+    import ida_funcs
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    name = ida_funcs.get_func_name(int(fn_addr, 16))
+    if not name:
+        return
+
+    result = decompile(name)
+    assert result.get("error") is None
+    assert result.get("code") is not None
+
+
+@test()
+def test_decompile_unknown_name():
+    """decompile returns error for unknown function name"""
+    result = decompile("nonexistent_function_xyz")
+    assert result.get("error") is not None
+    assert "Function not found" in result["error"]
+
+
 # ============================================================================
 # Tests for disasm
 # ============================================================================
@@ -121,6 +147,56 @@ def test_disasm_data_segment():
 
     result = disasm(data_addr)
     assert_is_list(result, min_length=1)
+
+
+@test()
+def test_disasm_by_name():
+    """disasm accepts a function name string"""
+    import ida_funcs
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    name = ida_funcs.get_func_name(int(fn_addr, 16))
+    if not name:
+        return
+
+    result = disasm(name)
+    assert result.get("error") is None
+    assert result.get("asm") is not None
+
+
+@test()
+def test_disasm_unknown_name():
+    """disasm returns error for unknown function name"""
+    result = disasm("nonexistent_function_xyz")
+    assert result.get("error") is not None
+    assert "Function not found" in result["error"]
+
+
+@test()
+def test_disasm_interior_address_preserves_cursor():
+    """disasm start_ea reflects the queried address for pagination, not func entry"""
+    import idc
+    import idaapi
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    ea = int(fn_addr, 16)
+    func = idaapi.get_func(ea)
+    if not func:
+        return
+
+    interior = idc.next_head(func.start_ea, func.end_ea)
+    if interior == idaapi.BADADDR or interior == func.start_ea:
+        return
+
+    result = disasm(hex(interior))
+    assert result.get("asm") is not None
+    assert result["asm"]["start_ea"] == hex(interior)
 
 
 # ============================================================================

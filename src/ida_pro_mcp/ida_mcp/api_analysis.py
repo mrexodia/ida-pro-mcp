@@ -246,7 +246,7 @@ def disasm(
         if func:
             # Function exists: disassemble function items starting from requested address
             func_name: str = ida_funcs.get_func_name(func.start_ea) or "<unnamed>"
-            header_addr = func.start_ea  # Use function entry point, not the queried address
+            header_addr = start  # Use requested address, not function start
         else:
             # No function: disassemble sequentially from start address
             func_name = "<no function>"
