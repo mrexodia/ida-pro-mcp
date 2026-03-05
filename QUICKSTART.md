@@ -104,19 +104,10 @@ npx -y @modelcontextprotocol/inspector
 
 ### 4.3 观察 tools/list
 
-compact 生效时，你应该只看到 3 个工具：
+compact 生效时，你应该只看到 2 个工具：
 
-- `main_flow`
 - `list_user_funcs`
 - `view_func`
-
-### 4.4 实际调用验证
-
-在 inspector 里依次 call：
-
-- `main_flow`：参数全默认即可
-- `list_user_funcs`：例如 `{"count": 50}`
-- `view_func`：例如 `{"query": "main"}`（或传任意函数地址 `0x...`）
 
 能正常返回 structured result 就说明 compact 工具集可用。
 
