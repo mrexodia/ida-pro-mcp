@@ -4,6 +4,7 @@ import json
 import shutil
 import argparse
 import http.client
+import time
 import tempfile
 import traceback
 import tomllib
@@ -24,6 +25,12 @@ else:
 
 IDA_HOST = "127.0.0.1"
 IDA_PORT = 13337
+RPC_RETRIES = max(1, int(os.environ.get("IDA_MCP_RPC_RETRIES", "4")))
+RPC_BACKOFF_SEC = max(0.0, float(os.environ.get("IDA_MCP_RPC_BACKOFF_SEC", "0.25")))
+RPC_BACKOFF_MULTIPLIER = max(
+    1.0, float(os.environ.get("IDA_MCP_RPC_BACKOFF_MULTIPLIER", "1.75"))
+)
+RPC_RETRY_STATUS = {502, 503, 504}
 
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
@@ -41,16 +48,45 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     elif request_obj["method"].startswith("notifications/"):
         return dispatch_original(request)
 
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+    payload: bytes | str | dict = request
+    if isinstance(payload, dict):
+        payload = json.dumps(payload)
+    elif isinstance(payload, str):
+        payload = payload.encode("utf-8")
+
+    retry_delay = RPC_BACKOFF_SEC
+    last_error: Exception | None = None
     try:
-        if isinstance(request, dict):
-            request = json.dumps(request)
-        elif isinstance(request, str):
-            request = request.encode("utf-8")
-        conn.request("POST", "/mcp", request, {"Content-Type": "application/json"})
-        response = conn.getresponse()
-        data = response.read().decode()
-        return json.loads(data)
+        for attempt in range(1, RPC_RETRIES + 1):
+            conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+            try:
+                conn.request(
+                    "POST",
+                    "/mcp",
+                    payload,
+                    {"Content-Type": "application/json"},
+                )
+                response = conn.getresponse()
+                raw_data = response.read().decode()
+
+                # Retry transient server-side startup/readiness failures.
+                if response.status in RPC_RETRY_STATUS and attempt < RPC_RETRIES:
+                    last_error = RuntimeError(
+                        f"Transient HTTP {response.status}: {response.reason}"
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= RPC_BACKOFF_MULTIPLIER
+                    continue
+
+                return json.loads(raw_data)
+            except Exception as e:
+                last_error = e
+                if attempt >= RPC_RETRIES:
+                    raise
+                time.sleep(retry_delay)
+                retry_delay *= RPC_BACKOFF_MULTIPLIER
+            finally:
+                conn.close()
     except Exception as e:
         full_info = traceback.format_exc()
         id = request_obj.get("id")
@@ -66,14 +102,16 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
                 "jsonrpc": "2.0",
                 "error": {
                     "code": -32000,
-                    "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?\n{full_info}",
-                    "data": str(e),
+                    "message": (
+                        "Failed to connect to IDA Pro! "
+                        f"Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?\n"
+                        f"(attempted {RPC_RETRIES}x with backoff)\n{full_info}"
+                    ),
+                    "data": str(last_error or e),
                 },
                 "id": id,
             }
         )
-    finally:
-        conn.close()
 
 
 mcp.registry.dispatch = dispatch_proxy
