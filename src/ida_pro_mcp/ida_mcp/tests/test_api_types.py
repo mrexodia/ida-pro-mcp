@@ -16,7 +16,10 @@ from ..api_types import (
     declare_type,
     read_struct,
     search_structs,
+    type_query,
+    type_inspect,
     set_type,
+    type_apply_batch,
     infer_types,
 )
 
@@ -200,6 +203,42 @@ def test_search_structs_pattern():
     assert len(result_all) >= len(result)
 
 
+@test()
+def test_type_query():
+    """type_query supports filtered type listing"""
+    result = type_query(
+        {
+            "filter": "*",
+            "kind": "any",
+            "offset": 0,
+            "count": 10,
+            "include_decl": False,
+        }
+    )
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "kind", "data", "next_offset", "total", "error")
+    if page["data"]:
+        assert_has_keys(page["data"][0], "ordinal", "name", "size", "kind")
+
+
+@test()
+def test_type_inspect():
+    """type_inspect returns metadata for declared struct"""
+    tname = "__TypeInspectTest__"
+    if not create_test_struct(tname):
+        return
+
+    result = type_inspect({"name": tname, "include_members": True})
+    assert_is_list(result, min_length=1)
+    r = result[0]
+    assert_has_keys(r, "name", "exists", "error")
+    assert r["name"] == tname
+    assert r["exists"] is True
+    assert r["error"] is None
+    assert r.get("member_count", 0) >= 0
+
+
 # ============================================================================
 # Tests for set_type
 # ============================================================================
@@ -229,6 +268,18 @@ def test_set_type_invalid_address():
     # Should have "edit" key and either "ok" or "error"
     assert_has_keys(r, "edit")
     assert r.get("ok") is not None or r.get("error") is not None
+
+
+@test()
+def test_type_apply_batch():
+    """type_apply_batch applies edits and returns summary counters"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    result = type_apply_batch({"edits": [{"addr": fn_addr, "ty": "int"}]})
+    assert_has_keys(result, "ok", "applied", "failed", "stopped", "results")
+    assert_is_list(result["results"], min_length=1)
 
 
 # ============================================================================
