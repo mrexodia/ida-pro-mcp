@@ -193,8 +193,13 @@ def copy_python_env(env: dict[str, str]):
     return result
 
 
-def generate_mcp_config(*, stdio: bool):
-    if stdio:
+def generate_mcp_config(*, transport: str = "stdio"):
+    """Generate MCP client config for the given transport mode.
+
+    Args:
+        transport: "stdio", "streamable-http", or "sse"
+    """
+    if transport == "stdio":
         mcp_config = {
             "command": get_python_executable(),
             "args": [
@@ -208,21 +213,30 @@ def generate_mcp_config(*, stdio: bool):
             print("[WARNING] Custom Python environment variables detected")
             mcp_config["env"] = env
         return mcp_config
+    elif transport == "sse":
+        return {"type": "sse", "url": f"http://{IDA_HOST}:{IDA_PORT}/sse"}
     else:
+        # streamable-http
         return {"type": "http", "url": f"http://{IDA_HOST}:{IDA_PORT}/mcp"}
 
 
 def print_mcp_config():
-    print("[HTTP MCP CONFIGURATION]")
+    print("[STDIO MCP CONFIGURATION]")
     print(
         json.dumps(
-            {"mcpServers": {mcp.name: generate_mcp_config(stdio=False)}}, indent=2
+            {"mcpServers": {mcp.name: generate_mcp_config(transport="stdio")}}, indent=2
         )
     )
-    print("\n[STDIO MCP CONFIGURATION]")
+    print("\n[STREAMABLE HTTP MCP CONFIGURATION]")
     print(
         json.dumps(
-            {"mcpServers": {mcp.name: generate_mcp_config(stdio=True)}}, indent=2
+            {"mcpServers": {mcp.name: generate_mcp_config(transport="streamable-http")}}, indent=2
+        )
+    )
+    print("\n[SSE MCP CONFIGURATION]")
+    print(
+        json.dumps(
+            {"mcpServers": {mcp.name: generate_mcp_config(transport="sse")}}, indent=2
         )
     )
 
@@ -702,6 +716,244 @@ def get_project_configs(project_dir: str) -> dict[str, tuple[str, str]]:
     return result
 
 
+def is_client_installed(name: str, config_dir: str, config_file: str, *, project: bool = False) -> bool:
+    """Check if the MCP server is already installed for a given client."""
+    config_path = os.path.join(config_dir, config_file)
+    if not os.path.exists(config_path):
+        return False
+
+    is_toml = config_file.endswith(".toml")
+    try:
+        if is_toml:
+            with open(config_path, "rb") as f:
+                data = f.read()
+                config = tomllib.loads(data.decode("utf-8")) if data else {}
+        else:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = f.read().strip()
+                config = json.loads(data) if data else {}
+    except (json.JSONDecodeError, tomllib.TOMLDecodeError, OSError):
+        return False
+
+    special = (PROJECT_SPECIAL_JSON_STRUCTURES if project else GLOBAL_SPECIAL_JSON_STRUCTURES)
+    if is_toml:
+        mcp_servers = config.get("mcp_servers", {})
+    elif name in special:
+        top_key, nested_key = special[name]
+        if top_key is None:
+            mcp_servers = config.get(nested_key, {})
+        else:
+            mcp_servers = config.get(top_key, {}).get(nested_key, {})
+    else:
+        mcp_servers = config.get("mcpServers", {})
+
+    return mcp.name in mcp_servers
+
+
+def is_ida_plugin_installed() -> bool:
+    """Check if the IDA plugin is currently installed."""
+    if sys.platform == "win32":
+        ida_folder = os.path.join(os.environ["APPDATA"], "Hex-Rays", "IDA Pro")
+    else:
+        ida_folder = os.path.join(os.path.expanduser("~"), ".idapro")
+    loader = os.path.join(ida_folder, "plugins", "ida_mcp.py")
+    return os.path.lexists(loader)
+
+
+def _make_read_key():
+    """Create a platform-specific key reader function, or None if not a TTY."""
+    if not sys.stdin.isatty():
+        return None
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            def read_key():
+                ch = msvcrt.getwch()
+                if ch in ("\x00", "\xe0"):
+                    ch2 = msvcrt.getwch()
+                    if ch2 == "H":
+                        return "up"
+                    elif ch2 == "P":
+                        return "down"
+                    return None
+                elif ch == " ":
+                    return "space"
+                elif ch == "\r":
+                    return "enter"
+                elif ch == "\x1b":
+                    return "esc"
+                elif ch == "a":
+                    return "a"
+                return None
+        else:
+            import tty
+            import termios
+
+            def read_key():
+                fd = sys.stdin.fileno()
+                old = termios.tcgetattr(fd)
+                try:
+                    tty.setraw(fd)
+                    ch = sys.stdin.read(1)
+                    if ch == "\x1b":
+                        ch2 = sys.stdin.read(1)
+                        if ch2 == "[":
+                            ch3 = sys.stdin.read(1)
+                            if ch3 == "A":
+                                return "up"
+                            elif ch3 == "B":
+                                return "down"
+                        return "esc"
+                    elif ch == " ":
+                        return "space"
+                    elif ch in ("\r", "\n"):
+                        return "enter"
+                    elif ch == "a":
+                        return "a"
+                    elif ch == "\x03":
+                        return "esc"
+                    return None
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        return read_key
+    except ImportError:
+        return None
+
+
+def _tui_loop(read_key, render, on_key) -> bool:
+    """Generic TUI render loop. Returns True if completed, False if cancelled."""
+    sys.stdout.write("\033[?25l")  # Hide cursor
+    output = render()
+    sys.stdout.write(output + "\n")
+    sys.stdout.flush()
+    # Number of lines to move up = number of visual lines
+    total_lines = output.count("\n") + 1
+
+    def clear():
+        sys.stdout.write(f"\033[{total_lines}A\033[J")
+        sys.stdout.flush()
+
+    try:
+        while True:
+            key = read_key()
+            result = on_key(key)
+            if result == "confirm":
+                clear()
+                return True
+            elif result == "cancel":
+                clear()
+                return False
+            elif result == "noop":
+                continue
+
+            # Redraw
+            clear()
+            output = render()
+            sys.stdout.write(output + "\n")
+            sys.stdout.flush()
+            total_lines = output.count("\n") + 1
+    finally:
+        sys.stdout.write("\033[?25h")  # Restore cursor
+        sys.stdout.flush()
+
+
+def interactive_choose(items: list[str], title: str, default: int = 0) -> str | None:
+    """Show an interactive single-choice selector.
+
+    Returns the selected item name, or None if cancelled.
+    """
+    read_key = _make_read_key()
+    if read_key is None:
+        return None
+
+    cursor = default
+
+    def render():
+        lines = [f"\033[1m{title}\033[0m"]
+        lines.append("  (up/down: move, enter: confirm, esc: cancel)")
+        lines.append("")
+        for i, name in enumerate(items):
+            pointer = "\033[36m>\033[0m" if i == cursor else " "
+            lines.append(f"  {pointer} {name}")
+        return "\n".join(lines)
+
+    def on_key(key):
+        nonlocal cursor
+        if key == "up":
+            cursor = (cursor - 1) % len(items)
+        elif key == "down":
+            cursor = (cursor + 1) % len(items)
+        elif key in ("enter", "space"):
+            return "confirm"
+        elif key == "esc":
+            return "cancel"
+        else:
+            return "noop"
+        return "redraw"
+
+    if _tui_loop(read_key, render, on_key):
+        result = items[cursor]
+        print(f"\033[1m{title}\033[0m {result}")
+        return result
+    return None
+
+
+def interactive_select(items: list[tuple[str, bool]], title: str) -> list[str] | None:
+    """Show an interactive checkbox selector.
+
+    Args:
+        items: List of (name, pre_checked) tuples.
+
+    Returns:
+        List of selected item names, or None if cancelled.
+    """
+    read_key = _make_read_key()
+    if read_key is None:
+        return None
+
+    selected = [checked for _, checked in items]
+    cursor = 0
+
+    def render():
+        lines = [f"\033[1m{title}\033[0m"]
+        lines.append("  (space: toggle, a: toggle all, enter: confirm, esc: cancel)")
+        lines.append("")
+        for i, (name, _) in enumerate(items):
+            check = "\033[32m[x]\033[0m" if selected[i] else "[ ]"
+            pointer = "\033[36m>\033[0m" if i == cursor else " "
+            lines.append(f"  {pointer} {check} {name}")
+        return "\n".join(lines)
+
+    def on_key(key):
+        nonlocal cursor, selected
+        if key == "up":
+            cursor = (cursor - 1) % len(items)
+        elif key == "down":
+            cursor = (cursor + 1) % len(items)
+        elif key == "space":
+            selected[cursor] = not selected[cursor]
+        elif key == "a":
+            all_selected = all(selected)
+            selected = [not all_selected] * len(items)
+        elif key == "enter":
+            return "confirm"
+        elif key == "esc":
+            return "cancel"
+        else:
+            return "noop"
+        return "redraw"
+
+    if _tui_loop(read_key, render, on_key):
+        result = [name for (name, _), sel in zip(items, selected) if sel]
+        if result:
+            print(f"\033[1m{title}\033[0m {', '.join(result)}")
+        else:
+            print(f"\033[1m{title}\033[0m (none)")
+        return result
+    return None
+
+
 def list_available_clients():
     """List all available installation targets."""
     configs = get_global_configs()
@@ -723,14 +975,16 @@ def list_available_clients():
 
     print()
     print("Usage examples:")
-    print("  ida-pro-mcp --install --only claude,cursor,ida-plugin")
-    print("  ida-pro-mcp --install --only vscode --project")
-    print("  ida-pro-mcp --install --project")
+    print("  ida-pro-mcp --install                                    # Interactive selector")
+    print("  ida-pro-mcp --install claude,cursor,ida-plugin            # Specific targets")
+    print("  ida-pro-mcp --install vscode --scope project              # Project-level config")
+    print("  ida-pro-mcp --install cursor --scope both --transport sse   # Both scopes, SSE")
+    print("  ida-pro-mcp --uninstall cursor                            # Uninstall specific target")
 
 
 def install_mcp_servers(
     *,
-    stdio: bool = False,
+    transport: str = "stdio",
     uninstall: bool = False,
     quiet: bool = False,
     only: list[str] | None = None,
@@ -858,7 +1112,7 @@ def install_mcp_servers(
                 continue
             del mcp_servers[mcp.name]
         else:
-            mcp_servers[mcp.name] = generate_mcp_config(stdio=stdio)
+            mcp_servers[mcp.name] = generate_mcp_config(transport=transport)
 
         # Atomic write: temp file + rename
         suffix = ".toml" if is_toml else ".json"
@@ -999,16 +1253,135 @@ def install_ida_plugin(
                 print("Skipping IDA plugin installation (already up to date)")
 
 
+def _resolve_transport(value: str) -> str:
+    """Normalize a --transport value to 'stdio', 'streamable-http', or 'sse'."""
+    v = value.strip().lower()
+    if v == "stdio":
+        return "stdio"
+    elif v in ("sse",):
+        return "sse"
+    elif v in ("http", "streamable-http", "streamable"):
+        return "streamable-http"
+    # URL passed (e.g., http://...) — treat as streamable-http for install config
+    return "streamable-http"
+
+
+def _interactive_install(*, uninstall: bool, args):
+    """Full interactive install/uninstall flow with transport and scope selection."""
+    action = "uninstall" if uninstall else "install"
+
+    # Step 1: Transport selection (skip for uninstall, or if --transport was explicitly set)
+    if not uninstall and args.transport is None:
+        choice = interactive_choose(
+            ["stdio (recommended)", "Streamable HTTP", "SSE"],
+            "Select transport mode:",
+        )
+        if choice is None:
+            print("Cancelled.")
+            return
+        if choice.startswith("stdio"):
+            transport = "stdio"
+        elif choice.startswith("Streamable"):
+            transport = "streamable-http"
+        else:
+            transport = "sse"
+    elif not uninstall:
+        transport = _resolve_transport(args.transport or "stdio")
+    else:
+        transport = "stdio"  # doesn't matter for uninstall
+
+    # Step 2: Scope selection (skip if --scope was explicitly set)
+    if args.scope:
+        scope_value = args.scope
+    else:
+        scope = interactive_choose(
+            ["Global (user-level)", "Project (current directory)", "Both"],
+            "Select installation scope:",
+        )
+        if scope is None:
+            print("Cancelled.")
+            return
+        if scope.startswith("Global"):
+            scope_value = "global"
+        elif scope.startswith("Project"):
+            scope_value = "project"
+        else:
+            scope_value = "both"
+
+    do_global = scope_value in ("global", "both")
+    do_project = scope_value in ("project", "both")
+
+    # Step 3: Target selection per scope
+    if do_global:
+        global_configs = get_global_configs()
+        if global_configs:
+            items: list[tuple[str, bool]] = []
+            items.append(("IDA Plugin", is_ida_plugin_installed()))
+            for name, (config_dir, config_file) in global_configs.items():
+                installed = is_client_installed(name, config_dir, config_file)
+                items.append((name, installed))
+
+            selected = interactive_select(items, f"Select global targets to {action}:")
+            if selected is None:
+                print("Cancelled.")
+                return
+
+            if "IDA Plugin" in selected:
+                install_ida_plugin(uninstall=uninstall, allow_ida_free=args.allow_ida_free)
+            client_names = [s for s in selected if s != "IDA Plugin"]
+            if client_names:
+                install_mcp_servers(
+                    transport=transport,
+                    uninstall=uninstall,
+                    only=client_names,
+                )
+        else:
+            print(f"Unsupported platform: {sys.platform}")
+
+    if do_project:
+        project_configs = get_project_configs(os.getcwd())
+        if project_configs:
+            items = []
+            for name, (config_dir, config_file) in project_configs.items():
+                installed = is_client_installed(name, config_dir, config_file, project=True)
+                items.append((name, installed))
+
+            selected = interactive_select(items, f"Select project targets to {action}:")
+            if selected is None:
+                print("Cancelled.")
+                return
+
+            if selected:
+                install_mcp_servers(
+                    transport=transport,
+                    uninstall=uninstall,
+                    only=selected,
+                    project=True,
+                )
+
+
 def main():
     global IDA_HOST, IDA_PORT
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
     parser.add_argument(
-        "--install", action="store_true", help="Install the MCP Server and IDA plugin"
+        "--install",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="TARGETS",
+        help="Install the MCP Server and IDA plugin. "
+        "Optionally specify comma-separated targets (e.g., 'ida-plugin,claude,cursor'). "
+        "Without targets, an interactive selector is shown.",
     )
     parser.add_argument(
         "--uninstall",
-        action="store_true",
-        help="Uninstall the MCP Server and IDA plugin",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="TARGETS",
+        help="Uninstall the MCP Server and IDA plugin. "
+        "Optionally specify comma-separated targets. "
+        "Without targets, an interactive selector is shown.",
     )
     parser.add_argument(
         "--allow-ida-free",
@@ -1018,8 +1391,16 @@ def main():
     parser.add_argument(
         "--transport",
         type=str,
-        default="stdio",
-        help="MCP transport protocol to use (stdio or http://127.0.0.1:8744)",
+        default=None,
+        help="MCP transport for install: 'stdio' (default), 'streamable-http', or 'sse'. "
+        "For running: a URL (e.g., http://127.0.0.1:8744) starts an HTTP server",
+    )
+    parser.add_argument(
+        "--scope",
+        type=str,
+        choices=["global", "project", "both"],
+        default=None,
+        help="Installation scope: 'global' (user-level), 'project' (current directory), or 'both'",
     )
     parser.add_argument(
         "--ida-rpc",
@@ -1031,21 +1412,9 @@ def main():
         "--config", action="store_true", help="Generate MCP config JSON"
     )
     parser.add_argument(
-        "--only",
-        type=str,
-        default=None,
-        help="Comma-separated list of targets to install/uninstall "
-        "(e.g., 'ida-plugin,claude,cursor'). Use --list-clients to see all targets.",
-    )
-    parser.add_argument(
-        "--project",
-        action="store_true",
-        help="Install MCP config to project-level (current directory) instead of user-level",
-    )
-    parser.add_argument(
         "--list-clients",
         action="store_true",
-        help="List all available MCP client targets for --only",
+        help="List all available MCP client targets",
     )
     args = parser.parse_args()
 
@@ -1061,62 +1430,58 @@ def main():
     IDA_HOST = ida_rpc.hostname
     IDA_PORT = ida_rpc.port
 
-    # Validate --only and --project usage
-    if args.only and not (args.install or args.uninstall):
-        print("--only requires --install or --uninstall")
-        return
-    if args.project and not (args.install or args.uninstall):
-        print("--project requires --install or --uninstall")
+    is_install = args.install is not None
+    is_uninstall = args.uninstall is not None
+
+    # Validate flag combinations
+    if args.scope and not (is_install or is_uninstall):
+        print("--scope requires --install or --uninstall")
         return
 
-    if args.install and args.uninstall:
+    if is_install and is_uninstall:
         print("Cannot install and uninstall at the same time")
         return
 
-    # Parse --only targets: separate ida-plugin from client names
-    install_ida = True
-    only_clients: list[str] | None = None
-    if args.only:
-        targets = [t.strip() for t in args.only.split(",") if t.strip()]
-        install_ida = False
-        client_targets = []
-        for target in targets:
-            if target.lower() == "ida-plugin":
-                install_ida = True
-            else:
-                client_targets.append(target)
-        only_clients = client_targets if client_targets else None
-        install_clients = bool(client_targets)
-    else:
-        install_clients = True
-        # --project without --only: skip IDA plugin (project-level only installs clients)
-        if args.project:
+    if is_install or is_uninstall:
+        targets_str = args.install if is_install else args.uninstall
+        uninstall = is_uninstall
+
+        if targets_str:
+            # Explicit targets: --install claude,cursor,ida-plugin
+            # Use CLI flags for transport/scope (no interactive prompts)
+            transport = _resolve_transport(args.transport or "stdio")
+            scope = args.scope or "global"
+
+            targets = [t.strip() for t in targets_str.split(",") if t.strip()]
             install_ida = False
+            client_targets = []
+            for target in targets:
+                if target.lower() == "ida-plugin":
+                    install_ida = True
+                else:
+                    client_targets.append(target)
 
-    if args.install:
-        if install_ida:
-            if args.project:
-                print(
-                    "[NOTE] IDA plugin is always installed at user-level (global)"
-                )
-            install_ida_plugin(allow_ida_free=args.allow_ida_free)
-        if install_clients:
-            install_mcp_servers(
-                stdio=(args.transport == "stdio"),
-                only=only_clients,
-                project=args.project,
-            )
-        return
-
-    if args.uninstall:
-        if install_ida:
-            install_ida_plugin(uninstall=True, allow_ida_free=args.allow_ida_free)
-        if install_clients:
-            install_mcp_servers(
-                uninstall=True,
-                only=only_clients,
-                project=args.project,
-            )
+            if install_ida:
+                install_ida_plugin(uninstall=uninstall, allow_ida_free=args.allow_ida_free)
+            if client_targets:
+                do_global = scope in ("global", "both")
+                do_project = scope in ("project", "both")
+                if do_global:
+                    install_mcp_servers(
+                        transport=transport,
+                        uninstall=uninstall,
+                        only=client_targets,
+                    )
+                if do_project:
+                    install_mcp_servers(
+                        transport=transport,
+                        uninstall=uninstall,
+                        only=client_targets,
+                        project=True,
+                    )
+        else:
+            # No targets: full interactive flow
+            _interactive_install(uninstall=uninstall, args=args)
         return
 
     if args.config:
@@ -1124,10 +1489,11 @@ def main():
         return
 
     try:
-        if args.transport == "stdio":
+        transport = args.transport or "stdio"
+        if transport == "stdio":
             mcp.stdio()
         else:
-            url = urlparse(args.transport)
+            url = urlparse(transport)
             if url.hostname is None or url.port is None:
                 raise Exception(f"Invalid transport URL: {args.transport}")
             # NOTE: npx -y @modelcontextprotocol/inspector for debugging
