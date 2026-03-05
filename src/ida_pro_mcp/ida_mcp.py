@@ -62,17 +62,22 @@ class MCP(idaapi.plugin_t):
         except Exception as e:
             print(f"[MCP] Cache init failed: {e}")
 
-        try:
-            MCP_SERVER.serve(
-                self.HOST, self.PORT, request_handler=IdaMcpHttpRequestHandler
-            )
-            print(f"  Config: http://{self.HOST}:{self.PORT}/config.html")
-            self.mcp = MCP_SERVER
-        except OSError as e:
-            if e.errno in (48, 98, 10048):  # Address already in use
-                print(f"[MCP] Error: Port {self.PORT} is already in use")
-            else:
-                raise
+        port = self.PORT
+        max_port = port + 100
+        while port < max_port:
+            try:
+                MCP_SERVER.serve(
+                    self.HOST, port, request_handler=IdaMcpHttpRequestHandler
+                )
+                print(f"  Config: http://{self.HOST}:{port}/config.html")
+                self.mcp = MCP_SERVER
+                return
+            except OSError as e:
+                if e.errno in (48, 98, 10048):  # Address already in use
+                    port += 1
+                else:
+                    raise
+        print(f"[MCP] Error: No available port in range {self.PORT}-{max_port - 1}")
 
     def term(self):
         if self.mcp:
