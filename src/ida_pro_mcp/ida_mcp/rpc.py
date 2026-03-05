@@ -26,6 +26,10 @@ def get_download_base_url() -> str:
     return _download_base_url
 
 
+def get_current_transport_session_id() -> str | None:
+    return MCP_SERVER.get_current_transport_session_id()
+
+
 def _generate_output_id() -> str:
     import uuid
 
@@ -184,4 +188,5 @@ __all__ = [
     "get_cached_output",
     "set_download_base_url",
     "get_download_base_url",
+    "get_current_transport_session_id",
 ]

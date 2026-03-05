@@ -9,7 +9,7 @@ import traceback
 import tomllib
 import tomli_w
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 import glob
 
 if TYPE_CHECKING:
@@ -146,8 +146,30 @@ def copy_python_env(env: dict[str, str]):
     return result
 
 
-def generate_mcp_config(*, stdio: bool):
-    if stdio:
+def normalize_transport_url(transport: str) -> str:
+    url = urlparse(transport)
+    if url.hostname is None or url.port is None:
+        raise Exception(f"Invalid transport URL: {transport}")
+    path = url.path
+    if path in ("", "/"):
+        path = "/mcp"
+    return urlunparse((url.scheme, f"{url.hostname}:{url.port}", path, "", "", ""))
+
+
+def force_mcp_path(transport_url: str) -> str:
+    url = urlparse(transport_url)
+    return urlunparse((url.scheme, f"{url.hostname}:{url.port}", "/mcp", "", "", ""))
+
+
+def infer_http_transport_type(transport_url: str) -> str:
+    path = urlparse(transport_url).path.rstrip("/")
+    if path == "/sse":
+        return "sse"
+    return "http"
+
+
+def generate_mcp_config(*, client_name: str, transport: str):
+    if transport == "stdio":
         mcp_config = {
             "command": get_python_executable(),
             "args": [
@@ -161,26 +183,53 @@ def generate_mcp_config(*, stdio: bool):
             print("[WARNING] Custom Python environment variables detected")
             mcp_config["env"] = env
         return mcp_config
-    else:
-        return {"type": "http", "url": f"http://{IDA_HOST}:{IDA_PORT}/mcp"}
+
+    transport_url = normalize_transport_url(transport)
+
+    # Codex uses streamable HTTP URL-only config.
+    if client_name == "Codex":
+        return {"url": force_mcp_path(transport_url)}
+
+    # Claude/Claude Code support explicit transport type in JSON config.
+    if client_name in ("Claude", "Claude Code"):
+        return {"type": infer_http_transport_type(transport_url), "url": transport_url}
+
+    # Keep all other clients on streamable HTTP /mcp for compatibility.
+    return {"type": "http", "url": force_mcp_path(transport_url)}
 
 
 def print_mcp_config():
     print("[HTTP MCP CONFIGURATION]")
     print(
         json.dumps(
-            {"mcpServers": {mcp.name: generate_mcp_config(stdio=False)}}, indent=2
+            {
+                "mcpServers": {
+                    mcp.name: generate_mcp_config(
+                        client_name="Generic",
+                        transport=f"http://{IDA_HOST}:{IDA_PORT}/mcp",
+                    )
+                }
+            },
+            indent=2,
         )
     )
     print("\n[STDIO MCP CONFIGURATION]")
     print(
         json.dumps(
-            {"mcpServers": {mcp.name: generate_mcp_config(stdio=True)}}, indent=2
+            {
+                "mcpServers": {
+                    mcp.name: generate_mcp_config(
+                        client_name="Generic",
+                        transport="stdio",
+                    )
+                }
+            },
+            indent=2,
         )
     )
 
 
-def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
+def install_mcp_servers(*, transport: str = "stdio", uninstall=False, quiet=False):
     # Map client names to their JSON key paths for clients that don't use "mcpServers"
     # Format: client_name -> (top_level_key, nested_key)
     # None means use default "mcpServers" at top level
@@ -704,7 +753,10 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 continue
             del mcp_servers[mcp.name]
         else:
-            mcp_servers[mcp.name] = generate_mcp_config(stdio=stdio)
+            mcp_servers[mcp.name] = generate_mcp_config(
+                client_name=name,
+                transport=transport,
+            )
 
         # Atomic write: temp file + rename
         suffix = ".toml" if is_toml else ".json"
@@ -865,7 +917,10 @@ def main():
         "--transport",
         type=str,
         default="stdio",
-        help="MCP transport protocol to use (stdio or http://127.0.0.1:8744)",
+        help=(
+            "MCP transport protocol to use "
+            "(stdio or http://127.0.0.1:8744[/mcp|/sse])"
+        ),
     )
     parser.add_argument(
         "--ida-rpc",
@@ -891,7 +946,7 @@ def main():
 
     if args.install:
         install_ida_plugin(allow_ida_free=args.allow_ida_free)
-        install_mcp_servers(stdio=(args.transport == "stdio"))
+        install_mcp_servers(transport=args.transport)
         return
 
     if args.uninstall:

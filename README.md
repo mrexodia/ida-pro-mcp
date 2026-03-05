@@ -146,6 +146,41 @@ uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
 
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
+## Headless idalib Session Model
+
+Use `--isolated-contexts` to enable strict per-transport isolation:
+
+```sh
+uv run idalib-mcp --isolated-contexts --host 127.0.0.1 --port 8745 path/to/executable
+```
+
+### Why use `--isolated-contexts`?
+
+Use it when multiple agents connect to the same `idalib-mcp` server and you want deterministic context isolation:
+
+- Prevent one agent from changing another agent's active session accidentally.
+- Run concurrent analyses safely (for example agent A on binary X and agent B on binary Y).
+- Still allow intentional collaboration by binding multiple agents to the same open session ID.
+- Improve reproducibility because each agent's context binding is explicit.
+
+When `--isolated-contexts` is enabled:
+
+- Each transport context has its own binding (`Mcp-Session-Id` for `/mcp`, `session` for `/sse`, `stdio:default` for stdio).
+- Unbound contexts fail fast for IDB-dependent tools/resources.
+- `idalib_switch(session_id)` and `idalib_open(...)` bind the caller context only.
+
+### Streamable HTTP behavior
+
+With `--isolated-contexts`, strict Streamable HTTP session semantics are enabled, including `Mcp-Session-Id` validation.
+
+### Context tools
+
+- `idalib_open(input_path, ...)`: Open binary and bind it to the active context policy.
+- `idalib_switch(session_id)`: Rebind the active context policy to an existing session.
+- `idalib_current()`: Return the session bound to the active context policy.
+- `idalib_unbind()`: Remove the active context binding.
+- `idalib_list()`: Includes `is_active`, `is_current_context`, and `bound_contexts`.
+
 
 ## MCP Resources
 

@@ -9,6 +9,7 @@ IDA Pro MCP Server - enables LLM-assisted reverse engineering by bridging IDA Pr
 **Architecture**: Dual-process design
 - **MCP Server** (`server.py`): Python >=3.11, runs via `uv`, proxies to the MCP server hosted by IDA
 - **IDA Plugin** (`ida_mcp/`): Runs inside IDA Pro, exposes MCP server over HTTP (port 13337+)
+- **Headless idalib Server** (`idalib_server.py`): many->many context-bound sessions for multi-agent use
 
 ## Development Commands
 
@@ -39,8 +40,11 @@ uv run ida-pro-mcp
 # SSE transport for headless/remote use
 uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
 
-# Headless mode with idalib (no GUI)
+# Headless mode with idalib (default shared fallback context)
 uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/binary
+
+# Strict many-to-many isolation mode
+uv run idalib-mcp --isolated-contexts --host 127.0.0.1 --port 8745 path/to/binary
 
 # Enable unsafe debugger functions
 uv run ida-pro-mcp --unsafe
@@ -212,6 +216,13 @@ filtered = pattern_filter(items, "name", pattern)  # Glob-style matching
 3. **SSE**: `GET /sse` for connection, `POST /sse?session=X` for requests
 
 Server auto-negotiates based on client request.
+
+## Headless idalib Session Semantics
+
+- Default mode uses a shared fallback context (`shared:fallback`) for session-bound operations.
+- `--isolated-contexts` enables strict many-to-many binding by transport context.
+- In isolated mode, unbound contexts fail for IDB-dependent tools/resources.
+- In isolated mode, Streamable HTTP enforces `Mcp-Session-Id` session semantics.
 
 ## Prompting Best Practices
 
