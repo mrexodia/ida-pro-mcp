@@ -34,7 +34,7 @@ def test_stack_frame():
     result = stack_frame(fn_addr)
     assert_is_list(result, min_length=1)
     r = result[0]
-    assert_has_keys(r, "addr", "frame", "error")
+    assert_has_keys(r, "addr", "vars")
 
 
 @test()
@@ -47,8 +47,8 @@ def test_stack_frame_no_function():
     result = stack_frame(data_addr)
     assert_is_list(result, min_length=1)
     r = result[0]
-    # Should have error or null frame
-    assert r.get("error") is not None or r.get("frame") is None
+    # Should have error or null vars
+    assert r.get("error") is not None or r.get("vars") is None
 
 
 # ============================================================================
@@ -66,11 +66,11 @@ def test_declare_delete_stack_roundtrip():
     try:
         # Try to declare a stack variable
         result = declare_stack(
-            {"func": fn_addr, "name": "__test_var__", "offset": -8, "type": "int"}
+            {"addr": fn_addr, "name": "__test_var__", "offset": -8, "ty": "int"}
         )
         assert_is_list(result, min_length=1)
         r = result[0]
-        assert_has_keys(r, "func")
+        assert_has_keys(r, "addr", "name")
     finally:
         # Always try to clean up, even if declare failed
-        delete_stack({"func": fn_addr, "name": "__test_var__"})
+        delete_stack({"addr": fn_addr, "name": "__test_var__"})

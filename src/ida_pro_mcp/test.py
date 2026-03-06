@@ -108,14 +108,30 @@ With coverage:
     print()
 
     try:
-        # Import test framework and API modules AFTER idalib is initialized
-        # This triggers the @test decorators to register tests
+        # Import test framework AFTER idalib is initialized
         from ida_pro_mcp.ida_mcp.framework import run_tests, TESTS, set_sample_size
 
-        # Import all test modules to register the tests
+        # Import all test modules to register @test decorators.
+        # Use pkgutil discovery so registration works even if tests package
+        # __init__ does not eagerly import submodules.
+        import importlib
+        import pkgutil
+
+        tests_pkg_name = "ida_pro_mcp.ida_mcp.tests"
+        tests_pkg = importlib.import_module(tests_pkg_name)
+        if hasattr(tests_pkg, "__path__"):
+            for mod in pkgutil.iter_modules(tests_pkg.__path__):
+                if mod.name.startswith("test_"):
+                    importlib.import_module(f"{tests_pkg_name}.{mod.name}")
 
         # Configure sample size for deterministic sampling helpers
         set_sample_size(args.sample_size)
+
+        if not TESTS:
+            print(
+                "Warning: no tests were registered from ida_pro_mcp.ida_mcp.tests",
+                file=sys.stderr,
+            )
 
         # Handle --list
         if args.list:
@@ -141,6 +157,14 @@ With coverage:
             verbose=not args.quiet,
             stop_on_failure=args.stop_on_failure,
         )
+
+        # No matched tests is likely a configuration/test-selection mistake
+        if not results.results:
+            print(
+                "Error: no tests matched the requested pattern/category",
+                file=sys.stderr,
+            )
+            return 1
 
         # In quiet mode, print summary
         if args.quiet:

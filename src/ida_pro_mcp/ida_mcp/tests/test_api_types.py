@@ -246,4 +246,4 @@ def test_infer_types():
     result = infer_types(fn_addr)
     assert_is_list(result, min_length=1)
     r = result[0]
-    assert_has_keys(r, "addr", "error")
+    assert_has_keys(r, "addr", "inferred_type", "method", "confidence")
