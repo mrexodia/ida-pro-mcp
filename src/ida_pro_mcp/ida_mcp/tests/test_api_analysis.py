@@ -43,32 +43,33 @@ def test_decompile_valid_function():
         return
 
     result = decompile(fn_addr)
-    assert_is_list(result, min_length=1)
-    # Should have code or error
-    r = result[0]
-    assert_has_keys(r, "addr")
+    assert isinstance(result, dict)
+    assert_has_keys(result, "addr")
     # Either has code or has an error
-    assert r.get("code") is not None or r.get("error") is not None
+    assert result.get("code") is not None or result.get("error") is not None
 
 
 @test()
 def test_decompile_invalid_address():
     """decompile handles invalid address gracefully"""
     result = decompile(get_unmapped_address())
-    assert_is_list(result, min_length=1)
+    assert isinstance(result, dict)
     # Should have an error
-    assert result[0].get("error") is not None or result[0].get("code") is None
+    assert result.get("error") is not None or result.get("code") is None
 
 
 @test()
 def test_decompile_batch():
-    """decompile can handle multiple addresses"""
+    """decompile can be called for multiple addresses"""
     addrs = get_n_functions(3)
     if len(addrs) < 2:
         return
 
-    result = decompile(addrs)
-    assert len(result) == len(addrs)
+    results = [decompile(addr) for addr in addrs]
+    assert len(results) == len(addrs)
+    for r in results:
+        assert isinstance(r, dict)
+        assert_has_keys(r, "addr")
 
 
 @test()
@@ -110,32 +111,35 @@ def test_disasm_valid_function():
         return
 
     result = disasm(fn_addr)
-    assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "addr")
+    assert isinstance(result, dict)
+    assert_has_keys(result, "addr")
     # Should have asm output or error
-    assert r.get("asm") is not None or r.get("error") is not None
+    assert result.get("asm") is not None or result.get("error") is not None
 
 
 @test()
 def test_disasm_pagination():
-    """disasm respects count parameter"""
+    """disasm respects max_instructions parameter"""
     fn_addr = get_any_function()
     if not fn_addr:
         return
 
-    result = disasm(fn_addr, count=10)
-    assert_is_list(result, min_length=1)
+    result = disasm(fn_addr, max_instructions=10)
+    assert isinstance(result, dict)
+    assert result.get("instruction_count", 0) <= 10
 
 
 @test()
 def test_disasm_unmapped_address():
     """disasm handles unmapped address"""
     result = disasm(get_unmapped_address())
-    assert_is_list(result, min_length=1)
+    assert isinstance(result, dict)
     # Should have error or empty asm
-    r = result[0]
-    assert r.get("error") is not None or r.get("asm") == "" or r.get("asm") is None
+    assert (
+        result.get("error") is not None
+        or result.get("asm") == ""
+        or result.get("asm") is None
+    )
 
 
 @test()
@@ -146,7 +150,8 @@ def test_disasm_data_segment():
         return
 
     result = disasm(data_addr)
-    assert_is_list(result, min_length=1)
+    assert isinstance(result, dict)
+    assert_has_keys(result, "addr")
 
 
 @test()
@@ -219,7 +224,7 @@ def test_xrefs_to():
     result = xrefs_to(fn_addr)
     assert_is_list(result, min_length=1)
     r = result[0]
-    assert_has_keys(r, "addr", "xrefs", "error")
+    assert_has_keys(r, "addr", "xrefs")
 
 
 @test()
@@ -277,7 +282,7 @@ def test_callees():
     result = callees(fn_addr)
     assert_is_list(result, min_length=1)
     r = result[0]
-    assert_has_keys(r, "addr", "callees", "error")
+    assert_has_keys(r, "addr", "callees")
 
 
 @test()
@@ -312,7 +317,7 @@ def test_find_bytes():
     result = find_bytes("00 00")
     assert_is_list(result, min_length=1)
     r = result[0]
-    assert_has_keys(r, "query", "matches", "error")
+    assert_has_keys(r, "pattern", "matches")
 
 
 # ============================================================================
@@ -342,7 +347,7 @@ def test_basic_blocks():
 def test_find_string():
     """find can search for strings"""
     # Most binaries have some strings
-    result = find("string", query="*")
+    result = find("string", "*")
     assert_is_list(result, min_length=1)
     r = result[0]
     assert_has_keys(r, "query", "matches", "error")
@@ -351,7 +356,7 @@ def test_find_string():
 @test()
 def test_find_invalid_type():
     """find handles invalid search type"""
-    result = find("invalid_type", query="test")
+    result = find("invalid_type", "test")
     assert_is_list(result, min_length=1)
     r = result[0]
     # Should have error for invalid type
@@ -370,10 +375,12 @@ def test_export_funcs_json():
     if not fn_addr:
         return
 
-    result = export_funcs(fn_addr, fmt="json")
-    assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "addr")
+    result = export_funcs(fn_addr, format="json")
+    assert isinstance(result, dict)
+    assert result.get("format") == "json"
+    functions = result.get("functions", [])
+    assert_is_list(functions, min_length=1)
+    assert_has_keys(functions[0], "addr")
 
 
 @test()
@@ -383,15 +390,21 @@ def test_export_funcs_c_header():
     if not fn_addr:
         return
 
-    result = export_funcs(fn_addr, fmt="c_header")
-    assert_is_list(result, min_length=1)
+    result = export_funcs(fn_addr, format="c_header")
+    assert isinstance(result, dict)
+    assert result.get("format") == "c_header"
+    assert isinstance(result.get("content"), str)
 
 
 @test()
 def test_export_funcs_invalid_address():
     """export_funcs handles invalid address"""
-    result = export_funcs(get_unmapped_address())
-    assert_is_list(result, min_length=1)
+    result = export_funcs(get_unmapped_address(), format="json")
+    assert isinstance(result, dict)
+    assert result.get("format") == "json"
+    functions = result.get("functions", [])
+    assert_is_list(functions, min_length=1)
+    assert functions[0].get("error") is not None
 
 
 # ============================================================================
@@ -409,4 +422,4 @@ def test_callgraph():
     result = callgraph(fn_addr)
     assert_is_list(result, min_length=1)
     r = result[0]
-    assert_has_keys(r, "addr")
+    assert_has_keys(r, "root", "nodes", "edges")

@@ -191,7 +191,7 @@ def test_list_funcs():
     result = list_funcs({})
     assert_is_list(result, min_length=1)
     page = result[0]
-    assert_has_keys(page, "data", "offset", "count", "total")
+    assert_has_keys(page, "data", "next_offset")
     if page["data"]:
         assert_all_have_keys(page["data"], "addr", "name", "size")
 
@@ -202,8 +202,8 @@ def test_list_funcs_pagination():
     result = list_funcs({"offset": 0, "count": 5})
     assert_is_list(result, min_length=1)
     page = result[0]
-    assert page["offset"] == 0
     assert len(page["data"]) <= 5
+    assert "next_offset" in page
 
 
 # ============================================================================
@@ -217,7 +217,7 @@ def test_list_globals():
     result = list_globals({})
     assert_is_list(result, min_length=1)
     page = result[0]
-    assert_has_keys(page, "data", "offset", "count", "total")
+    assert_has_keys(page, "data", "next_offset")
 
 
 @test()
@@ -226,8 +226,8 @@ def test_list_globals_pagination():
     result = list_globals({"offset": 0, "count": 5})
     assert_is_list(result, min_length=1)
     page = result[0]
-    assert page["offset"] == 0
     assert len(page["data"]) <= 5
+    assert "next_offset" in page
 
 
 # ============================================================================
@@ -238,20 +238,18 @@ def test_list_globals_pagination():
 @test()
 def test_imports():
     """imports returns import list with proper structure"""
-    result = imports({})
-    assert_is_list(result, min_length=1)
-    page = result[0]
-    assert_has_keys(page, "data", "offset", "count", "total")
+    page = imports(0, 50)
+    assert isinstance(page, dict)
+    assert_has_keys(page, "data", "next_offset")
 
 
 @test()
 def test_imports_pagination():
     """imports respects pagination parameters"""
-    result = imports({"offset": 0, "count": 5})
-    assert_is_list(result, min_length=1)
-    page = result[0]
-    assert page["offset"] == 0
+    page = imports(0, 5)
+    assert isinstance(page, dict)
     assert len(page["data"]) <= 5
+    assert "next_offset" in page
 
 
 # ============================================================================
@@ -263,7 +261,7 @@ def test_imports_pagination():
 def test_find_regex():
     """find_regex can search for patterns"""
     # Search for a common pattern that should exist in most binaries
-    result = find_regex({"pattern": ".*"})
-    assert_is_list(result, min_length=1)
+    result = find_regex(".*")
+    assert isinstance(result, dict)
     # Result structure should have matches
-    assert_has_keys(result[0], "query", "matches", "error")
+    assert_has_keys(result, "matches", "n", "cursor")

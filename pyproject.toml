@@ -23,6 +23,11 @@ dependencies = [
     "tomli-w>=1.0.0",
 ]
 
+[dependency-groups]
+dev = [
+    "coverage>=7.13.4",
+]
+
 [project.urls]
 Repository = "https://github.com/mrexodia/ida-pro-mcp"
 Issues = "https://github.com/mrexodia/ida-pro-mcp/issues"
@@ -41,3 +46,11 @@ include = ["src/ida_pro_mcp"]
 
 [tool.ruff]
 exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]
+
+[tool.coverage.run]
+relative_files = true
+include = ["src/ida_pro_mcp/*"]
+omit = [
+    "src/ida_pro_mcp/ida_mcp/tests/*",
+    "src/ida_pro_mcp/ida_mcp/zeromcp/*",
+]

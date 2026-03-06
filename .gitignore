@@ -25,3 +25,8 @@ venv*/
 
 # Generated server files
 server_generated.py
+
+# Coverage
+.coverage*
+htmlcov/
+scalene-profile.json
