@@ -93,6 +93,53 @@ if not os.path.exists(IDA_PLUGIN_LOADER):
         f"IDA plugin loader not found at {IDA_PLUGIN_LOADER} (did you move it?)"
     )
 
+# Client name aliases: lowercase alias -> exact name in configs dict
+CLIENT_ALIASES: dict[str, str] = {
+    "vscode": "VS Code",
+    "vs-code": "VS Code",
+    "vscode-insiders": "VS Code Insiders",
+    "vs-code-insiders": "VS Code Insiders",
+    "vs2022": "Visual Studio 2022",
+    "visual-studio": "Visual Studio 2022",
+    "claude-desktop": "Claude",
+    "claude-app": "Claude",
+    "claude-code": "Claude Code",
+    "roo": "Roo Code",
+    "roocode": "Roo Code",
+    "kilo": "Kilo Code",
+    "kilocode": "Kilo Code",
+    "gemini": "Gemini CLI",
+    "qwen": "Qwen Coder",
+    "copilot": "Copilot CLI",
+    "amazonq": "Amazon Q",
+    "amazon-q": "Amazon Q",
+    "lmstudio": "LM Studio",
+    "lm-studio": "LM Studio",
+    "augment": "Augment Code",
+    "qodo": "Qodo Gen",
+    "antigravity": "Antigravity IDE",
+    "boltai": "BoltAI",
+    "bolt": "BoltAI",
+}
+
+# Project-level config definitions: name -> (subdirectory, config_file)
+# Empty subdirectory means config file is in project root
+PROJECT_LEVEL_CONFIGS: dict[str, tuple[str, str]] = {
+    "Claude Code": ("", ".mcp.json"),
+    "Cursor": (".cursor", "mcp.json"),
+    "VS Code": (".vscode", "mcp.json"),
+    "VS Code Insiders": (".vscode", "mcp.json"),
+    "Windsurf": (".windsurf", "mcp.json"),
+    "Zed": (".zed", "settings.json"),
+}
+
+# Special JSON structures for project-level configs
+# VS Code project-level .vscode/mcp.json uses {"servers": {...}} at top level
+PROJECT_SPECIAL_JSON_STRUCTURES: dict[str, tuple[str | None, str]] = {
+    "VS Code": (None, "servers"),
+    "VS Code Insiders": (None, "servers"),
+}
+
 
 def get_python_executable():
     """Get the path to the Python executable"""
@@ -168,7 +215,7 @@ def infer_http_transport_type(transport_url: str) -> str:
     return "http"
 
 
-def generate_mcp_config(*, client_name: str, transport: str):
+def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
     if transport == "stdio":
         mcp_config = {
             "command": get_python_executable(),
@@ -199,21 +246,7 @@ def generate_mcp_config(*, client_name: str, transport: str):
 
 
 def print_mcp_config():
-    print("[HTTP MCP CONFIGURATION]")
-    print(
-        json.dumps(
-            {
-                "mcpServers": {
-                    mcp.name: generate_mcp_config(
-                        client_name="Generic",
-                        transport=f"http://{IDA_HOST}:{IDA_PORT}/mcp",
-                    )
-                }
-            },
-            indent=2,
-        )
-    )
-    print("\n[STDIO MCP CONFIGURATION]")
+    print("[STDIO MCP CONFIGURATION]")
     print(
         json.dumps(
             {
@@ -227,20 +260,76 @@ def print_mcp_config():
             indent=2,
         )
     )
+    print("\n[STREAMABLE HTTP MCP CONFIGURATION]")
+    print(
+        json.dumps(
+            {
+                "mcpServers": {
+                    mcp.name: generate_mcp_config(
+                        client_name="Generic",
+                        transport=f"http://{IDA_HOST}:{IDA_PORT}/mcp",
+                    )
+                }
+            },
+            indent=2,
+        )
+    )
+    print("\n[SSE MCP CONFIGURATION]")
+    print(
+        json.dumps(
+            {
+                "mcpServers": {
+                    mcp.name: generate_mcp_config(
+                        client_name="Generic",
+                        transport=f"http://{IDA_HOST}:{IDA_PORT}/sse",
+                    )
+                }
+            },
+            indent=2,
+        )
+    )
 
 
-def install_mcp_servers(*, transport: str = "stdio", uninstall=False, quiet=False):
-    # Map client names to their JSON key paths for clients that don't use "mcpServers"
-    # Format: client_name -> (top_level_key, nested_key)
-    # None means use default "mcpServers" at top level
-    special_json_structures = {
-        "VS Code": ("mcp", "servers"),
-        "VS Code Insiders": ("mcp", "servers"),
-        "Visual Studio 2022": (None, "servers"),  # servers at top level
-    }
+def resolve_client_name(
+    input_name: str, available_clients: list[str]
+) -> str | None:
+    """Resolve user input to an exact client name from available_clients.
 
+    Priority: exact match (case-insensitive) -> alias -> unique substring match.
+    """
+    lower_input = input_name.strip().lower()
+
+    # Exact match (case-insensitive)
+    for client in available_clients:
+        if client.lower() == lower_input:
+            return client
+
+    # Alias match
+    if lower_input in CLIENT_ALIASES:
+        alias_target = CLIENT_ALIASES[lower_input]
+        if alias_target in available_clients:
+            return alias_target
+
+    # Unique substring match
+    matches = [c for c in available_clients if lower_input in c.lower()]
+    if len(matches) == 1:
+        return matches[0]
+
+    return None
+
+
+# Global special JSON structures for user-level configs
+GLOBAL_SPECIAL_JSON_STRUCTURES: dict[str, tuple[str | None, str]] = {
+    "VS Code": ("mcp", "servers"),
+    "VS Code Insiders": ("mcp", "servers"),
+    "Visual Studio 2022": (None, "servers"),  # servers at top level
+}
+
+
+def get_global_configs() -> dict[str, tuple[str, str]]:
+    """Return platform-specific global (user-level) MCP client config paths."""
     if sys.platform == "win32":
-        configs = {
+        return {
             "Cline": (
                 os.path.join(
                     os.getenv("APPDATA", ""),
@@ -367,7 +456,7 @@ def install_mcp_servers(*, transport: str = "stdio", uninstall=False, quiet=Fals
             ),
         }
     elif sys.platform == "darwin":
-        configs = {
+        return {
             "Cline": (
                 os.path.join(
                     os.path.expanduser("~"),
@@ -530,7 +619,7 @@ def install_mcp_servers(*, transport: str = "stdio", uninstall=False, quiet=Fals
             ),
         }
     elif sys.platform == "linux":
-        configs = {
+        return {
             "Cline": (
                 os.path.join(
                     os.path.expanduser("~"),
@@ -661,8 +750,322 @@ def install_mcp_servers(*, transport: str = "stdio", uninstall=False, quiet=Fals
             ),
         }
     else:
+        return {}
+
+
+def get_project_configs(project_dir: str) -> dict[str, tuple[str, str]]:
+    """Return project-level MCP client config paths for the given directory."""
+    result = {}
+    for name, (subdir, config_file) in PROJECT_LEVEL_CONFIGS.items():
+        if subdir:
+            config_dir = os.path.join(project_dir, subdir)
+        else:
+            config_dir = project_dir
+        result[name] = (config_dir, config_file)
+    return result
+
+
+def is_client_installed(name: str, config_dir: str, config_file: str, *, project: bool = False) -> bool:
+    """Check if the MCP server is already installed for a given client."""
+    config_path = os.path.join(config_dir, config_file)
+    if not os.path.exists(config_path):
+        return False
+
+    is_toml = config_file.endswith(".toml")
+    try:
+        if is_toml:
+            with open(config_path, "rb") as f:
+                data = f.read()
+                config = tomllib.loads(data.decode("utf-8")) if data else {}
+        else:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = f.read().strip()
+                config = json.loads(data) if data else {}
+    except (json.JSONDecodeError, tomllib.TOMLDecodeError, OSError):
+        return False
+
+    special = (PROJECT_SPECIAL_JSON_STRUCTURES if project else GLOBAL_SPECIAL_JSON_STRUCTURES)
+    if is_toml:
+        mcp_servers = config.get("mcp_servers", {})
+    elif name in special:
+        top_key, nested_key = special[name]
+        if top_key is None:
+            mcp_servers = config.get(nested_key, {})
+        else:
+            mcp_servers = config.get(top_key, {}).get(nested_key, {})
+    else:
+        mcp_servers = config.get("mcpServers", {})
+
+    return mcp.name in mcp_servers
+
+
+def is_ida_plugin_installed() -> bool:
+    """Check if the IDA plugin is currently installed."""
+    if sys.platform == "win32":
+        ida_folder = os.path.join(os.environ["APPDATA"], "Hex-Rays", "IDA Pro")
+    else:
+        ida_folder = os.path.join(os.path.expanduser("~"), ".idapro")
+    loader = os.path.join(ida_folder, "plugins", "ida_mcp.py")
+    return os.path.lexists(loader)
+
+
+def _make_read_key():
+    """Create a platform-specific key reader function, or None if not a TTY."""
+    if not sys.stdin.isatty():
+        return None
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            def read_key():
+                ch = msvcrt.getwch()
+                if ch in ("\x00", "\xe0"):
+                    ch2 = msvcrt.getwch()
+                    if ch2 == "H":
+                        return "up"
+                    elif ch2 == "P":
+                        return "down"
+                    return None
+                elif ch == " ":
+                    return "space"
+                elif ch == "\r":
+                    return "enter"
+                elif ch == "\x1b":
+                    return "esc"
+                elif ch == "a":
+                    return "a"
+                return None
+        else:
+            import tty
+            import termios
+
+            def read_key():
+                fd = sys.stdin.fileno()
+                old = termios.tcgetattr(fd)
+                try:
+                    tty.setraw(fd)
+                    ch = sys.stdin.read(1)
+                    if ch == "\x1b":
+                        ch2 = sys.stdin.read(1)
+                        if ch2 == "[":
+                            ch3 = sys.stdin.read(1)
+                            if ch3 == "A":
+                                return "up"
+                            elif ch3 == "B":
+                                return "down"
+                        return "esc"
+                    elif ch == " ":
+                        return "space"
+                    elif ch in ("\r", "\n"):
+                        return "enter"
+                    elif ch == "a":
+                        return "a"
+                    elif ch == "\x03":
+                        return "esc"
+                    return None
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        return read_key
+    except ImportError:
+        return None
+
+
+def _tui_loop(read_key, render, on_key) -> bool:
+    """Generic TUI render loop. Returns True if completed, False if cancelled."""
+    sys.stdout.write("\033[?25l")  # Hide cursor
+    output = render()
+    sys.stdout.write(output + "\n")
+    sys.stdout.flush()
+    # Number of lines to move up = number of visual lines
+    total_lines = output.count("\n") + 1
+
+    def clear():
+        sys.stdout.write(f"\033[{total_lines}A\033[J")
+        sys.stdout.flush()
+
+    try:
+        while True:
+            key = read_key()
+            result = on_key(key)
+            if result == "confirm":
+                clear()
+                return True
+            elif result == "cancel":
+                clear()
+                return False
+            elif result == "noop":
+                continue
+
+            # Redraw
+            clear()
+            output = render()
+            sys.stdout.write(output + "\n")
+            sys.stdout.flush()
+            total_lines = output.count("\n") + 1
+    finally:
+        sys.stdout.write("\033[?25h")  # Restore cursor
+        sys.stdout.flush()
+
+
+def interactive_choose(items: list[str], title: str, default: int = 0) -> str | None:
+    """Show an interactive single-choice selector.
+
+    Returns the selected item name, or None if cancelled.
+    """
+    read_key = _make_read_key()
+    if read_key is None:
+        return None
+
+    cursor = default
+
+    def render():
+        lines = [f"\033[1m{title}\033[0m"]
+        lines.append("  (up/down: move, enter: confirm, esc: cancel)")
+        lines.append("")
+        for i, name in enumerate(items):
+            pointer = "\033[36m>\033[0m" if i == cursor else " "
+            lines.append(f"  {pointer} {name}")
+        return "\n".join(lines)
+
+    def on_key(key):
+        nonlocal cursor
+        if key == "up":
+            cursor = (cursor - 1) % len(items)
+        elif key == "down":
+            cursor = (cursor + 1) % len(items)
+        elif key in ("enter", "space"):
+            return "confirm"
+        elif key == "esc":
+            return "cancel"
+        else:
+            return "noop"
+        return "redraw"
+
+    if _tui_loop(read_key, render, on_key):
+        result = items[cursor]
+        print(f"\033[1m{title}\033[0m {result}")
+        return result
+    return None
+
+
+def interactive_select(items: list[tuple[str, bool]], title: str) -> list[str] | None:
+    """Show an interactive checkbox selector.
+
+    Args:
+        items: List of (name, pre_checked) tuples.
+
+    Returns:
+        List of selected item names, or None if cancelled.
+    """
+    read_key = _make_read_key()
+    if read_key is None:
+        return None
+
+    selected = [checked for _, checked in items]
+    cursor = 0
+
+    def render():
+        lines = [f"\033[1m{title}\033[0m"]
+        lines.append("  (space: toggle, a: toggle all, enter: confirm, esc: cancel)")
+        lines.append("")
+        for i, (name, _) in enumerate(items):
+            check = "\033[32m[x]\033[0m" if selected[i] else "[ ]"
+            pointer = "\033[36m>\033[0m" if i == cursor else " "
+            lines.append(f"  {pointer} {check} {name}")
+        return "\n".join(lines)
+
+    def on_key(key):
+        nonlocal cursor, selected
+        if key == "up":
+            cursor = (cursor - 1) % len(items)
+        elif key == "down":
+            cursor = (cursor + 1) % len(items)
+        elif key == "space":
+            selected[cursor] = not selected[cursor]
+        elif key == "a":
+            all_selected = all(selected)
+            selected = [not all_selected] * len(items)
+        elif key == "enter":
+            return "confirm"
+        elif key == "esc":
+            return "cancel"
+        else:
+            return "noop"
+        return "redraw"
+
+    if _tui_loop(read_key, render, on_key):
+        result = [name for (name, _), sel in zip(items, selected) if sel]
+        if result:
+            print(f"\033[1m{title}\033[0m {', '.join(result)}")
+        else:
+            print(f"\033[1m{title}\033[0m (none)")
+        return result
+    return None
+
+
+def list_available_clients():
+    """List all available installation targets."""
+    configs = get_global_configs()
+    if not configs:
         print(f"Unsupported platform: {sys.platform}")
         return
+
+    print("Available installation targets:\n")
+    print(f"  {'ida-plugin':<25} IDA Pro plugin (user-level only)")
+    print()
+    print("  MCP Clients:")
+    for name in configs:
+        supports_project = name in PROJECT_LEVEL_CONFIGS
+        project_marker = " [supports --project]" if supports_project else ""
+        config_dir, config_file = configs[name]
+        exists = os.path.exists(config_dir)
+        status = "found" if exists else "not found"
+        print(f"    {name:<25} ({status}){project_marker}")
+
+    print()
+    print("Usage examples:")
+    print("  ida-pro-mcp --install                                    # Interactive selector")
+    print("  ida-pro-mcp --install claude,cursor,ida-plugin            # Specific targets")
+    print("  ida-pro-mcp --install vscode --scope project              # Project-level config")
+    print("  ida-pro-mcp --install cursor --scope both --transport sse   # Both scopes, SSE")
+    print("  ida-pro-mcp --uninstall cursor                            # Uninstall specific target")
+
+
+def install_mcp_servers(
+    *,
+    transport: str = "stdio",
+    uninstall: bool = False,
+    quiet: bool = False,
+    only: list[str] | None = None,
+    project: bool = False,
+):
+    # Select config source and special JSON structures based on project flag
+    if project:
+        configs = get_project_configs(os.getcwd())
+        special_json_structures = PROJECT_SPECIAL_JSON_STRUCTURES
+    else:
+        configs = get_global_configs()
+        special_json_structures = GLOBAL_SPECIAL_JSON_STRUCTURES
+
+    if not configs:
+        print(f"Unsupported platform: {sys.platform}")
+        return
+
+    # Filter configs by --only targets
+    if only is not None:
+        available = list(configs.keys())
+        filtered_configs: dict[str, tuple[str, str]] = {}
+        for target_name in only:
+            resolved = resolve_client_name(target_name, available)
+            if resolved is None:
+                print(
+                    f"Unknown client: '{target_name}'. Use --list-clients to see available targets."
+                )
+            elif resolved not in filtered_configs:
+                filtered_configs[resolved] = configs[resolved]
+        configs = filtered_configs
+        if not configs:
+            return
 
     installed = 0
     for name, (config_dir, config_file) in configs.items():
@@ -670,10 +1073,15 @@ def install_mcp_servers(*, transport: str = "stdio", uninstall=False, quiet=Fals
         is_toml = config_file.endswith(".toml")
 
         if not os.path.exists(config_dir):
-            action = "uninstall" if uninstall else "installation"
-            if not quiet:
-                print(f"Skipping {name} {action}\n  Config: {config_path} (not found)")
-            continue
+            if project and not uninstall:
+                os.makedirs(config_dir, exist_ok=True)
+            else:
+                action = "uninstall" if uninstall else "installation"
+                if not quiet:
+                    print(
+                        f"Skipping {name} {action}\n  Config: {config_path} (not found)"
+                    )
+                continue
 
         # Read existing config
         if not os.path.exists(config_path):
@@ -897,16 +1305,135 @@ def install_ida_plugin(
                 print("Skipping IDA plugin installation (already up to date)")
 
 
+def _resolve_transport(value: str) -> str:
+    """Normalize a --transport value to 'stdio', 'streamable-http', or 'sse'."""
+    v = value.strip().lower()
+    if v == "stdio":
+        return "stdio"
+    elif v in ("sse",):
+        return "sse"
+    elif v in ("http", "streamable-http", "streamable"):
+        return "streamable-http"
+    # URL passed (e.g., http://...) — treat as streamable-http for install config
+    return "streamable-http"
+
+
+def _interactive_install(*, uninstall: bool, args):
+    """Full interactive install/uninstall flow with transport and scope selection."""
+    action = "uninstall" if uninstall else "install"
+
+    # Step 1: Transport selection (skip for uninstall, or if --transport was explicitly set)
+    if not uninstall and args.transport is None:
+        choice = interactive_choose(
+            ["stdio (recommended)", "Streamable HTTP", "SSE"],
+            "Select transport mode:",
+        )
+        if choice is None:
+            print("Cancelled.")
+            return
+        if choice.startswith("stdio"):
+            transport = "stdio"
+        elif choice.startswith("Streamable"):
+            transport = "streamable-http"
+        else:
+            transport = "sse"
+    elif not uninstall:
+        transport = _resolve_transport(args.transport or "stdio")
+    else:
+        transport = "stdio"  # doesn't matter for uninstall
+
+    # Step 2: Scope selection (skip if --scope was explicitly set)
+    if args.scope:
+        scope_value = args.scope
+    else:
+        scope = interactive_choose(
+            ["Global (user-level)", "Project (current directory)", "Both"],
+            "Select installation scope:",
+        )
+        if scope is None:
+            print("Cancelled.")
+            return
+        if scope.startswith("Global"):
+            scope_value = "global"
+        elif scope.startswith("Project"):
+            scope_value = "project"
+        else:
+            scope_value = "both"
+
+    do_global = scope_value in ("global", "both")
+    do_project = scope_value in ("project", "both")
+
+    # Step 3: Target selection per scope
+    if do_global:
+        global_configs = get_global_configs()
+        if global_configs:
+            items: list[tuple[str, bool]] = []
+            items.append(("IDA Plugin", is_ida_plugin_installed()))
+            for name, (config_dir, config_file) in global_configs.items():
+                installed = is_client_installed(name, config_dir, config_file)
+                items.append((name, installed))
+
+            selected = interactive_select(items, f"Select global targets to {action}:")
+            if selected is None:
+                print("Cancelled.")
+                return
+
+            if "IDA Plugin" in selected:
+                install_ida_plugin(uninstall=uninstall, allow_ida_free=args.allow_ida_free)
+            client_names = [s for s in selected if s != "IDA Plugin"]
+            if client_names:
+                install_mcp_servers(
+                    transport=transport,
+                    uninstall=uninstall,
+                    only=client_names,
+                )
+        else:
+            print(f"Unsupported platform: {sys.platform}")
+
+    if do_project:
+        project_configs = get_project_configs(os.getcwd())
+        if project_configs:
+            items = []
+            for name, (config_dir, config_file) in project_configs.items():
+                installed = is_client_installed(name, config_dir, config_file, project=True)
+                items.append((name, installed))
+
+            selected = interactive_select(items, f"Select project targets to {action}:")
+            if selected is None:
+                print("Cancelled.")
+                return
+
+            if selected:
+                install_mcp_servers(
+                    transport=transport,
+                    uninstall=uninstall,
+                    only=selected,
+                    project=True,
+                )
+
+
 def main():
     global IDA_HOST, IDA_PORT
     parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
     parser.add_argument(
-        "--install", action="store_true", help="Install the MCP Server and IDA plugin"
+        "--install",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="TARGETS",
+        help="Install the MCP Server and IDA plugin. "
+        "Optionally specify comma-separated targets (e.g., 'ida-plugin,claude,cursor'). "
+        "Without targets, an interactive selector is shown.",
     )
     parser.add_argument(
         "--uninstall",
-        action="store_true",
-        help="Uninstall the MCP Server and IDA plugin",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="TARGETS",
+        help="Uninstall the MCP Server and IDA plugin. "
+        "Optionally specify comma-separated targets. "
+        "Without targets, an interactive selector is shown.",
     )
     parser.add_argument(
         "--allow-ida-free",
@@ -916,11 +1443,16 @@ def main():
     parser.add_argument(
         "--transport",
         type=str,
-        default="stdio",
-        help=(
-            "MCP transport protocol to use "
-            "(stdio or http://127.0.0.1:8744[/mcp|/sse])"
-        ),
+        default=None,
+        help="MCP transport for install: 'stdio' (default), 'streamable-http', or 'sse'. "
+        "For running: use stdio (default) or pass a URL (e.g., http://127.0.0.1:8744[/mcp|/sse])",
+    )
+    parser.add_argument(
+        "--scope",
+        type=str,
+        choices=["global", "project", "both"],
+        default=None,
+        help="Installation scope: 'global' (user-level), 'project' (current directory), or 'both'",
     )
     parser.add_argument(
         "--ida-rpc",
@@ -931,7 +1463,17 @@ def main():
     parser.add_argument(
         "--config", action="store_true", help="Generate MCP config JSON"
     )
+    parser.add_argument(
+        "--list-clients",
+        action="store_true",
+        help="List all available MCP client targets",
+    )
     args = parser.parse_args()
+
+    # Handle --list-clients independently
+    if args.list_clients:
+        list_available_clients()
+        return
 
     # Parse IDA RPC server argument
     ida_rpc = urlparse(args.ida_rpc)
@@ -940,18 +1482,58 @@ def main():
     IDA_HOST = ida_rpc.hostname
     IDA_PORT = ida_rpc.port
 
-    if args.install and args.uninstall:
+    is_install = args.install is not None
+    is_uninstall = args.uninstall is not None
+
+    # Validate flag combinations
+    if args.scope and not (is_install or is_uninstall):
+        print("--scope requires --install or --uninstall")
+        return
+
+    if is_install and is_uninstall:
         print("Cannot install and uninstall at the same time")
         return
 
-    if args.install:
-        install_ida_plugin(allow_ida_free=args.allow_ida_free)
-        install_mcp_servers(transport=args.transport)
-        return
+    if is_install or is_uninstall:
+        targets_str = args.install if is_install else args.uninstall
+        uninstall = is_uninstall
 
-    if args.uninstall:
-        install_ida_plugin(uninstall=True, allow_ida_free=args.allow_ida_free)
-        install_mcp_servers(uninstall=True)
+        if targets_str:
+            # Explicit targets: --install claude,cursor,ida-plugin
+            # Use CLI flags for transport/scope (no interactive prompts)
+            transport = _resolve_transport(args.transport or "stdio")
+            scope = args.scope or "global"
+
+            targets = [t.strip() for t in targets_str.split(",") if t.strip()]
+            install_ida = False
+            client_targets = []
+            for target in targets:
+                if target.lower() == "ida-plugin":
+                    install_ida = True
+                else:
+                    client_targets.append(target)
+
+            if install_ida:
+                install_ida_plugin(uninstall=uninstall, allow_ida_free=args.allow_ida_free)
+            if client_targets:
+                do_global = scope in ("global", "both")
+                do_project = scope in ("project", "both")
+                if do_global:
+                    install_mcp_servers(
+                        transport=transport,
+                        uninstall=uninstall,
+                        only=client_targets,
+                    )
+                if do_project:
+                    install_mcp_servers(
+                        transport=transport,
+                        uninstall=uninstall,
+                        only=client_targets,
+                        project=True,
+                    )
+        else:
+            # No targets: full interactive flow
+            _interactive_install(uninstall=uninstall, args=args)
         return
 
     if args.config:
@@ -959,10 +1541,11 @@ def main():
         return
 
     try:
-        if args.transport == "stdio":
+        transport = args.transport or "stdio"
+        if transport == "stdio":
             mcp.stdio()
         else:
-            url = urlparse(args.transport)
+            url = urlparse(transport)
             if url.hostname is None or url.port is None:
                 raise Exception(f"Invalid transport URL: {args.transport}")
             # NOTE: npx -y @modelcontextprotocol/inspector for debugging
