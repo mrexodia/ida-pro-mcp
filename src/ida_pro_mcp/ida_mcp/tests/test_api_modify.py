@@ -119,11 +119,48 @@ def test_rename_global_roundtrip():
     if not data_addr:
         return
 
-    try:
-        result = rename({"global": [{"addr": data_addr, "name": "__test_global__"}]})
-        assert isinstance(result, dict)
-    except Exception:
-        pass  # May fail if no suitable global exists
+    result = rename({"global": [{"addr": data_addr, "name": "__test_global__"}]})
+    assert isinstance(result, dict)
+    assert_has_keys(result, "data", "global", "summary")
+    assert_is_list(result["global"], min_length=1)
+
+
+@test()
+def test_rename_dry_run_summary():
+    """rename supports dry_run and returns summary counters"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    result = rename({"func": [{"addr": fn_addr, "name": "__test_dry_run__"}], "dry_run": True})
+    assert isinstance(result, dict)
+    assert_has_keys(result, "func", "summary")
+    assert result["summary"]["dry_run"] is True
+    assert_is_list(result["func"], min_length=1)
+    assert result["func"][0].get("dry_run") is True
+
+
+@test()
+def test_rename_stop_on_error():
+    """rename can stop on first error"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    result = rename(
+        {
+            "func": [
+                {"addr": "0x0", "name": "__invalid__"},
+                {"addr": fn_addr, "name": "__should_not_run__"},
+            ],
+            "stop_on_error": True,
+        }
+    )
+    assert isinstance(result, dict)
+    assert_has_keys(result, "func", "summary")
+    # Stop-on-error should keep only the first failed item.
+    assert len(result["func"]) == 1
+    assert result["summary"]["stopped"] is True
 
 
 @test()

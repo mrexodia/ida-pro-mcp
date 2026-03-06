@@ -17,7 +17,11 @@ from ..framework import (
 from ..api_analysis import (
     decompile,
     disasm,
+    func_profile,
+    analyze_batch,
     xrefs_to,
+    xref_query,
+    insn_query,
     xrefs_to_field,
     callees,
     find_bytes,
@@ -232,6 +236,54 @@ def test_xrefs_to_invalid():
     assert_has_keys(r, "addr")
 
 
+@test()
+def test_xref_query():
+    """xref_query returns paged xref results for a function"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    result = xref_query(
+        {
+            "query": fn_addr,
+            "direction": "both",
+            "xref_type": "any",
+            "offset": 0,
+            "count": 10,
+            "include_fn": True,
+        }
+    )
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "query", "resolved_addr", "data", "next_offset", "total", "error")
+    if page["data"]:
+        assert_has_keys(page["data"][0], "direction", "addr", "from", "to", "type")
+
+
+@test()
+def test_insn_query_function_scope():
+    """insn_query supports scoped instruction search with pagination"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    result = insn_query({"func": fn_addr, "count": 8, "include_disasm": True})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "query", "matches", "count", "scanned", "cursor", "error")
+    assert page.get("error") is None
+    if page["matches"]:
+        assert_has_keys(page["matches"][0], "addr", "disasm")
+
+
+@test()
+def test_insn_query_requires_scope_by_default():
+    """insn_query rejects broad scans unless allow_broad is set"""
+    result = insn_query({"mnem": "call"})
+    assert_is_list(result, min_length=1)
+    assert result[0].get("error") is not None
+
+
 # ============================================================================
 # Tests for xrefs_to_field
 # ============================================================================
@@ -409,4 +461,75 @@ def test_callgraph():
     result = callgraph(fn_addr)
     assert_is_list(result, min_length=1)
     r = result[0]
-    assert_has_keys(r, "addr")
+    assert_has_keys(r, "root", "nodes", "edges", "error")
+
+
+# ============================================================================
+# Tests for func_profile / analyze_batch
+# ============================================================================
+
+
+@test()
+def test_func_profile():
+    """func_profile returns function profile metrics"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    result = func_profile({"query": fn_addr, "include_lists": False})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "data", "next_offset", "error")
+    if page["data"]:
+        r = page["data"][0]
+        assert_has_keys(
+            r,
+            "addr",
+            "name",
+            "size",
+            "instruction_count",
+            "basic_block_count",
+            "caller_count",
+            "callee_count",
+            "has_type",
+            "error",
+        )
+
+
+@test()
+def test_analyze_batch():
+    """analyze_batch returns structured analysis for a function"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    result = analyze_batch(
+        {
+            "query": fn_addr,
+            "include_disasm": True,
+            "max_disasm_insns": 16,
+            "include_strings": True,
+            "max_strings": 16,
+            "include_constants": True,
+            "max_constants": 16,
+            "include_basic_blocks": True,
+            "max_blocks": 16,
+        }
+    )
+    assert_is_list(result, min_length=1)
+    r = result[0]
+    assert_has_keys(r, "query", "addr", "name", "analysis", "error")
+    if r["analysis"] is not None:
+        a = r["analysis"]
+        assert_has_keys(
+            a,
+            "size",
+            "decompile",
+            "disasm",
+            "xrefs",
+            "caller_count",
+            "callee_count",
+            "string_ref_count",
+            "constant_count",
+            "basic_block_count",
+        )
