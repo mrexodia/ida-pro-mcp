@@ -17,6 +17,7 @@ jobs:
     permissions:
       contents: write
       packages: read
+      pull-requests: write
     container:
       image: ghcr.io/mrexodia/ida-docker/ida:9.1
       credentials:
@@ -26,11 +27,15 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
 
       - uses: astral-sh/setup-uv@v7
 
       - name: Run tests with coverage
         run: uv run coverage run -m ida_pro_mcp.test tests/crackme03.elf
+
+      - name: Fix git safe directory
+        run: git config --global --add safe.directory /github/workspace
 
       - name: Coverage comment
         id: coverage_comment
