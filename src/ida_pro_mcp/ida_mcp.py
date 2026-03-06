@@ -52,6 +52,16 @@ class MCPConfigHandler(idaapi.action_handler_t):
         return idaapi.AST_ENABLE_ALWAYS
 
 
+class MCPUIHooks(ida_kernwin.UI_Hooks):
+    """Defers menu attachment until the UI is fully ready."""
+
+    def ready_to_run(self):
+        ida_kernwin.attach_action_to_menu(
+            "Edit/Plugins/", CONFIG_ACTION_ID, idaapi.SETMENU_APP
+        )
+        self.unhook()
+
+
 class MCP(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
     comment = "MCP Plugin"
@@ -82,9 +92,9 @@ class MCP(idaapi.plugin_t):
                 MCPConfigHandler(self),
             )
         )
-        ida_kernwin.attach_action_to_menu(
-            "Edit/Plugins/", CONFIG_ACTION_ID, idaapi.SETMENU_APP
-        )
+        # Defer menu attachment until the UI is fully initialized
+        self._ui_hooks = MCPUIHooks()
+        self._ui_hooks.hook()
 
         return idaapi.PLUGIN_KEEP
 
@@ -118,6 +128,8 @@ class MCP(idaapi.plugin_t):
                 raise
 
     def term(self):
+        if hasattr(self, "_ui_hooks"):
+            self._ui_hooks.unhook()
         ida_kernwin.unregister_action(CONFIG_ACTION_ID)
         if self.mcp:
             self.mcp.stop()
