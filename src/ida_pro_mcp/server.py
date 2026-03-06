@@ -231,6 +231,11 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
             mcp_config["env"] = env
         return mcp_config
 
+    if transport == "streamable-http":
+        transport = f"http://{IDA_HOST}:{IDA_PORT}/mcp"
+    elif transport == "sse":
+        transport = f"http://{IDA_HOST}:{IDA_PORT}/sse"
+
     transport_url = normalize_transport_url(transport)
 
     # Codex uses streamable HTTP URL-only config.
@@ -1027,7 +1032,7 @@ def list_available_clients():
     print("  ida-pro-mcp --install                                    # Interactive selector")
     print("  ida-pro-mcp --install claude,cursor,ida-plugin            # Specific targets")
     print("  ida-pro-mcp --install vscode --scope project              # Project-level config")
-    print("  ida-pro-mcp --install cursor --scope both --transport sse   # Both scopes, SSE")
+    print("  ida-pro-mcp --install cursor --transport streamable-http  # Streamable HTTP config")
     print("  ida-pro-mcp --uninstall cursor                            # Uninstall specific target")
 
 
@@ -1325,7 +1330,7 @@ def _interactive_install(*, uninstall: bool, args):
     # Step 1: Transport selection (skip for uninstall, or if --transport was explicitly set)
     if not uninstall and args.transport is None:
         choice = interactive_choose(
-            ["stdio (recommended)", "Streamable HTTP", "SSE"],
+            ["Streamable HTTP (recommended)", "stdio", "SSE"],
             "Select transport mode:",
         )
         if choice is None:
@@ -1338,7 +1343,7 @@ def _interactive_install(*, uninstall: bool, args):
         else:
             transport = "sse"
     elif not uninstall:
-        transport = _resolve_transport(args.transport or "stdio")
+        transport = _resolve_transport(args.transport or "streamable-http")
     else:
         transport = "stdio"  # doesn't matter for uninstall
 
@@ -1347,21 +1352,19 @@ def _interactive_install(*, uninstall: bool, args):
         scope_value = args.scope
     else:
         scope = interactive_choose(
-            ["Global (user-level)", "Project (current directory)", "Both"],
+            ["Project (current directory)", "Global (user-level)"],
             "Select installation scope:",
         )
         if scope is None:
             print("Cancelled.")
             return
-        if scope.startswith("Global"):
-            scope_value = "global"
-        elif scope.startswith("Project"):
+        if scope.startswith("Project"):
             scope_value = "project"
         else:
-            scope_value = "both"
+            scope_value = "global"
 
-    do_global = scope_value in ("global", "both")
-    do_project = scope_value in ("project", "both")
+    do_global = scope_value == "global"
+    do_project = scope_value == "project"
 
     # Step 3: Target selection per scope
     if do_global:
@@ -1444,15 +1447,15 @@ def main():
         "--transport",
         type=str,
         default=None,
-        help="MCP transport for install: 'stdio' (default), 'streamable-http', or 'sse'. "
+        help="MCP transport for install: 'streamable-http' (default), 'stdio', or 'sse'. "
         "For running: use stdio (default) or pass a URL (e.g., http://127.0.0.1:8744[/mcp|/sse])",
     )
     parser.add_argument(
         "--scope",
         type=str,
-        choices=["global", "project", "both"],
+        choices=["global", "project"],
         default=None,
-        help="Installation scope: 'global' (user-level), 'project' (current directory), or 'both'",
+        help="Installation scope: 'project' (current directory, default) or 'global' (user-level)",
     )
     parser.add_argument(
         "--ida-rpc",
@@ -1501,8 +1504,8 @@ def main():
         if targets_str:
             # Explicit targets: --install claude,cursor,ida-plugin
             # Use CLI flags for transport/scope (no interactive prompts)
-            transport = _resolve_transport(args.transport or "stdio")
-            scope = args.scope or "global"
+            transport = _resolve_transport(args.transport or "streamable-http")
+            scope = args.scope or "project"
 
             targets = [t.strip() for t in targets_str.split(",") if t.strip()]
             install_ida = False
@@ -1516,8 +1519,8 @@ def main():
             if install_ida:
                 install_ida_plugin(uninstall=uninstall, allow_ida_free=args.allow_ida_free)
             if client_targets:
-                do_global = scope in ("global", "both")
-                do_project = scope in ("project", "both")
+                do_global = scope == "global"
+                do_project = scope == "project"
                 if do_global:
                     install_mcp_servers(
                         transport=transport,
