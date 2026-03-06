@@ -98,6 +98,38 @@ def test_lookup_funcs_data_address():
 
 
 # ============================================================================
+# Tests for lookup_funcs: interior address → entry point
+# ============================================================================
+
+
+@test()
+def test_lookup_funcs_interior_address():
+    """lookup_funcs returns function entry point when queried with interior address"""
+    import idc
+    import idaapi
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        return
+
+    ea = int(fn_addr, 16)
+    func = idaapi.get_func(ea)
+    if not func:
+        return
+
+    # Get second instruction inside the function
+    interior = idc.next_head(func.start_ea, func.end_ea)
+    if interior == idaapi.BADADDR or interior == func.start_ea:
+        return
+
+    result = lookup_funcs(hex(interior))
+    assert len(result) == 1
+    assert result[0]["fn"] is not None
+    assert result[0]["fn"]["addr"] == hex(func.start_ea)
+    assert result[0]["fn"]["addr"] != hex(interior)
+
+
+# ============================================================================
 # Tests for int_convert
 # ============================================================================
 

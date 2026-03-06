@@ -14,7 +14,7 @@ import ida_xref
 import ida_ua
 import ida_name
 from .rpc import tool
-from .sync import idasync, tool_timeout
+from .sync import idasync, tool_timeout, IDAError
 from .utils import (
     parse_address,
     normalize_list_input,
@@ -169,11 +169,17 @@ def _resolve_immediate_insn_start(
 @idasync
 @tool_timeout(90.0)
 def decompile(
-    addr: Annotated[str, "Function address to decompile"],
+    addr: Annotated[str, "Function address or name to decompile"],
 ) -> dict:
     """Decompile function to pseudocode"""
     try:
-        start = parse_address(addr)
+        try:
+            start = parse_address(addr)
+        except IDAError:
+            ea = idaapi.get_name_ea(idaapi.BADADDR, addr)
+            if ea == idaapi.BADADDR:
+                return {"addr": addr, "code": None, "error": f"Function not found: {addr!r}"}
+            start = ea
         code = decompile_function_safe(start)
         if code is None:
             return {"addr": addr, "code": None, "error": "Decompilation failed"}
@@ -186,7 +192,7 @@ def decompile(
 @idasync
 @tool_timeout(90.0)
 def disasm(
-    addr: Annotated[str, "Function address to disassemble"],
+    addr: Annotated[str, "Function address or name to disassemble"],
     max_instructions: Annotated[
         int, "Max instructions per function (default: 5000, max: 50000)"
     ] = 5000,
@@ -204,7 +210,13 @@ def disasm(
         offset = 0
 
     try:
-        start = parse_address(addr)
+        try:
+            start = parse_address(addr)
+        except IDAError:
+            ea = idaapi.get_name_ea(idaapi.BADADDR, addr)
+            if ea == idaapi.BADADDR:
+                return {"addr": addr, "asm": None, "error": f"Function not found: {addr!r}", "cursor": {"done": True}}
+            start = ea
         func = idaapi.get_func(start)
 
         # Get segment info
