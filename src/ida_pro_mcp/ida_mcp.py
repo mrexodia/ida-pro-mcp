@@ -28,21 +28,46 @@ CONFIG_ACTION_ID = "mcp:configure"
 CONFIG_ACTION_LABEL = "MCP Configuration"
 
 
+class MCPConfigForm(idaapi.Form):
+    """Form to configure MCP server host and port."""
+
+    def __init__(self, host: str, port: int):
+        form_str = r"""STARTITEM 0
+MCP Server Configuration
+
+<Host:{host}>
+<Port:{port}>
+"""
+        super().__init__(
+            form_str,
+            {
+                "host": idaapi.Form.StringInput(value=host),
+                "port": idaapi.Form.NumericInput(value=port, tp=idaapi.Form.FT_DEC),
+            },
+        )
+
+
 class MCPConfigHandler(idaapi.action_handler_t):
     def __init__(self, plugin: "MCP"):
         idaapi.action_handler_t.__init__(self)
         self.plugin = plugin
 
     def activate(self, ctx):
-        host = ida_kernwin.ask_str(self.plugin.host, 0, "MCP server host:")
-        if host is None:
+        form = MCPConfigForm(self.plugin.host, self.plugin.port)
+        form.Compile()
+        ok = form.Execute()
+        if ok != 1:
+            form.Free()
             return 0
-        port = ida_kernwin.ask_long(self.plugin.port, "MCP server port (1-65535):")
-        if port is None:
-            return 0
+
+        host = form.host.value
+        port = form.port.value
+        form.Free()
+
         if port < 1 or port > 65535:
             print(f"[MCP] Invalid port: {port}")
             return 0
+
         self.plugin.host = host
         self.plugin.port = port
         print(f"[MCP] Configuration updated: {host}:{port}")
@@ -130,7 +155,7 @@ class MCP(idaapi.plugin_t):
                     port += 1
                 else:
                     raise
-        print(f"[MCP] Error: No available port in range {self.PORT}-{max_port - 1}")
+        print(f"[MCP] Error: No available port in range {self.port}-{max_port - 1}")
 
     def term(self):
         if hasattr(self, "_ui_hooks"):
