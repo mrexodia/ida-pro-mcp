@@ -32,7 +32,10 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Run tests with coverage
-        run: uv run coverage run -m ida_pro_mcp.test tests/crackme03.elf
+        run: |
+          uv run coverage erase
+          uv run coverage run -m ida_pro_mcp.test tests/crackme03.elf -q
+          uv run coverage run --append -m ida_pro_mcp.test tests/typed_fixture.elf -q
 
       - name: Fix git safe directory
         run: git config --global --add safe.directory /github/workspace

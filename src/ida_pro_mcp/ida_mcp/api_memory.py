@@ -241,6 +241,9 @@ def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[dict]:
             ea = parse_address(patch["addr"])
             data = bytes.fromhex(patch["data"])
 
+            if not ida_bytes.is_mapped(ea):
+                raise ValueError(f"Address not mapped: {patch['addr']}")
+
             ida_bytes.patch_bytes(ea, data)
             results.append(
                 {"addr": patch["addr"], "size": len(data), "ok": True, "error": None}
@@ -280,6 +283,8 @@ def put_int(
                 raise ValueError(f"Value {value_text} does not fit in {normalized}")
 
             ea = parse_address(addr)
+            if not ida_bytes.is_mapped(ea):
+                raise ValueError(f"Address not mapped: {addr}")
             ida_bytes.patch_bytes(ea, data)
             results.append(
                 {

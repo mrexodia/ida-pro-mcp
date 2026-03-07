@@ -75,14 +75,6 @@ With coverage:
         action="store_true",
         help="Show IDA console messages",
     )
-    parser.add_argument(
-        "--sample-size",
-        "-n",
-        type=int,
-        default=5,
-        help="Number of items for sampling-based tests (default: 5)",
-    )
-
     args = parser.parse_args()
 
     # Check binary exists
@@ -109,7 +101,7 @@ With coverage:
 
     try:
         # Import test framework AFTER idalib is initialized
-        from ida_pro_mcp.ida_mcp.framework import run_tests, TESTS, set_sample_size
+        from ida_pro_mcp.ida_mcp.framework import run_tests, TESTS
 
         # Import all test modules to register @test decorators.
         # Use pkgutil discovery so registration works even if tests package
@@ -123,9 +115,6 @@ With coverage:
             for mod in pkgutil.iter_modules(tests_pkg.__path__):
                 if mod.name.startswith("test_"):
                     importlib.import_module(f"{tests_pkg_name}.{mod.name}")
-
-        # Configure sample size for deterministic sampling helpers
-        set_sample_size(args.sample_size)
 
         if not TESTS:
             print(
@@ -151,11 +140,14 @@ With coverage:
             return 0
 
         # Run tests
+        interactive_output = sys.stdout.isatty()
+        show_all_test_output = (not args.quiet) and interactive_output
         results = run_tests(
             pattern=args.pattern,
             category=args.category,
-            verbose=not args.quiet,
+            verbose=show_all_test_output,
             stop_on_failure=args.stop_on_failure,
+            failures_only=(not args.quiet) and not interactive_output,
         )
 
         # No matched tests is likely a configuration/test-selection mistake

@@ -147,7 +147,9 @@ def idalib_close(session_id: Annotated[str, "Session ID to close"]) -> dict:
 
 
 @tool
-def idalib_switch(session_id: Annotated[str, "Session ID to bind to active context"]) -> dict:
+def idalib_switch(
+    session_id: Annotated[str, "Session ID to bind to active context"],
+) -> dict:
     """Bind the active idalib context to a session and activate it."""
 
     try:
@@ -297,7 +299,9 @@ def main():
             raise FileNotFoundError(f"Input file not found: {args.input_path}")
 
         logger.info("opening initial database: %s", args.input_path)
-        session_id = session_manager.open_binary(args.input_path, run_auto_analysis=True)
+        session_id = session_manager.open_binary(
+            args.input_path, run_auto_analysis=True
+        )
         logger.info("Initial session created: %s", session_id)
 
         startup_context_id = (

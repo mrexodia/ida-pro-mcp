@@ -1,19 +1,20 @@
 """Tests for api_analysis API functions."""
 
-# Import test framework from parent
 from ..framework import (
     test,
-    assert_has_keys,
+    skip_test,
+    assert_valid_address,
+    assert_non_empty,
     assert_is_list,
+    assert_shape,
+    assert_ok,
+    assert_error,
+    is_hex_address,
+    optional,
     get_any_function,
-    get_n_functions,
     get_data_address,
     get_unmapped_address,
-    get_functions_with_calls,
-    get_functions_with_callers,
 )
-
-# Import functions under test
 from ..api_analysis import (
     decompile,
     disasm,
@@ -27,233 +28,233 @@ from ..api_analysis import (
     callgraph,
 )
 
-# Import sync module for IDAError
 
-
-# ============================================================================
-# Tests for decompile
-# ============================================================================
+CRACKME_CHECK_PW = "0x11a9"
+CRACKME_MAIN = "0x123e"
+CRACKME_CALL_TO_CHECK_PW = "0x12d3"
+CRACKME_USAGE_STRING = "0x2004"
 
 
 @test()
 def test_decompile_valid_function():
-    """decompile returns code for a valid function"""
+    """decompile returns non-empty pseudocode for a valid function."""
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
     result = decompile(fn_addr)
-    assert isinstance(result, dict)
-    assert_has_keys(result, "addr")
-    # Either has code or has an error
-    assert result.get("code") is not None or result.get("error") is not None
+    assert_shape(result, {"addr": str, "code": optional(str), "error": optional(str)})
+    assert_ok(result, "code")
+    assert_non_empty(result["code"])
+
+
+@test(binary="crackme03.elf")
+def test_decompile_main_contains_expected_logic():
+    """decompile(main) exposes the core crackme logic in pseudocode."""
+    result = decompile("main")
+    assert_ok(result, "code")
+    code = result["code"]
+    assert "check_pw" in code
+    assert "Need exactly one argument." in code
+    assert "Yes, %s is correct!" in code
 
 
 @test()
 def test_decompile_invalid_address():
-    """decompile handles invalid address gracefully"""
+    """decompile reports an error for an unmapped address."""
     result = decompile(get_unmapped_address())
-    assert isinstance(result, dict)
-    # Should have an error
-    assert result.get("error") is not None or result.get("code") is None
+    assert result["code"] is None
+    assert_error(result)
 
 
 @test()
-def test_decompile_batch():
-    """decompile can be called for multiple addresses"""
-    addrs = get_n_functions(3)
+def test_decompile_batch_addresses():
+    """multiple valid function addresses can all be decompiled individually."""
+    import idautils
+
+    addrs = [hex(ea) for ea in list(idautils.Functions())[:3]]
     if len(addrs) < 2:
-        return
+        skip_test("binary has fewer than two functions")
 
     results = [decompile(addr) for addr in addrs]
     assert len(results) == len(addrs)
-    for r in results:
-        assert isinstance(r, dict)
-        assert_has_keys(r, "addr")
+    for result, addr in zip(results, addrs):
+        assert result["addr"] == addr
+        assert_ok(result, "code")
 
 
-@test()
+@test(binary="crackme03.elf")
 def test_decompile_by_name():
-    """decompile accepts a function name string"""
-    import ida_funcs
-
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return
-
-    name = ida_funcs.get_func_name(int(fn_addr, 16))
-    if not name:
-        return
-
-    result = decompile(name)
-    assert result.get("error") is None
-    assert result.get("code") is not None
+    """decompile accepts a function name and returns crackme pseudocode."""
+    result = decompile("check_pw")
+    assert_ok(result, "code")
+    assert "return" in result["code"]
 
 
 @test()
 def test_decompile_unknown_name():
-    """decompile returns error for unknown function name"""
+    """decompile returns a specific error for an unknown function name."""
     result = decompile("nonexistent_function_xyz")
-    assert result.get("error") is not None
-    assert "Function not found" in result["error"]
-
-
-# ============================================================================
-# Tests for disasm
-# ============================================================================
+    assert result["code"] is None
+    assert_error(result, contains="Function not found")
 
 
 @test()
 def test_disasm_valid_function():
-    """disasm returns assembly for a valid function"""
+    """disasm returns non-empty assembly for a valid function."""
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
     result = disasm(fn_addr)
-    assert isinstance(result, dict)
-    assert_has_keys(result, "addr")
-    # Should have asm output or error
-    assert result.get("asm") is not None or result.get("error") is not None
+    assert_shape(
+        result,
+        {
+            "addr": str,
+            "asm": optional(
+                {
+                    "name": str,
+                    "start_ea": is_hex_address,
+                    "lines": str,
+                }
+            ),
+            "instruction_count": int,
+            "total_instructions": optional(int),
+            "cursor": dict,
+            "error": optional(str),
+        },
+    )
+    assert_ok(result, "asm")
+    assert_non_empty(result["asm"]["lines"])
+
+
+@test(binary="crackme03.elf")
+def test_disasm_main_contains_expected_calls():
+    """disasm(main) contains the expected crackme call sites and metadata."""
+    result = disasm(CRACKME_MAIN, max_instructions=64)
+    assert_ok(result, "asm")
+    asm = result["asm"]
+    assert asm["name"] == "main"
+    assert asm["start_ea"] == CRACKME_MAIN
+    assert "check_pw" in asm["lines"]
+    assert "_puts" in asm["lines"]
+    assert result["instruction_count"] > 0
 
 
 @test()
 def test_disasm_pagination():
-    """disasm respects max_instructions parameter"""
+    """disasm enforces max_instructions and advances the cursor."""
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
-    result = disasm(fn_addr, max_instructions=10)
-    assert isinstance(result, dict)
-    assert result.get("instruction_count", 0) <= 10
+    page1 = disasm(fn_addr, max_instructions=5)
+    assert_ok(page1, "asm")
+    assert page1["instruction_count"] <= 5
+    if "next" in page1["cursor"]:
+        page2 = disasm(fn_addr, max_instructions=5, offset=page1["cursor"]["next"])
+        assert_ok(page2, "asm")
+        assert page2["asm"]["lines"] != page1["asm"]["lines"]
 
 
 @test()
 def test_disasm_unmapped_address():
-    """disasm handles unmapped address"""
+    """disasm reports an error for an unmapped address."""
     result = disasm(get_unmapped_address())
-    assert isinstance(result, dict)
-    # Should have error or empty asm
-    assert (
-        result.get("error") is not None
-        or result.get("asm") == ""
-        or result.get("asm") is None
-    )
+    assert result["asm"] is None
+    assert_error(result)
 
 
 @test()
 def test_disasm_data_segment():
-    """disasm handles data segment addresses"""
+    """disasm can still produce a structured response for a data-segment address."""
     data_addr = get_data_address()
     if not data_addr:
-        return
+        skip_test("binary has no data segment")
 
-    result = disasm(data_addr)
-    assert isinstance(result, dict)
-    assert_has_keys(result, "addr")
+    result = disasm(data_addr, max_instructions=4)
+    assert result["addr"] == data_addr
+    assert "cursor" in result
 
 
-@test()
+@test(binary="crackme03.elf")
 def test_disasm_by_name():
-    """disasm accepts a function name string"""
-    import ida_funcs
-
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return
-
-    name = ida_funcs.get_func_name(int(fn_addr, 16))
-    if not name:
-        return
-
-    result = disasm(name)
-    assert result.get("error") is None
-    assert result.get("asm") is not None
+    """disasm accepts a function name and returns the correct symbol metadata."""
+    result = disasm("check_pw", max_instructions=8)
+    assert_ok(result, "asm")
+    assert result["asm"]["name"] == "check_pw"
+    assert result["asm"]["start_ea"] == CRACKME_CHECK_PW
 
 
 @test()
 def test_disasm_unknown_name():
-    """disasm returns error for unknown function name"""
+    """disasm returns a specific error for an unknown function name."""
     result = disasm("nonexistent_function_xyz")
-    assert result.get("error") is not None
-    assert "Function not found" in result["error"]
+    assert result["asm"] is None
+    assert_error(result, contains="Function not found")
 
 
 @test()
 def test_disasm_interior_address_preserves_cursor():
-    """disasm start_ea reflects the queried address for pagination, not func entry"""
-    import idc
+    """disasm preserves the queried interior address as start_ea for pagination."""
     import idaapi
+    import idc
 
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
-    ea = int(fn_addr, 16)
-    func = idaapi.get_func(ea)
+    func = idaapi.get_func(int(fn_addr, 16))
     if not func:
-        return
+        skip_test("IDA could not resolve function object")
 
     interior = idc.next_head(func.start_ea, func.end_ea)
     if interior == idaapi.BADADDR or interior == func.start_ea:
-        return
+        skip_test("function has no interior instruction")
 
-    result = disasm(hex(interior))
-    assert result.get("asm") is not None
+    result = disasm(hex(interior), max_instructions=4)
+    assert_ok(result, "asm")
     assert result["asm"]["start_ea"] == hex(interior)
 
 
-# ============================================================================
-# Tests for xrefs_to
-# ============================================================================
-
-
-@test()
-def test_xrefs_to():
-    """xrefs_to returns cross-references for a function"""
-    fn_addrs = get_functions_with_callers()
-    if not fn_addrs:
-        # Fallback to any function
-        fn_addr = get_any_function()
-        if not fn_addr:
-            return
-    else:
-        fn_addr = fn_addrs[0]
-
-    result = xrefs_to(fn_addr)
+@test(binary="crackme03.elf")
+def test_xrefs_to_check_pw_from_main():
+    """xrefs_to(check_pw) includes the known call from main."""
+    result = xrefs_to(CRACKME_CHECK_PW)
     assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "addr", "xrefs")
+    entry = result[0]
+    assert entry["addr"] == CRACKME_CHECK_PW
+    assert_is_list(entry["xrefs"], min_length=1)
+    hit = next(
+        (xref for xref in entry["xrefs"] if xref["addr"] == CRACKME_CALL_TO_CHECK_PW),
+        None,
+    )
+    assert hit is not None, "expected call site 0x12d3 -> check_pw"
+    assert hit["type"] == "code"
+    assert hit["fn"]["name"] == "main"
 
 
 @test()
 def test_xrefs_to_invalid():
-    """xrefs_to handles invalid address"""
+    """xrefs_to reports an error or empty xrefs for an invalid address."""
     result = xrefs_to(get_unmapped_address())
     assert_is_list(result, min_length=1)
-    # Should return empty xrefs or error
-    r = result[0]
-    assert_has_keys(r, "addr")
-
-
-# ============================================================================
-# Tests for xrefs_to_field
-# ============================================================================
+    assert result[0]["addr"] == get_unmapped_address()
+    if result[0].get("xrefs") is None:
+        assert_error(result[0])
 
 
 @test()
 def test_xrefs_to_field_nonexistent_struct():
-    """xrefs_to_field handles non-existent struct"""
+    """xrefs_to_field reports a missing-struct error."""
     result = xrefs_to_field({"struct": "NonExistentStruct", "field": "nonexistent"})
     assert_is_list(result, min_length=1)
-    r = result[0]
-    assert r.get("error") is not None
+    assert_error(result[0])
 
 
 @test()
 def test_xrefs_to_field_batch():
-    """xrefs_to_field handles batch queries"""
+    """xrefs_to_field accepts batch input and returns one result per query."""
     result = xrefs_to_field(
         [
             {"struct": "Struct1", "field": "field1"},
@@ -263,34 +264,27 @@ def test_xrefs_to_field_batch():
     assert_is_list(result, min_length=2)
 
 
-# ============================================================================
-# Tests for callees
-# ============================================================================
-
-
-@test()
-def test_callees():
-    """callees returns functions called by a function"""
-    fn_addrs = get_functions_with_calls()
-    if not fn_addrs:
-        fn_addr = get_any_function()
-        if not fn_addr:
-            return
-    else:
-        fn_addr = fn_addrs[0]
-
-    result = callees(fn_addr)
+@test(binary="crackme03.elf")
+def test_callees_main_contains_expected_targets():
+    """callees(main) returns the expected crackme callees."""
+    result = callees(CRACKME_MAIN)
     assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "addr", "callees")
+    entry = result[0]
+    assert_is_list(entry["callees"], min_length=1)
+    by_name = {callee["name"]: callee for callee in entry["callees"]}
+    assert "check_pw" in by_name
+    assert ".printf" in by_name
+    assert by_name["check_pw"]["addr"] == CRACKME_CHECK_PW
 
 
 @test()
 def test_callees_multiple():
-    """callees handles multiple addresses"""
-    addrs = get_n_functions(3)
+    """callees accepts multiple addresses and returns one result per input."""
+    import idautils
+
+    addrs = [hex(ea) for ea in list(idautils.Functions())[:3]]
     if len(addrs) < 2:
-        return
+        skip_test("binary has fewer than two functions")
 
     result = callees(addrs)
     assert len(result) == len(addrs)
@@ -298,128 +292,176 @@ def test_callees_multiple():
 
 @test()
 def test_callees_invalid_address():
-    """callees handles invalid address"""
+    """callees reports a useful error for an invalid address."""
     result = callees(get_unmapped_address())
     assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "addr")
+    assert result[0]["callees"] is None
+    assert_error(result[0])
 
 
-# ============================================================================
-# Tests for find_bytes
-# ============================================================================
+@test(binary="crackme03.elf")
+def test_find_bytes_matches_known_call_opcode_sequence():
+    """find_bytes can locate a known call opcode sequence in the crackme text section."""
+    result = find_bytes("E8", limit=20)
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert entry["n"] > 0
+    assert_is_list(entry["matches"], min_length=1)
+    for addr in entry["matches"]:
+        assert_valid_address(addr)
+
+
+@test(binary="crackme03.elf")
+def test_basic_blocks_main_matches_known_cfg_shape():
+    """basic_blocks(main) returns the known crackme CFG entry block and block count."""
+    result = basic_blocks(CRACKME_MAIN)
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert_ok(entry, "blocks")
+    assert entry["total_blocks"] == 9
+    assert entry["blocks"][0]["start"] == CRACKME_MAIN
+    assert entry["blocks"][0]["end"] == "0x1266"
+    for block in entry["blocks"]:
+        assert_valid_address(block["start"])
+        assert_valid_address(block["end"])
+        assert int(block["end"], 16) > int(block["start"], 16)
 
 
 @test()
-def test_find_bytes():
-    """find_bytes can search for byte patterns"""
-    # Search for common bytes that should exist
-    result = find_bytes("00 00")
+def test_basic_blocks_invalid_address():
+    """basic_blocks reports a function-not-found error for unmapped roots."""
+    result = basic_blocks(get_unmapped_address())
     assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "pattern", "matches")
+    assert_error(result[0], contains="Function not found")
 
 
-# ============================================================================
-# Tests for basic_blocks
-# ============================================================================
-
-
-@test()
-def test_basic_blocks():
-    """basic_blocks returns blocks for a function"""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return
-
-    result = basic_blocks(fn_addr)
+@test(binary="crackme03.elf")
+def test_find_string_known_usage_literal():
+    """find(string, ...) locates the known crackme usage string."""
+    result = find("string", "Need exactly one argument.")
     assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "addr", "blocks", "error")
+    entry = result[0]
+    assert entry["error"] is None
+    assert CRACKME_USAGE_STRING in entry["matches"]
 
 
-# ============================================================================
-# Tests for find
-# ============================================================================
-
-
-@test()
-def test_find_string():
-    """find can search for strings"""
-    # Most binaries have some strings
-    result = find("string", "*")
+@test(binary="crackme03.elf")
+def test_find_code_ref_to_check_pw():
+    """find(code_ref, check_pw) finds the known call site inside main."""
+    result = find("code_ref", CRACKME_CHECK_PW)
     assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "query", "matches", "error")
+    entry = result[0]
+    assert entry["error"] is None
+    assert CRACKME_CALL_TO_CHECK_PW in entry["matches"]
 
 
 @test()
 def test_find_invalid_type():
-    """find handles invalid search type"""
+    """find reports an unknown search type as an error."""
     result = find("invalid_type", "test")
     assert_is_list(result, min_length=1)
-    r = result[0]
-    # Should have error for invalid type
-    assert r.get("error") is not None
-
-
-# ============================================================================
-# Tests for export_funcs
-# ============================================================================
+    assert_error(result[0], contains="Unknown search type")
 
 
 @test()
-def test_export_funcs_json():
-    """export_funcs returns JSON format"""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return
-
-    result = export_funcs(fn_addr, format="json")
-    assert isinstance(result, dict)
-    assert result.get("format") == "json"
-    functions = result.get("functions", [])
-    assert_is_list(functions, min_length=1)
-    assert_has_keys(functions[0], "addr")
+def test_find_immediate_out_of_range():
+    """find(immediate, ...) reports out-of-range immediates explicitly."""
+    result = find("immediate", str(1 << 80))
+    assert_is_list(result, min_length=1)
+    assert_error(result[0], contains="Immediate out of range")
 
 
 @test()
-def test_export_funcs_c_header():
-    """export_funcs returns C header format"""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return
+def test_find_data_ref_invalid_target():
+    """find(data_ref, ...) reports invalid target address parsing errors."""
+    result = find("data_ref", "definitely_not_an_address")
+    assert_is_list(result, min_length=1)
+    assert_error(result[0], contains="Failed to parse address")
 
-    result = export_funcs(fn_addr, format="c_header")
-    assert isinstance(result, dict)
-    assert result.get("format") == "c_header"
-    assert isinstance(result.get("content"), str)
+
+@test()
+def test_find_string_empty_pattern():
+    """find(string, '') reports an empty-pattern error rather than silently succeeding."""
+    result = find("string", "")
+    assert_is_list(result, min_length=1)
+    assert_error(result[0], contains="Empty pattern")
+
+
+@test(binary="crackme03.elf")
+def test_export_funcs_json_contains_expected_content():
+    """export_funcs(json) returns prototype, asm, code and xrefs for main."""
+    result = export_funcs(CRACKME_MAIN, format="json")
+    assert result["format"] == "json"
+    assert_is_list(result["functions"], min_length=1)
+    fn = result["functions"][0]
+    assert fn["name"] == "main"
+    assert "prototype" in fn and "int __fastcall" in fn["prototype"]
+    assert "check_pw" in fn["asm"]
+    assert "Need exactly one argument." in fn["code"]
+    assert isinstance(fn["xrefs"], dict)
+
+
+@test(binary="crackme03.elf")
+def test_export_funcs_c_header_contains_main_prototype():
+    """export_funcs(c_header) emits a declaration-like header containing main."""
+    result = export_funcs(CRACKME_MAIN, format="c_header")
+    assert result["format"] == "c_header"
+    assert "__fastcall" in result["content"]
+    assert "Auto-generated by IDA Pro MCP" in result["content"]
+
+
+@test(binary="typed_fixture.elf")
+def test_export_funcs_prototypes_format():
+    """export_funcs(prototypes) returns a compact prototype list for typed_fixture."""
+    result = export_funcs("0x1013dc0", format="prototypes")
+    assert result["format"] == "prototypes"
+    assert_is_list(result["functions"], min_length=1)
+    assert result["functions"][0]["name"] == "use_wrapper"
+    assert "__cdecl" in result["functions"][0]["prototype"]
 
 
 @test()
 def test_export_funcs_invalid_address():
-    """export_funcs handles invalid address"""
+    """export_funcs(json) reports an error for an invalid function address."""
     result = export_funcs(get_unmapped_address(), format="json")
-    assert isinstance(result, dict)
-    assert result.get("format") == "json"
-    functions = result.get("functions", [])
-    assert_is_list(functions, min_length=1)
-    assert functions[0].get("error") is not None
+    assert result["format"] == "json"
+    assert_is_list(result["functions"], min_length=1)
+    assert_error(result["functions"][0])
 
 
-# ============================================================================
-# Tests for callgraph
-# ============================================================================
+@test(binary="crackme03.elf")
+def test_callgraph_main_contains_expected_nodes():
+    """callgraph(main) includes main, check_pw and imported callees."""
+    result = callgraph(CRACKME_MAIN)
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert_is_list(entry["nodes"], min_length=1)
+    assert_is_list(entry["edges"], min_length=1)
+    names = {node["name"] for node in entry["nodes"]}
+    assert {"main", "check_pw", ".puts", ".printf"}.issubset(names)
+    for node in entry["nodes"]:
+        assert_valid_address(node["addr"])
+        assert node["depth"] >= 0
+    for edge in entry["edges"]:
+        assert_valid_address(edge["from"])
+        assert_valid_address(edge["to"])
+        assert edge["type"] == "call"
+
+
+@test(binary="typed_fixture.elf")
+def test_callgraph_depth_zero_keeps_only_root_node():
+    """callgraph(max_depth=0) still returns the root node deterministically."""
+    result = callgraph("0x1013dc0", max_depth=0)
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert len(entry["nodes"]) == 1
+    assert entry["nodes"][0]["name"] == "use_wrapper"
+    assert entry["nodes"][0]["depth"] == 0
 
 
 @test()
-def test_callgraph():
-    """callgraph returns call graph data"""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return
-
-    result = callgraph(fn_addr)
+def test_callgraph_invalid_root():
+    """callgraph reports an error for an invalid root function."""
+    result = callgraph(get_unmapped_address())
     assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "root", "nodes", "edges")
+    assert_error(result[0])

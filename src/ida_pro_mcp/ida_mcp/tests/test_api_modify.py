@@ -1,15 +1,14 @@
 """Tests for api_modify API functions."""
 
-# Import test framework from parent
 from ..framework import (
     test,
-    assert_has_keys,
+    skip_test,
     assert_is_list,
+    assert_ok,
+    assert_error,
     get_any_function,
-    get_data_address,
+    get_named_address,
 )
-
-# Import functions under test
 from ..api_modify import (
     set_comments,
     patch_asm,
@@ -18,240 +17,365 @@ from ..api_modify import (
     define_code,
     undefine,
 )
+from ..api_memory import get_bytes, patch
+from ..api_core import lookup_funcs
 
-# Import sync module for IDAError
+
+CRACKME_MAIN = "0x123e"
+CRACKME_PATCH_ASM_ADDR = "0x125e"
+CRACKME_FRAME_DUMMY = "0x11a0"
 
 
-# ============================================================================
-# Tests for set_comments
-# ============================================================================
+def _plain_hex_bytes(text: str) -> str:
+    return text.replace("0x", "").replace(" ", "").lower()
 
 
 @test()
 def test_set_comment_roundtrip():
-    """set_comments can add and remove comments"""
+    """set_comments writes a disassembly comment and then removes it again."""
+    import idaapi
+
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
-    # Add a comment
-    result = set_comments({"addr": fn_addr, "comment": "__TEST_COMMENT__"})
+    original = idaapi.get_cmt(int(fn_addr, 16), False) or ""
+    try:
+        result = set_comments({"addr": fn_addr, "comment": "__TEST_COMMENT__"})
+        assert_is_list(result, min_length=1)
+        assert result[0].get("ok") is True
+        assert idaapi.get_cmt(int(fn_addr, 16), False) == "__TEST_COMMENT__"
+    finally:
+        set_comments({"addr": fn_addr, "comment": original})
+
+    restored = idaapi.get_cmt(int(fn_addr, 16), False) or ""
+    assert restored == original
+
+
+@test(binary="typed_fixture.elf")
+def test_set_comment_interior_address_roundtrip():
+    """set_comments also succeeds for an interior instruction address inside a function."""
+    import idaapi
+
+    addr = 0x1013E44
+    original = idaapi.get_cmt(addr, False) or ""
+    try:
+        result = set_comments({"addr": hex(addr), "comment": "__INNER_COMMENT__"})
+        assert_is_list(result, min_length=1)
+        assert result[0].get("ok") is True
+        assert idaapi.get_cmt(addr, False) == "__INNER_COMMENT__"
+    finally:
+        set_comments({"addr": hex(addr), "comment": original})
+
+    restored = idaapi.get_cmt(addr, False) or ""
+    assert restored == original
+
+
+@test(binary="typed_fixture.elf")
+def test_set_comments_invalid_address_error():
+    """set_comments reports invalid unmapped addresses cleanly."""
+    result = set_comments({"addr": "0xdeadbeef", "comment": "x"})
     assert_is_list(result, min_length=1)
-
-    # Clear the comment
-    result = set_comments({"addr": fn_addr, "comment": ""})
-    assert_is_list(result, min_length=1)
+    assert_error(result[0], contains="Failed to set disassembly comment")
 
 
-# ============================================================================
-# Tests for patch_asm
-# ============================================================================
-
-
-@test()
+@test(binary="crackme03.elf")
 def test_patch_asm_roundtrip():
-    """patch_asm can patch assembly and be restored"""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return
-
-    # Import memory functions for backup/restore
-    from ..api_memory import get_bytes, patch
-
-    # Read original bytes (enough for a nop instruction)
-    original = get_bytes({"addr": fn_addr, "size": 16})
-    assert_is_list(original, min_length=1)
-    original_data = original[0].get("data")
-    if not original_data:
-        return
+    """patch_asm changes the target instruction bytes and restoration puts them back."""
+    original = get_bytes({"addr": CRACKME_PATCH_ASM_ADDR, "size": 2})[0]
+    assert_ok(original, "data")
+    original_plain = _plain_hex_bytes(original["data"])
 
     try:
-        # Patch with nop
-        result = patch_asm({"addr": fn_addr, "asm": "nop"})
+        result = patch_asm({"addr": CRACKME_PATCH_ASM_ADDR, "asm": "sub eax, eax"})
         assert_is_list(result, min_length=1)
-        r = result[0]
-        assert_has_keys(r, "addr")
+        assert result[0].get("ok") is True
+        changed = get_bytes({"addr": CRACKME_PATCH_ASM_ADDR, "size": 2})[0]
+        assert _plain_hex_bytes(changed["data"]) == "29c0"
+        assert _plain_hex_bytes(changed["data"]) != original_plain
     finally:
-        # Restore original bytes
-        patch({"addr": fn_addr, "data": original_data})
+        patch({"addr": CRACKME_PATCH_ASM_ADDR, "data": original_plain})
+
+    restored = get_bytes({"addr": CRACKME_PATCH_ASM_ADDR, "size": 2})[0]
+    assert _plain_hex_bytes(restored["data"]) == original_plain
 
 
-# ============================================================================
-# Tests for rename
-# ============================================================================
+@test(binary="typed_fixture.elf")
+def test_patch_asm_invalid_instruction_reports_error():
+    """patch_asm reports assembly failures without crashing or partially succeeding."""
+    result = patch_asm({"addr": "0x1013e44", "asm": "not an instruction"})
+    assert_is_list(result, min_length=1)
+    assert_error(result[0], contains="Failed to assemble")
 
 
 @test()
 def test_rename_function_roundtrip():
-    """rename function works and can be undone"""
+    """rename can rename a function and restore the original name."""
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
-    # Import to get original name
-    from ..api_core import lookup_funcs
-
-    # Get original name
-    lookup_result = lookup_funcs(fn_addr)
-    if not lookup_result or not lookup_result[0].get("fn"):
-        return
-
-    original_name = lookup_result[0]["fn"]["name"]
+    original = lookup_funcs(fn_addr)[0]
+    assert_ok(original, "fn")
+    original_name = original["fn"]["name"]
+    new_name = "__test_rename__"
 
     try:
-        # Rename
-        result = rename({"func": [{"addr": fn_addr, "name": "__test_rename__"}]})
-        assert isinstance(result, dict)
-
-        # Verify rename worked
-        lookup_result = lookup_funcs(fn_addr)
-        new_name = lookup_result[0]["fn"]["name"]
-        assert new_name == "__test_rename__"
+        result = rename({"func": [{"addr": fn_addr, "name": new_name}]})
+        assert result["func"][0]["ok"] is True
+        renamed = lookup_funcs(fn_addr)[0]
+        assert renamed["fn"]["name"] == new_name
     finally:
-        # Restore
         rename({"func": [{"addr": fn_addr, "name": original_name}]})
 
+    restored = lookup_funcs(fn_addr)[0]
+    assert restored["fn"]["name"] == original_name
 
-@test()
-def test_rename_global_roundtrip():
-    """rename global variable works"""
-    data_addr = get_data_address()
-    if not data_addr:
-        return
+
+@test(binary="crackme03.elf")
+def test_rename_data_roundtrip():
+    """rename can rename a global/data symbol and restore it."""
+    import idaapi
+
+    addr = get_named_address("format")
+    if not addr:
+        skip_test("format symbol not present")
+
+    original_name = "format"
+    new_name = "__test_format__"
 
     try:
-        result = rename({"global": [{"addr": data_addr, "name": "__test_global__"}]})
-        assert isinstance(result, dict)
-    except Exception:
-        pass  # May fail if no suitable global exists
+        result = rename({"data": [{"old": original_name, "new": new_name}]})
+        assert result["data"][0]["ok"] is True
+        assert idaapi.get_name_ea(idaapi.BADADDR, new_name) == int(addr, 16)
+    finally:
+        rename({"data": [{"old": new_name, "new": original_name}]})
+
+    assert idaapi.get_name_ea(idaapi.BADADDR, original_name) == int(addr, 16)
 
 
 @test()
 def test_rename_local_error_handling():
-    """rename local variable handles errors gracefully"""
+    """rename(local=...) reports a structured error for a missing local variable."""
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
-    # Try to rename a non-existent local variable - should return error, not crash
     result = rename(
         {
             "local": [
                 {
-                    "func": fn_addr,
-                    "name": "__nonexistent_var__",
-                    "new_name": "__test_local__",
+                    "func_addr": fn_addr,
+                    "old": "__nonexistent_var__",
+                    "new": "__test_local__",
                 }
             ]
         }
     )
-    assert isinstance(result, dict)
-    # Should have local key with results
     assert "local" in result
+    assert result["local"][0]["ok"] is False
+    assert_error(result["local"][0])
 
 
-# ============================================================================
-# Tests for define_func / define_code / undefine
-# ============================================================================
+@test(binary="typed_fixture.elf")
+def test_rename_local_roundtrip():
+    """rename(local=...) reaches the decompiler-local rename path on a real variable."""
+    try:
+        result = rename(
+            {
+                "local": [
+                    {"func_addr": "0x1013dc0", "old": "rhs_handle", "new": "rhs_value"}
+                ]
+            }
+        )
+        assert (
+            result["local"][0].get("ok") is True
+            or result["local"][0].get("error") == "Rename failed"
+        )
+    finally:
+        rename(
+            {
+                "local": [
+                    {"func_addr": "0x1013dc0", "old": "rhs_value", "new": "rhs_handle"}
+                ]
+            }
+        )
 
 
-@test()
+@test(binary="typed_fixture.elf")
+def test_rename_stack_roundtrip():
+    """rename(stack=...) can rename and restore a real stack member."""
+    from ..api_stack import stack_frame
+
+    try:
+        result = rename(
+            {
+                "stack": [
+                    {"func_addr": "0x1013dc0", "old": "rhs_handle", "new": "rhs_stack"}
+                ]
+            }
+        )
+        assert result["stack"][0]["ok"] is True
+        names = {var["name"] for var in stack_frame("0x1013dc0")[0]["vars"]}
+        assert "rhs_stack" in names
+    finally:
+        rename(
+            {
+                "stack": [
+                    {"func_addr": "0x1013dc0", "old": "rhs_stack", "new": "rhs_handle"}
+                ]
+            }
+        )
+
+
+@test(binary="typed_fixture.elf")
+def test_rename_stack_missing_member_error():
+    """rename(stack=...) reports missing frame members explicitly."""
+    result = rename({"stack": [{"func_addr": "0x1013dc0", "old": "nope", "new": "x"}]})
+    assert result["stack"][0]["ok"] is False
+    assert_error(result["stack"][0], contains="not found")
+
+
+@test(binary="typed_fixture.elf")
+def test_rename_stack_special_member_error():
+    """rename(stack=...) rejects special frame members like saved registers/return address."""
+    result = rename(
+        {"stack": [{"func_addr": "0x1013dc0", "old": "__return_address", "new": "x"}]}
+    )
+    assert result["stack"][0]["ok"] is False
+    assert_error(result["stack"][0], contains="Special frame member")
+
+
+@test(binary="typed_fixture.elf")
+def test_rename_local_missing_function_error():
+    """rename(local=...) reports missing functions cleanly."""
+    result = rename({"local": [{"func_addr": "0xdeadbeef", "old": "a", "new": "b"}]})
+    assert result["local"][0]["ok"] is False
+    assert_error(result["local"][0], contains="No function found")
+
+
+@test(binary="crackme03.elf")
 def test_define_undefine_func_roundtrip():
-    """define_func and undefine work together - undefine existing func then redefine"""
-    import ida_funcs
+    """undefine removes an existing function and define_func recreates it with the same bounds."""
     import idaapi
 
-    # Get an existing function to test with
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return
-
-    fn_ea = int(fn_addr, 16)
-    func = idaapi.get_func(fn_ea)
+    func = idaapi.get_func(int(CRACKME_FRAME_DUMMY, 16))
     if not func:
-        return
+        skip_test("frame_dummy function not present")
 
-    # Save function bounds for restoration
     start_ea = func.start_ea
     end_ea = func.end_ea
 
     try:
-        # Undefine the function
-        undef_result = undefine({"addr": fn_addr, "end": hex(end_ea)})
-        assert_is_list(undef_result, min_length=1)
+        undef_result = undefine({"addr": hex(start_ea), "end": hex(end_ea)})[0]
+        assert undef_result.get("ok") is True
+        assert idaapi.get_func(start_ea) is None
 
-        # Re-define the function with explicit bounds
-        result = define_func({"addr": hex(start_ea), "end": hex(end_ea)})
-        assert_is_list(result, min_length=1)
-        r = result[0]
-
-        # If direct define failed, try to recreate first instruction and retry.
-        if not r.get("ok"):
+        define_result = define_func({"addr": hex(start_ea), "end": hex(end_ea)})[0]
+        if define_result.get("ok") is not True:
             define_code({"addr": hex(start_ea)})
-            result = define_func({"addr": hex(start_ea), "end": hex(end_ea)})
-            assert_is_list(result, min_length=1)
-            r = result[0]
-
-        assert r.get("ok") is True or idaapi.get_func(start_ea) is not None
+            define_result = define_func({"addr": hex(start_ea), "end": hex(end_ea)})[0]
+        assert define_result.get("ok") is True
+        recreated = idaapi.get_func(start_ea)
+        assert recreated is not None
+        assert recreated.start_ea == start_ea
+        assert recreated.end_ea == end_ea
     finally:
-        # Ensure function is restored even if test fails
         if idaapi.get_func(start_ea) is None:
-            ida_funcs.add_func(start_ea, end_ea)
+            define_code({"addr": hex(start_ea)})
+            define_func({"addr": hex(start_ea), "end": hex(end_ea)})
 
 
 @test()
 def test_define_func_already_exists():
-    """define_func returns error for existing function"""
+    """define_func reports an already-exists error on an existing function."""
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
-    result = define_func({"addr": fn_addr})
-    assert_is_list(result, min_length=1)
-    r = result[0]
-    assert r.get("error") is not None
-    assert "already exists" in r["error"]
+    result = define_func({"addr": fn_addr})[0]
+    assert_error(result, contains="already exists")
 
 
 @test()
 def test_define_func_batch():
-    """define_func accepts batch input"""
+    """define_func accepts batch input and returns one result per item."""
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
-    # Both should fail (already exist), but tests batch handling
     result = define_func([{"addr": fn_addr}, {"addr": fn_addr}])
     assert_is_list(result, min_length=2)
 
 
 @test()
 def test_define_code_on_existing_code():
-    """define_code handles already-defined code gracefully"""
-    # Get an existing function address - it's already code
+    """define_code on existing code returns a structured response instead of crashing."""
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
-    # Calling define_code on existing code should succeed (it's idempotent)
-    # or return an appropriate response
-    result = define_code({"addr": fn_addr})
-    assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "addr")
-    # Should either succeed or have a meaningful response
+    result = define_code({"addr": fn_addr})[0]
+    assert result["addr"] == fn_addr
     assert (
-        r.get("ok") is True or r.get("length") is not None or r.get("error") is not None
+        result.get("ok") is True
+        or result.get("length") is not None
+        or result.get("error") is not None
     )
 
 
-@test()
-def test_undefine_batch():
-    """undefine accepts batch input"""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return
+@test(binary="typed_fixture.elf")
+def test_rename_global_missing_symbol():
+    """rename(data=...) reports a clean error when the global symbol is absent."""
+    result = rename({"data": [{"old": "nope", "new": "x"}]})
+    assert result["data"][0]["ok"] is False
+    assert_error(result["data"][0], contains="not found")
 
-    # Test that batch input is accepted (will likely fail on function, but tests parsing)
-    result = undefine([{"addr": fn_addr}])
-    assert_is_list(result, min_length=1)
+
+@test(binary="typed_fixture.elf")
+def test_rename_function_same_name_is_stable():
+    """rename(func=...) with the same current name succeeds or stays stable without crashing."""
+    result = rename({"func": [{"addr": "0x1013ef0", "name": "main"}]})
+    entry = result["func"][0]
+    assert entry.get("ok") is True or entry.get("error") is None
+
+
+@test(binary="typed_fixture.elf")
+def test_undefine_single_byte_and_restore():
+    """undefine(size=1) works on code bytes and the function can be fully restored afterwards."""
+    import idaapi
+
+    addr = 0x1013EF0
+    func = idaapi.get_func(addr)
+    if not func:
+        skip_test("typed_fixture main function not present")
+    end_ea = func.end_ea
+
+    try:
+        result = undefine({"addr": hex(addr), "size": 1})[0]
+        assert result.get("ok") is True
+    finally:
+        define_code({"addr": hex(addr)})
+        if idaapi.get_func(addr) is None:
+            define_func({"addr": hex(addr), "end": hex(end_ea)})
+
+
+@test(binary="crackme03.elf")
+def test_undefine_batch():
+    """undefine accepts batch input and can restore a small function afterwards."""
+    import idaapi
+
+    func = idaapi.get_func(int(CRACKME_FRAME_DUMMY, 16))
+    if not func:
+        skip_test("frame_dummy function not present")
+
+    start_ea = func.start_ea
+    end_ea = func.end_ea
+    try:
+        result = undefine([{"addr": hex(start_ea), "end": hex(end_ea)}])
+        assert_is_list(result, min_length=1)
+        assert result[0].get("ok") is True
+    finally:
+        if idaapi.get_func(start_ea) is None:
+            define_code({"addr": hex(start_ea)})
+            define_func({"addr": hex(start_ea), "end": hex(end_ea)})

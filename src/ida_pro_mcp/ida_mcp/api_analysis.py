@@ -25,13 +25,11 @@ from .utils import (
     get_assembly_lines,
     get_all_xrefs,
     get_all_comments,
-    Function,
     Argument,
     DisassemblyFunction,
     Xref,
     BasicBlock,
     StructFieldQuery,
-    InsnPattern,
 )
 from . import compat
 
@@ -49,9 +47,7 @@ def _raw_bin_search(
 
     Returns the match address, or idaapi.BADADDR if not found.
     """
-    search_flags = flags or (
-        ida_bytes.BIN_SEARCH_FORWARD | ida_bytes.BIN_SEARCH_NOSHOW
-    )
+    search_flags = flags or (ida_bytes.BIN_SEARCH_FORWARD | ida_bytes.BIN_SEARCH_NOSHOW)
     return compat.raw_bin_search(ea, max_ea, data, mask, search_flags)
 
 
@@ -178,7 +174,11 @@ def decompile(
         except IDAError:
             ea = idaapi.get_name_ea(idaapi.BADADDR, addr)
             if ea == idaapi.BADADDR:
-                return {"addr": addr, "code": None, "error": f"Function not found: {addr!r}"}
+                return {
+                    "addr": addr,
+                    "code": None,
+                    "error": f"Function not found: {addr!r}",
+                }
             start = ea
         code = decompile_function_safe(start)
         if code is None:
@@ -215,7 +215,12 @@ def disasm(
         except IDAError:
             ea = idaapi.get_name_ea(idaapi.BADADDR, addr)
             if ea == idaapi.BADADDR:
-                return {"addr": addr, "asm": None, "error": f"Function not found: {addr!r}", "cursor": {"done": True}}
+                return {
+                    "addr": addr,
+                    "asm": None,
+                    "error": f"Function not found: {addr!r}",
+                    "cursor": {"done": True},
+                }
             start = ea
         func = idaapi.get_func(start)
 

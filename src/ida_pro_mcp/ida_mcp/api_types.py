@@ -5,11 +5,10 @@ import ida_hexrays
 import ida_nalt
 import ida_bytes
 import ida_frame
-import ida_ida
 import idaapi
 
 from .rpc import tool
-from .sync import idasync, ida_major
+from .sync import idasync
 from .utils import (
     normalize_list_input,
     normalize_dict_list,

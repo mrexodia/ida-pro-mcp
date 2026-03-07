@@ -1,15 +1,12 @@
 """Tests for api_resources MCP resource functions."""
 
-# Import test framework from parent
 from ..framework import (
     test,
+    skip_test,
     assert_valid_address,
-    assert_has_keys,
     assert_non_empty,
-    get_any_function,
+    assert_is_list,
 )
-
-# Import resource functions under test
 from ..api_resources import (
     idb_metadata_resource,
     idb_segments_resource,
@@ -23,177 +20,157 @@ from ..api_resources import (
     export_name_resource,
     xrefs_from_resource,
 )
-
-# Import sync module for IDAError
 from ..sync import IDAError
 
 
-# ============================================================================
-# Tests for idb_metadata_resource
-# ============================================================================
+CRACKME_MAIN = "0x123e"
+CRACKME_CHECK_PW = "0x11a9"
+CRACKME_CALL_TO_CHECK_PW = "0x12d3"
 
 
-@test()
+@test(binary="crackme03.elf")
 def test_resource_idb_metadata():
-    """idb_metadata_resource returns IDB metadata"""
+    """idb_metadata_resource returns crackme metadata with valid hashes and addresses."""
     result = idb_metadata_resource()
-    assert isinstance(result, dict)
-    assert_has_keys(result, "path", "module", "base", "size")
     assert_non_empty(result["path"])
+    assert result["module"] == "crackme03.elf"
     assert_valid_address(result["base"])
-
-
-# ============================================================================
-# Tests for idb_segments_resource
-# ============================================================================
+    assert_valid_address(result["size"])
+    assert len(result["md5"]) == 32
+    assert len(result["sha256"]) == 64
 
 
 @test()
 def test_resource_idb_segments():
-    """idb_segments_resource returns segments list"""
+    """idb_segments_resource returns a non-empty segment list with sane ranges."""
     result = idb_segments_resource()
-    assert isinstance(result, list)
-    if result:
-        assert_has_keys(result[0], "name", "start", "end")
+    assert_is_list(result, min_length=1)
+    for segment in result:
+        assert_non_empty(segment["name"])
+        assert_valid_address(segment["start"])
+        assert_valid_address(segment["end"])
+        assert_valid_address(segment["size"])
+        assert int(segment["end"], 16) >= int(segment["start"], 16)
 
 
-# ============================================================================
-# Tests for idb_entrypoints_resource
-# ============================================================================
-
-
-@test()
-def test_resource_idb_entrypoints():
-    """idb_entrypoints_resource returns entry points"""
+@test(binary="crackme03.elf")
+def test_resource_idb_entrypoints_contains_known_symbols():
+    """idb_entrypoints_resource exposes the known crackme entrypoints."""
     result = idb_entrypoints_resource()
-    assert isinstance(result, list)
-
-
-# ============================================================================
-# Tests for cursor_resource
-# ============================================================================
+    assert_is_list(result, min_length=1)
+    by_name = {entry["name"]: entry["addr"] for entry in result}
+    assert by_name.get("main") == CRACKME_MAIN
+    assert by_name.get("check_pw") == CRACKME_CHECK_PW
 
 
 @test()
 def test_resource_cursor():
-    """cursor_resource returns cursor info"""
+    """cursor_resource returns a structured cursor object or a runtime skip in unsupported mode."""
     try:
         result = cursor_resource()
-        assert isinstance(result, dict)
-        # Should have addr key
-        assert_has_keys(result, "addr")
-    except IDAError:
-        pass  # May fail in headless mode
-
-
-# ============================================================================
-# Tests for selection_resource
-# ============================================================================
+    except IDAError as e:
+        skip_test(str(e))
+    assert_valid_address(result["addr"])
+    if "function" in result:
+        assert_valid_address(result["function"]["addr"])
+        assert_non_empty(result["function"]["name"])
 
 
 @test()
 def test_resource_selection():
-    """selection_resource returns selection info"""
+    """selection_resource returns either a selection range or an explicit null selection."""
     try:
         result = selection_resource()
-        assert isinstance(result, dict)
-    except IDAError:
-        pass  # May fail in headless mode
-
-
-# ============================================================================
-# Tests for types_resource
-# ============================================================================
+    except IDAError as e:
+        skip_test(str(e))
+    if "selection" in result:
+        assert result["selection"] is None
+    else:
+        assert_valid_address(result["start"])
+        if result["end"] is not None:
+            assert_valid_address(result["end"])
 
 
 @test()
-def test_resource_types():
-    """types_resource returns local types"""
+def test_resource_types_non_empty():
+    """types_resource returns at least one local type."""
     result = types_resource()
-    assert isinstance(result, list)
-
-
-# ============================================================================
-# Tests for structs_resource
-# ============================================================================
+    assert_is_list(result, min_length=1)
+    for item in result:
+        assert item["ordinal"] > 0
+        assert_non_empty(item["name"])
+        assert_non_empty(item["type"])
 
 
 @test()
-def test_resource_structs():
-    """structs_resource returns structures list"""
+def test_resource_structs_non_empty():
+    """structs_resource returns at least one structure."""
     result = structs_resource()
-    assert isinstance(result, list)
-
-
-# ============================================================================
-# Tests for struct_name_resource
-# ============================================================================
+    assert_is_list(result, min_length=1)
+    for item in result:
+        assert_non_empty(item["name"])
+        assert_valid_address(item["size"])
+        assert isinstance(item["is_union"], bool)
 
 
 @test()
-def test_resource_struct_name():
-    """struct_name_resource returns structure info"""
-    # Try to get a structure (may not exist)
-    try:
-        result = struct_name_resource("test")
-        assert isinstance(result, dict)
-    except IDAError:
-        pass  # Structure may not exist
+def test_resource_struct_name_known_struct():
+    """struct_name_resource round-trips a real structure name returned by structs_resource."""
+    structs = structs_resource()
+    assert_is_list(structs, min_length=1)
+
+    target = None
+    result = None
+    for item in structs[:100]:
+        candidate = struct_name_resource(item["name"])
+        if candidate.get("error") is None and candidate.get("members"):
+            target = item
+            result = candidate
+            break
+
+    if result is None:
+        skip_test("no populated structure definition available in this IDB")
+
+    assert result.get("error") is None
+    assert result["name"] == target["name"]
+    assert result["size"] == target["size"]
+    assert_is_list(result["members"], min_length=1)
+    for member in result["members"]:
+        assert_non_empty(member["name"])
+        assert_valid_address(member["offset"])
+        assert_valid_address(member["size"])
 
 
 @test()
 def test_resource_struct_name_not_found():
-    """struct_name_resource handles non-existent structure"""
-    try:
-        result = struct_name_resource("NonExistentStruct12345")
-        # Should return error or empty
-    except IDAError:
-        pass  # Expected for non-existent struct
+    """struct_name_resource reports a missing structure deterministically."""
+    result = struct_name_resource("NonExistentStruct12345")
+    assert "Structure not found" in result["error"]
 
 
-# ============================================================================
-# Tests for import_name_resource
-# ============================================================================
-
-
-@test()
+@test(binary="crackme03.elf")
 def test_resource_import_name():
-    """import_name_resource returns import info"""
-    # Try to get an import (name depends on binary)
-    try:
-        result = import_name_resource("printf")
-        assert isinstance(result, dict)
-    except IDAError:
-        pass  # Import may not exist in this binary
+    """import_name_resource returns the known printf import."""
+    result = import_name_resource("printf@@GLIBC_2.2.5")
+    assert result["addr"] == "0x4040"
+    assert result["name"] == "printf@@GLIBC_2.2.5"
+    assert result["module"] == ".dynsym"
 
 
-# ============================================================================
-# Tests for export_name_resource
-# ============================================================================
-
-
-@test()
+@test(binary="crackme03.elf")
 def test_resource_export_name():
-    """export_name_resource returns export info"""
-    # Try to get main
-    try:
-        result = export_name_resource("main")
-        assert isinstance(result, dict)
-    except IDAError:
-        pass  # Export may not exist
+    """export_name_resource returns the known main export/entrypoint."""
+    result = export_name_resource("main")
+    assert result["addr"] == CRACKME_MAIN
+    assert result["name"] == "main"
+    assert result["ordinal"] > 0
 
 
-# ============================================================================
-# Tests for xrefs_from_resource
-# ============================================================================
-
-
-@test()
+@test(binary="crackme03.elf")
 def test_resource_xrefs_from():
-    """xrefs_from_resource returns cross-references"""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        return
-
-    result = xrefs_from_resource(fn_addr)
-    assert isinstance(result, list)
+    """xrefs_from_resource returns the known outgoing references from the check_pw call site."""
+    result = xrefs_from_resource(CRACKME_CALL_TO_CHECK_PW)
+    assert_is_list(result, min_length=1)
+    by_addr = {entry["addr"]: entry["type"] for entry in result}
+    assert by_addr.get(CRACKME_CHECK_PW) == "code"
+    assert by_addr.get("0x12d8") == "code"

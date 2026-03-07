@@ -417,6 +417,7 @@ class Page(TypedDict, Generic[T]):
 
 def get_image_size() -> int:
     from . import compat
+
     omin_ea = compat.inf_get_omin_ea()
     omax_ea = compat.inf_get_omax_ea()
 
@@ -530,7 +531,7 @@ def get_function(addr: int, *, raise_error: Literal[False]) -> Optional[Function
 
 def get_function(addr, *, raise_error=True):
     from . import compat
-    
+
     fn = idaapi.get_func(addr)
     if fn is None:
         if raise_error:
@@ -544,17 +545,17 @@ def get_function(addr, *, raise_error=True):
 
 def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
     from . import compat
-    
+
     prototype = compat.get_func_prototype(fn)
     if prototype is not None:
         return str(prototype)
-    
+
     # Fallback: try idc.get_type
     try:
         return idc.get_type(fn.start_ea)
     except Exception:
         pass
-    
+
     return None
 
 

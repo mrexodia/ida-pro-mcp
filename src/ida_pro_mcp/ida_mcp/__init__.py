@@ -15,6 +15,7 @@ Architecture:
 # disconnects while the HTTP server is writing a response. IDA's embedded
 # Python may not preserve CPython's default SIG_IGN for SIGPIPE.
 import signal
+
 if hasattr(signal, "SIGPIPE"):
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 

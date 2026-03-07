@@ -19,7 +19,21 @@ import fnmatch
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Optional
+from types import UnionType
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Literal,
+    NotRequired,
+    Optional,
+    Required,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+    is_typeddict,
+)
 
 
 # ============================================================================
@@ -39,6 +53,15 @@ class TestInfo:
 
 # Global test registry: name -> TestInfo
 TESTS: dict[str, TestInfo] = {}
+
+
+class SkipTest(Exception):
+    """Raised by tests to indicate a runtime skip condition."""
+
+
+def skip_test(reason: str = "") -> None:
+    """Skip the current test at runtime."""
+    raise SkipTest(reason or "skipped")
 
 
 def test(*, binary: str = "", skip: bool = False) -> Callable:
@@ -141,18 +164,52 @@ def assert_valid_address(addr: str) -> None:
     assert addr.startswith("0x") or addr.startswith("-0x"), (
         f"Expected hex address, got {addr!r}"
     )
-    # Verify it's a valid hex number
     try:
         int(addr, 16)
     except ValueError:
         raise AssertionError(f"Invalid hex address: {addr!r}")
 
 
-def assert_has_keys(d: dict, *keys: str) -> None:
-    """Assert dict has all specified keys."""
-    assert isinstance(d, dict), f"Expected dict, got {type(d).__name__}"
-    missing = [k for k in keys if k not in d]
-    assert not missing, f"Missing keys: {missing}"
+@dataclass(frozen=True)
+class OptionalShape:
+    schema: Any
+
+
+@dataclass(frozen=True)
+class ListOfShape:
+    schema: Any
+    min_length: int = 0
+    max_length: int | None = None
+
+
+@dataclass(frozen=True)
+class OneOfShape:
+    schemas: tuple[Any, ...]
+
+
+def optional(schema: Any) -> OptionalShape:
+    """Allow a key/value to be missing or None, otherwise validate against schema."""
+    return OptionalShape(schema)
+
+
+def list_of(
+    schema: Any, *, min_length: int = 0, max_length: int | None = None
+) -> ListOfShape:
+    """Validate a list where every element matches schema."""
+    return ListOfShape(schema, min_length=min_length, max_length=max_length)
+
+
+def one_of(*schemas: Any) -> OneOfShape:
+    """Validate a value against any one of the supplied schemas."""
+    return OneOfShape(tuple(schemas))
+
+
+def is_hex_address(value: Any) -> bool:
+    try:
+        assert_valid_address(value)
+    except AssertionError:
+        return False
+    return True
 
 
 def assert_non_empty(value: Any) -> None:
@@ -170,37 +227,209 @@ def assert_is_list(value: Any, min_length: int = 0) -> None:
     )
 
 
-def assert_all_have_keys(items: list[dict], *keys: str) -> None:
-    """Assert all dicts in list have specified keys."""
-    assert_is_list(items)
-    for i, item in enumerate(items):
-        assert isinstance(item, dict), f"Item {i} is not a dict: {type(item).__name__}"
-        missing = [k for k in keys if k not in item]
-        assert not missing, f"Item {i} missing keys: {missing}"
+def _assert_shape(value: Any, schema: Any, path: str) -> None:
+    if isinstance(schema, OptionalShape):
+        if value is None:
+            return
+        return _assert_shape(value, schema.schema, path)
+
+    if isinstance(schema, OneOfShape):
+        errors = []
+        for option in schema.schemas:
+            try:
+                _assert_shape(value, option, path)
+                return
+            except AssertionError as e:
+                errors.append(str(e))
+        raise AssertionError(
+            f"{path} did not match any allowed schema: {'; '.join(errors)}"
+        )
+
+    if isinstance(schema, ListOfShape):
+        assert isinstance(value, list), (
+            f"{path}: expected list, got {type(value).__name__}"
+        )
+        assert len(value) >= schema.min_length, (
+            f"{path}: expected at least {schema.min_length} items, got {len(value)}"
+        )
+        if schema.max_length is not None:
+            assert len(value) <= schema.max_length, (
+                f"{path}: expected at most {schema.max_length} items, got {len(value)}"
+            )
+        for i, item in enumerate(value):
+            _assert_shape(item, schema.schema, f"{path}[{i}]")
+        return
+
+    if isinstance(schema, dict):
+        assert isinstance(value, dict), (
+            f"{path}: expected dict, got {type(value).__name__}"
+        )
+        for key, subschema in schema.items():
+            if isinstance(subschema, OptionalShape):
+                if key not in value or value[key] is None:
+                    continue
+                _assert_shape(value[key], subschema.schema, f"{path}.{key}")
+                continue
+            assert key in value, f"{path}: missing key {key!r}"
+            _assert_shape(value[key], subschema, f"{path}.{key}")
+        return
+
+    if isinstance(schema, list):
+        assert len(schema) == 1, "List schema must contain exactly one item schema"
+        return _assert_shape(value, list_of(schema[0]), path)
+
+    if schema is Any:
+        return
+
+    if is_typeddict(schema):
+        return assert_typed_dict(value, schema, label=path)
+
+    if isinstance(schema, type):
+        assert isinstance(value, schema), (
+            f"{path}: expected {schema.__name__}, got {type(value).__name__}"
+        )
+        return
+
+    if callable(schema):
+        assert schema(value), f"{path}: predicate failed for value {value!r}"
+        return
+
+    assert value == schema, f"{path}: expected {schema!r}, got {value!r}"
+
+
+def assert_shape(value: Any, schema: Any, *, label: str = "value") -> None:
+    """Assert an ad-hoc response shape.
+
+    Schema supports:
+    - Python types (str, int, dict, ...)
+    - callables returning truthy/falsey
+    - dicts of key -> schema
+    - [schema] for homogeneous lists
+    - optional(schema), list_of(schema), one_of(...)
+    - TypedDict classes
+    """
+    _assert_shape(value, schema, label)
+
+
+def _normalize_expected_type(tp: Any) -> Any:
+    origin = get_origin(tp)
+    while origin in (Annotated, Required, NotRequired):
+        tp = get_args(tp)[0]
+        origin = get_origin(tp)
+    return tp
+
+
+def _assert_type_matches(value: Any, tp: Any, path: str) -> None:
+    tp = _normalize_expected_type(tp)
+    origin = get_origin(tp)
+
+    if tp is Any:
+        return
+
+    if origin in (Union, UnionType):
+        errors = []
+        for arg in get_args(tp):
+            try:
+                _assert_type_matches(value, arg, path)
+                return
+            except AssertionError as e:
+                errors.append(str(e))
+        raise AssertionError(f"{path}: no union variant matched: {'; '.join(errors)}")
+
+    if origin is Literal:
+        allowed = get_args(tp)
+        assert value in allowed, f"{path}: expected one of {allowed!r}, got {value!r}"
+        return
+
+    if origin is list:
+        assert isinstance(value, list), (
+            f"{path}: expected list, got {type(value).__name__}"
+        )
+        args = get_args(tp)
+        if args:
+            for i, item in enumerate(value):
+                _assert_type_matches(item, args[0], f"{path}[{i}]")
+        return
+
+    if origin is dict:
+        assert isinstance(value, dict), (
+            f"{path}: expected dict, got {type(value).__name__}"
+        )
+        args = get_args(tp)
+        if len(args) == 2:
+            key_tp, val_tp = args
+            for key, item in value.items():
+                _assert_type_matches(key, key_tp, f"{path}.keys()")
+                _assert_type_matches(item, val_tp, f"{path}[{key!r}]")
+        return
+
+    if origin is tuple:
+        assert isinstance(value, tuple), (
+            f"{path}: expected tuple, got {type(value).__name__}"
+        )
+        args = get_args(tp)
+        if len(args) == 2 and args[1] is Ellipsis:
+            for i, item in enumerate(value):
+                _assert_type_matches(item, args[0], f"{path}[{i}]")
+        elif args:
+            assert len(value) == len(args), (
+                f"{path}: expected tuple of length {len(args)}, got {len(value)}"
+            )
+            for i, (item, item_tp) in enumerate(zip(value, args)):
+                _assert_type_matches(item, item_tp, f"{path}[{i}]")
+        return
+
+    if is_typeddict(tp):
+        return assert_typed_dict(value, tp, label=path)
+
+    if isinstance(tp, type):
+        assert isinstance(value, tp), (
+            f"{path}: expected {tp.__name__}, got {type(value).__name__}"
+        )
+
+
+def assert_typed_dict(
+    value: Any, typed_dict_cls: type, *, label: str = "value"
+) -> None:
+    """Assert a dict conforms to a TypedDict definition."""
+    assert is_typeddict(typed_dict_cls), f"{typed_dict_cls!r} is not a TypedDict"
+    assert isinstance(value, dict), (
+        f"{label}: expected dict, got {type(value).__name__}"
+    )
+
+    annotations = get_type_hints(typed_dict_cls, include_extras=True)
+    required = set(getattr(typed_dict_cls, "__required_keys__", annotations.keys()))
+
+    missing = [key for key in sorted(required) if key not in value]
+    assert not missing, f"{label}: missing required keys {missing}"
+
+    for key, expected_type in annotations.items():
+        if key in value:
+            _assert_type_matches(value[key], expected_type, f"{label}.{key}")
+
+
+def assert_ok(result: dict, *required_keys: str) -> None:
+    """Assert a result dict represents success and contains required keys."""
+    assert isinstance(result, dict), f"Expected dict, got {type(result).__name__}"
+    error = result.get("error")
+    assert error in (None, ""), f"Expected success, got error: {error!r}"
+    for key in required_keys:
+        assert key in result, f"Missing key: {key}"
+        assert result[key] is not None, f"Expected non-None value for key: {key}"
+
+
+def assert_error(result: dict, *, contains: str | None = None) -> None:
+    """Assert a result dict represents an error."""
+    assert isinstance(result, dict), f"Expected dict, got {type(result).__name__}"
+    error = result.get("error")
+    assert isinstance(error, str) and error, f"Expected non-empty error, got {error!r}"
+    if contains is not None:
+        assert contains in error, f"Expected {contains!r} in error {error!r}"
 
 
 # ============================================================================
 # Test Configuration
 # ============================================================================
-
-# Default sample size for deterministic sampling helpers
-# Can be overridden by test runner via set_sample_size()
-_sample_size: int = 5
-
-
-def set_sample_size(n: int) -> None:
-    """Set the sample size for deterministic sampling helpers.
-
-    Called by test runner to configure how many items to sample.
-    """
-    global _sample_size
-    _sample_size = max(1, n)
-
-
-def get_sample_size() -> int:
-    """Get the current sample size."""
-    return _sample_size
-
 
 # ============================================================================
 # Test Data Helpers
@@ -216,6 +445,50 @@ def get_any_function() -> Optional[str]:
 
     for ea in idautils.Functions():
         return hex(ea)
+    return None
+
+
+def get_named_function(name: str) -> Optional[str]:
+    """Return the address of a named function, or None if it does not exist."""
+    import idaapi
+
+    ea = idaapi.get_name_ea(idaapi.BADADDR, name)
+    if ea == idaapi.BADADDR:
+        return None
+    func = idaapi.get_func(ea)
+    if not func:
+        return None
+    return hex(func.start_ea)
+
+
+def get_named_address(name: str) -> Optional[str]:
+    """Return the address of any named item, or None if absent."""
+    import idaapi
+
+    ea = idaapi.get_name_ea(idaapi.BADADDR, name)
+    if ea == idaapi.BADADDR:
+        return None
+    return hex(ea)
+
+
+def get_string_address_containing(text: str) -> Optional[str]:
+    """Return the address of the first string containing text, or None."""
+    import idaapi
+    import idc
+
+    for i in range(idaapi.get_strlist_qty()):
+        si = idaapi.string_info_t()
+        if not idaapi.get_strlist_item(si, i):
+            continue
+        raw = idc.get_strlit_contents(si.ea, -1, 0)
+        if not raw:
+            continue
+        try:
+            decoded = raw.decode("utf-8", errors="replace")
+        except Exception:
+            continue
+        if text in decoded:
+            return hex(si.ea)
     return None
 
 
@@ -248,67 +521,6 @@ def get_first_segment() -> Optional[tuple[str, str]]:
     return None
 
 
-def _deterministic_sample(items: list, n: int) -> list:
-    """Select n items deterministically based on binary name.
-
-    Uses hash of (binary_name, item_index) for reproducible but varied selection.
-    """
-    import hashlib
-
-    if len(items) <= n:
-        return items
-
-    binary_name = get_current_binary_name()
-
-    # Create (hash, item) pairs for sorting
-    def item_hash(idx: int) -> int:
-        key = f"{binary_name}:{idx}".encode()
-        return int(hashlib.md5(key).hexdigest(), 16)
-
-    indexed = [(item_hash(i), item) for i, item in enumerate(items)]
-    indexed.sort(key=lambda x: x[0])
-
-    return [item for _, item in indexed[:n]]
-
-
-def get_n_functions(n: Optional[int] = None) -> list[str]:
-    """Get N function addresses, deterministically selected.
-
-    Selection is based on binary name for reproducibility across runs.
-    Returns up to N addresses (fewer if binary has fewer functions).
-
-    Args:
-        n: Number of functions to return. Defaults to global sample_size.
-    """
-    import idautils
-
-    if n is None:
-        n = _sample_size
-
-    all_funcs = [hex(ea) for ea in idautils.Functions()]
-    return _deterministic_sample(all_funcs, n)
-
-
-def get_n_strings(n: Optional[int] = None) -> list[str]:
-    """Get N string addresses, deterministically selected.
-
-    Args:
-        n: Number of strings to return. Defaults to global sample_size.
-    """
-    import idaapi
-
-    if n is None:
-        n = _sample_size
-
-    all_strings = []
-    for i in range(idaapi.get_strlist_qty()):
-        si = idaapi.string_info_t()
-        if idaapi.get_strlist_item(si, i):
-            all_strings.append(hex(si.ea))
-
-    return _deterministic_sample(all_strings, n)
-
-
 def get_data_address() -> Optional[str]:
     """Get an address in a data segment (not code).
 
@@ -333,60 +545,6 @@ def get_unmapped_address() -> str:
     return "0xDEADBEEFDEADBEEF"
 
 
-def get_functions_with_calls() -> list[str]:
-    """Get functions that contain call instructions (have callees).
-
-    Useful for testing callees() on functions that actually call others.
-    """
-    import idaapi
-    import idautils
-
-    result = []
-    for func_ea in idautils.Functions():
-        func = idaapi.get_func(func_ea)
-        if not func:
-            continue
-
-        # Check if function contains any call instructions
-        has_call = False
-        for head in idautils.Heads(func.start_ea, func.end_ea):
-            insn = idaapi.insn_t()
-            if idaapi.decode_insn(insn, head) > 0:
-                if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
-                    has_call = True
-                    break
-
-        if has_call:
-            result.append(hex(func_ea))
-
-    return _deterministic_sample(result, _sample_size)
-
-
-def get_functions_with_callers() -> list[str]:
-    """Get functions that are called by other functions (have callers).
-
-    Useful for testing callers() on functions that are actually called.
-    """
-    import idaapi
-    import idautils
-
-    result = []
-    for func_ea in idautils.Functions():
-        # Check if this function has any code references to it
-        has_caller = False
-        for xref in idautils.XrefsTo(func_ea, 0):
-            if xref.iscode:
-                caller_func = idaapi.get_func(xref.frm)
-                if caller_func and caller_func.start_ea != func_ea:
-                    has_caller = True
-                    break
-
-        if has_caller:
-            result.append(hex(func_ea))
-
-    return _deterministic_sample(result, _sample_size)
-
-
 # ============================================================================
 # Test Runner
 # ============================================================================
@@ -408,14 +566,16 @@ def run_tests(
     category: str = "*",
     verbose: bool = True,
     stop_on_failure: bool = False,
+    failures_only: bool = False,
 ) -> TestResults:
     """Run registered tests and return results.
 
     Args:
         pattern: Glob pattern to filter test names (e.g., "*meta*")
         category: Filter by module category (e.g., "api_core", "api_analysis")
-        verbose: Print progress and results
+        verbose: Print progress and results for every test
         stop_on_failure: Stop at first failure
+        failures_only: Print only failing tests (useful in non-interactive CI logs)
 
     Returns:
         TestResults with pass/fail counts and individual results
@@ -444,7 +604,7 @@ def run_tests(
         tests_by_category[info.module].append((name, info))
 
     if not tests_by_category:
-        if verbose:
+        if verbose or failures_only:
             print(f"No tests found matching pattern={pattern!r}, category={category!r}")
         return results
 
@@ -462,7 +622,7 @@ def run_tests(
             print(f"[{cat_name}] Running {len(tests)} tests...")
 
         for name, info in tests:
-            result = _run_single_test(name, info, verbose)
+            result = _run_single_test(name, info, verbose, failures_only)
             results.add(result)
 
             if result.status == "failed" and stop_on_failure:
@@ -480,8 +640,9 @@ def run_tests(
     results.total_time = time.time() - start_time
 
     # Print summary
-    if verbose:
-        print("=" * 80)
+    if verbose or failures_only:
+        if verbose:
+            print("=" * 80)
         status_parts = []
         if results.passed:
             status_parts.append(f"{results.passed} passed")
@@ -490,12 +651,15 @@ def run_tests(
         if results.skipped:
             status_parts.append(f"{results.skipped} skipped")
         print(f"Results: {', '.join(status_parts)} ({results.total_time:.2f}s)")
-        print("=" * 80)
+        if verbose:
+            print("=" * 80)
 
     return results
 
 
-def _run_single_test(name: str, info: TestInfo, verbose: bool) -> TestResult:
+def _run_single_test(
+    name: str, info: TestInfo, verbose: bool, failures_only: bool = False
+) -> TestResult:
     """Run a single test and return the result."""
     # Handle skipped tests
     if info.skip:
@@ -523,12 +687,25 @@ def _run_single_test(name: str, info: TestInfo, verbose: bool) -> TestResult:
             duration=duration,
         )
 
+    except SkipTest as e:
+        duration = time.time() - start_time
+        if verbose:
+            reason = str(e) or "skipped"
+            print(f"  - {name} ({reason})")
+        return TestResult(
+            name=name,
+            category=info.module,
+            status="skipped",
+            duration=duration,
+            error=str(e) or None,
+        )
+
     except Exception as e:
         duration = time.time() - start_time
         error_msg = str(e)
         tb = traceback.format_exc()
 
-        if verbose:
+        if verbose or failures_only:
             print(f"  x {name} ({duration:.2f}s)")
             print(f"    {type(e).__name__}: {error_msg}")
             print()

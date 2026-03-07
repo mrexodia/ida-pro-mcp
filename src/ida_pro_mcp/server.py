@@ -295,9 +295,7 @@ def print_mcp_config():
     )
 
 
-def resolve_client_name(
-    input_name: str, available_clients: list[str]
-) -> str | None:
+def resolve_client_name(input_name: str, available_clients: list[str]) -> str | None:
     """Resolve user input to an exact client name from available_clients.
 
     Priority: exact match (case-insensitive) -> alias -> unique substring match.
@@ -770,7 +768,9 @@ def get_project_configs(project_dir: str) -> dict[str, tuple[str, str]]:
     return result
 
 
-def is_client_installed(name: str, config_dir: str, config_file: str, *, project: bool = False) -> bool:
+def is_client_installed(
+    name: str, config_dir: str, config_file: str, *, project: bool = False
+) -> bool:
     """Check if the MCP server is already installed for a given client."""
     config_path = os.path.join(config_dir, config_file)
     if not os.path.exists(config_path):
@@ -789,7 +789,9 @@ def is_client_installed(name: str, config_dir: str, config_file: str, *, project
     except (json.JSONDecodeError, tomllib.TOMLDecodeError, OSError):
         return False
 
-    special = (PROJECT_SPECIAL_JSON_STRUCTURES if project else GLOBAL_SPECIAL_JSON_STRUCTURES)
+    special = (
+        PROJECT_SPECIAL_JSON_STRUCTURES if project else GLOBAL_SPECIAL_JSON_STRUCTURES
+    )
     if is_toml:
         mcp_servers = config.get("mcp_servers", {})
     elif name in special:
@@ -870,6 +872,7 @@ def _make_read_key():
                     return None
                 finally:
                     termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
         return read_key
     except ImportError:
         return None
@@ -1029,11 +1032,21 @@ def list_available_clients():
 
     print()
     print("Usage examples:")
-    print("  ida-pro-mcp --install                                    # Interactive selector")
-    print("  ida-pro-mcp --install claude,cursor,ida-plugin            # Specific targets")
-    print("  ida-pro-mcp --install vscode --scope project              # Project-level config")
-    print("  ida-pro-mcp --install cursor --transport streamable-http  # Streamable HTTP config")
-    print("  ida-pro-mcp --uninstall cursor                            # Uninstall specific target")
+    print(
+        "  ida-pro-mcp --install                                    # Interactive selector"
+    )
+    print(
+        "  ida-pro-mcp --install claude,cursor,ida-plugin            # Specific targets"
+    )
+    print(
+        "  ida-pro-mcp --install vscode --scope project              # Project-level config"
+    )
+    print(
+        "  ida-pro-mcp --install cursor --transport streamable-http  # Streamable HTTP config"
+    )
+    print(
+        "  ida-pro-mcp --uninstall cursor                            # Uninstall specific target"
+    )
 
 
 def install_mcp_servers(
@@ -1382,7 +1395,9 @@ def _interactive_install(*, uninstall: bool, args):
                 return
 
             if "IDA Plugin" in selected:
-                install_ida_plugin(uninstall=uninstall, allow_ida_free=args.allow_ida_free)
+                install_ida_plugin(
+                    uninstall=uninstall, allow_ida_free=args.allow_ida_free
+                )
             client_names = [s for s in selected if s != "IDA Plugin"]
             if client_names:
                 install_mcp_servers(
@@ -1398,7 +1413,9 @@ def _interactive_install(*, uninstall: bool, args):
         if project_configs:
             items = []
             for name, (config_dir, config_file) in project_configs.items():
-                installed = is_client_installed(name, config_dir, config_file, project=True)
+                installed = is_client_installed(
+                    name, config_dir, config_file, project=True
+                )
                 items.append((name, installed))
 
             selected = interactive_select(items, f"Select project targets to {action}:")
@@ -1517,7 +1534,9 @@ def main():
                     client_targets.append(target)
 
             if install_ida:
-                install_ida_plugin(uninstall=uninstall, allow_ida_free=args.allow_ida_free)
+                install_ida_plugin(
+                    uninstall=uninstall, allow_ida_free=args.allow_ida_free
+                )
             if client_targets:
                 do_global = scope == "global"
                 do_project = scope == "project"

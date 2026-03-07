@@ -26,6 +26,7 @@ import ida_typeinf
 # Version resolution
 # ============================================================================
 
+
 def _parse_kernel_version(v: str) -> tuple[int, int, int]:
     # Parse formats like "9.2", "9.2.0", "9.2sp1"
     nums = [int(x) for x in re.findall(r"\d+", v)]
@@ -34,10 +35,12 @@ def _parse_kernel_version(v: str) -> tuple[int, int, int]:
     patch = nums[2] if len(nums) > 2 else 0
     return (major, minor, patch)
 
+
 if TYPE_CHECKING:
     import ida_entry
     import ida_ida
     import ida_hexrays
+
     IDA_VERSION: tuple[int, int, int] = cast(tuple[int, int, int], (9, 2, 0))
 else:
     IDA_VERSION = _parse_kernel_version(idaapi.get_kernel_version())
@@ -63,67 +66,89 @@ if not IDA_GE_84:
 # Entry point compatibility
 # ============================================================================
 
+
 def get_entry_qty() -> int:
     if IDA_GE_90:
         return ida_entry.get_entry_qty()
     return ida_nalt.get_entry_qty()
+
 
 def get_entry_ordinal(idx: int) -> int:
     if IDA_GE_90:
         return ida_entry.get_entry_ordinal(idx)
     return ida_nalt.get_entry_ordinal(idx)
 
+
 def get_entry(ordinal: int) -> int:
     if IDA_GE_90:
         return ida_entry.get_entry(ordinal)
     return ida_nalt.get_entry(ordinal)
+
 
 def get_entry_name(ordinal: int) -> str | None:
     if IDA_GE_90:
         return ida_entry.get_entry_name(ordinal)
     return ida_nalt.get_entry_name(ordinal)
 
+
 # ============================================================================
 # Type ordinal compatibility
 # ============================================================================
 
+
 def get_ordinal_limit(til: ida_typeinf.til_t | None = None) -> int:
     if IDA_GE_84:
-        return ida_typeinf.get_ordinal_limit(til) if til is not None else ida_typeinf.get_ordinal_limit()
-    return ida_typeinf.get_ordinal_qty(til) if til is not None else ida_typeinf.get_ordinal_qty()
+        return (
+            ida_typeinf.get_ordinal_limit(til)
+            if til is not None
+            else ida_typeinf.get_ordinal_limit()
+        )
+    return (
+        ida_typeinf.get_ordinal_qty(til)
+        if til is not None
+        else ida_typeinf.get_ordinal_qty()
+    )
+
 
 # ============================================================================
 # inf structure compatibility
 # ============================================================================
+
 
 def inf_get_min_ea() -> int:
     if IDA_GE_85:
         return ida_ida.inf_get_min_ea()
     return idaapi.get_inf_structure().min_ea
 
+
 def inf_get_max_ea() -> int:
     if IDA_GE_85:
         return ida_ida.inf_get_max_ea()
     return idaapi.get_inf_structure().max_ea
+
 
 def inf_get_omin_ea() -> int:
     if IDA_GE_85:
         return ida_ida.inf_get_omin_ea()
     return idaapi.get_inf_structure().omin_ea
 
+
 def inf_get_omax_ea() -> int:
     if IDA_GE_85:
         return ida_ida.inf_get_omax_ea()
     return idaapi.get_inf_structure().omax_ea
+
 
 def inf_is_64bit() -> bool:
     if IDA_GE_85:
         return ida_ida.inf_is_64bit()
     return idaapi.get_inf_structure().is_64bit()
 
+
 # ============================================================================
 # Function info compatibility
 # ============================================================================
+
 
 def get_func_name(func: ida_funcs.func_t) -> str | None:
     # func_t.get_name() introduced in 8.5
@@ -131,19 +156,22 @@ def get_func_name(func: ida_funcs.func_t) -> str | None:
         return func.get_name()
     return ida_funcs.get_func_name(func.start_ea)
 
+
 def get_func_prototype(func: ida_funcs.func_t) -> ida_typeinf.tinfo_t | None:
     # func_t.get_prototype() introduced in 8.5
     if IDA_GE_85:
         return func.get_prototype()
-    
+
     tif = ida_typeinf.tinfo_t()
     if ida_nalt.get_tinfo(tif, func.start_ea) and tif.is_func():
         return tif
     return None
 
+
 # ============================================================================
 # Binary search compatibility
 # ============================================================================
+
 
 def raw_bin_search(
     ea: int,
@@ -157,7 +185,10 @@ def raw_bin_search(
         return ida_bytes.find_bytes(data, ea, range_end=max_ea, mask=mask, flags=flags)
     return ida_bytes.bin_search(ea, max_ea, data, mask, len(data), flags)
 
-def make_bytes_searcher(pattern: str) -> tuple[Callable[[int, int], int] | None, str | None]:
+
+def make_bytes_searcher(
+    pattern: str,
+) -> tuple[Callable[[int, int], int] | None, str | None]:
     tokens = pattern.strip().split()
     if not tokens:
         return None, "Empty pattern"
@@ -165,8 +196,10 @@ def make_bytes_searcher(pattern: str) -> tuple[Callable[[int, int], int] | None,
     # 9.0+ search closure
     if IDA_GE_90:
         normalized = " ".join("?" if t in ("??", "?") else t for t in tokens)
+
         def _search_modern(ea: int, max_ea: int) -> int:
             return ida_bytes.find_bytes(normalized, ea, range_end=max_ea)
+
         return _search_modern, None
 
     # Legacy search closure
@@ -189,9 +222,11 @@ def make_bytes_searcher(pattern: str) -> tuple[Callable[[int, int], int] | None,
 
     return _search_legacy, None
 
+
 # ============================================================================
 # Type inference compatibility
 # ============================================================================
+
 
 def guess_tinfo(tif: ida_typeinf.tinfo_t, ea: int) -> bool:
     # Prefer modern API first

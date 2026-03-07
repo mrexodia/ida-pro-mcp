@@ -1,16 +1,21 @@
 """Tests for api_core API functions."""
 
-# Import test framework from parent
 from ..framework import (
     test,
-    assert_has_keys,
+    skip_test,
+    assert_valid_address,
+    assert_non_empty,
     assert_is_list,
-    assert_all_have_keys,
+    assert_shape,
+    assert_ok,
+    assert_error,
+    is_hex_address,
+    list_of,
+    optional,
     get_any_function,
     get_data_address,
 )
-
-# Import functions under test
+from ..utils import Function, ConvertedNumber
 from ..api_core import (
     lookup_funcs,
     int_convert,
@@ -20,248 +25,272 @@ from ..api_core import (
     find_regex,
 )
 
-# Import sync module for IDAError
 
-
-# ============================================================================
-# Tests for lookup_funcs
-# ============================================================================
+CRACKME_MAIN = "0x123e"
+CRACKME_CHECK_PW = "0x11a9"
+CRACKME_FORMAT = "0x201f"
+CRACKME_PRINTF = "0x4040"
 
 
 @test()
 def test_lookup_funcs_by_address():
-    """lookup_funcs can find function by address"""
+    """lookup_funcs resolves a valid function address to a complete function object."""
     fn_addr = get_any_function()
     if not fn_addr:
-        return  # Skip if no functions
+        skip_test("binary has no functions")
 
     result = lookup_funcs(fn_addr)
-    assert_is_list(result, min_length=1)
-    assert result[0]["fn"] is not None
-    assert result[0]["error"] is None
-    assert_has_keys(result[0]["fn"], "addr", "name", "size")
+    assert_shape(
+        result,
+        [
+            {
+                "query": str,
+                "fn": optional(Function),
+                "error": optional(str),
+            }
+        ],
+    )
+    assert_ok(result[0], "fn")
+    fn = result[0]["fn"]
+    assert_typed = fn is not None
+    assert assert_typed
+    assert fn["addr"] == fn_addr
+    assert_valid_address(fn["addr"])
+    assert_non_empty(fn["name"])
+
+
+@test(binary="crackme03.elf")
+def test_lookup_funcs_known_crackme_symbols():
+    """lookup_funcs resolves known crackme symbols to their expected entry addresses."""
+    results = lookup_funcs(["main", "check_pw"])
+    assert len(results) == 2
+
+    by_query = {item["query"]: item for item in results}
+    assert_ok(by_query["main"], "fn")
+    assert_ok(by_query["check_pw"], "fn")
+    assert by_query["main"]["fn"]["addr"] == CRACKME_MAIN
+    assert by_query["check_pw"]["fn"]["addr"] == CRACKME_CHECK_PW
 
 
 @test()
 def test_lookup_funcs_invalid():
-    """lookup_funcs returns error for invalid address"""
-    # Use an address that's unlikely to be a valid function
+    """lookup_funcs reports an error for an invalid address."""
     result = lookup_funcs("0xDEADBEEFDEADBEEF")
     assert_is_list(result, min_length=1)
     assert result[0]["fn"] is None
-    assert result[0]["error"] is not None
+    assert_error(result[0])
 
 
 @test()
-def test_lookup_funcs_wildcard():
-    """lookup_funcs with '*' returns all functions"""
+def test_lookup_funcs_wildcard_returns_non_empty_function_list():
+    """lookup_funcs('*') returns a non-empty list of valid functions."""
     result = lookup_funcs("*")
     assert_is_list(result, min_length=1)
-    # All results should have query="*" and a function
-    for r in result:
-        assert r["query"] == "*"
-        assert r["fn"] is not None
+    for item in result:
+        assert item["query"] == "*"
+        assert_ok(item, "fn")
+        assert_shape(item["fn"], Function)
 
 
 @test()
-def test_lookup_funcs_empty():
-    """lookup_funcs with empty string returns all functions"""
+def test_lookup_funcs_empty_returns_non_empty_function_list():
+    """lookup_funcs('') behaves like an all-functions query and must not be empty."""
     result = lookup_funcs("")
     assert_is_list(result, min_length=1)
-    assert result[0]["query"] == "*"
+    for item in result:
+        assert item["query"] == "*"
+        assert_ok(item, "fn")
 
 
 @test()
 def test_lookup_funcs_malformed_hex():
-    """lookup_funcs handles malformed hex address"""
-    # This looks like an address but isn't valid hex
+    """lookup_funcs rejects malformed hexadecimal strings."""
     result = lookup_funcs("0xZZZZ")
     assert_is_list(result, min_length=1)
-    # Should return error since it's not a valid address or name
-    assert result[0]["error"] is not None
+    assert result[0]["fn"] is None
+    assert_error(result[0])
 
 
 @test()
 def test_lookup_funcs_data_address():
-    """lookup_funcs with valid address but not a function"""
+    """lookup_funcs reports a non-function address as an error."""
     data_addr = get_data_address()
     if not data_addr:
-        return  # Skip if no data segments
+        skip_test("binary has no data segment")
 
     result = lookup_funcs(data_addr)
     assert_is_list(result, min_length=1)
-    # Should return "Not a function" error
     assert result[0]["fn"] is None
-    assert "Not a function" in str(result[0]["error"]) or "Not found" in str(
-        result[0]["error"]
-    )
-
-
-# ============================================================================
-# Tests for lookup_funcs: interior address → entry point
-# ============================================================================
+    assert_error(result[0])
 
 
 @test()
 def test_lookup_funcs_interior_address():
-    """lookup_funcs returns function entry point when queried with interior address"""
-    import idc
+    """lookup_funcs maps an interior address back to its function entry point."""
     import idaapi
+    import idc
 
     fn_addr = get_any_function()
     if not fn_addr:
-        return
+        skip_test("binary has no functions")
 
     ea = int(fn_addr, 16)
     func = idaapi.get_func(ea)
     if not func:
-        return
+        skip_test("IDA could not retrieve the function object")
 
-    # Get second instruction inside the function
     interior = idc.next_head(func.start_ea, func.end_ea)
     if interior == idaapi.BADADDR or interior == func.start_ea:
-        return
+        skip_test("function has no interior instruction")
 
     result = lookup_funcs(hex(interior))
     assert len(result) == 1
-    assert result[0]["fn"] is not None
+    assert_ok(result[0], "fn")
     assert result[0]["fn"]["addr"] == hex(func.start_ea)
     assert result[0]["fn"]["addr"] != hex(interior)
 
 
-# ============================================================================
-# Tests for int_convert
-# ============================================================================
-
-
 @test()
 def test_int_convert():
-    """int_convert properly converts numbers"""
+    """int_convert returns the expected canonical representations for 0x41."""
     result = int_convert({"text": "0x41"})
     assert_is_list(result, min_length=1)
-    assert result[0]["error"] is None
-    assert result[0]["result"] is not None
+    assert_shape(
+        result,
+        [{"input": str, "result": optional(ConvertedNumber), "error": optional(str)}],
+    )
+    assert_ok(result[0], "result")
     conv = result[0]["result"]
-    assert_has_keys(conv, "decimal", "hexadecimal", "bytes", "binary")
     assert conv["decimal"] == "65"
     assert conv["hexadecimal"] == "0x41"
     assert conv["ascii"] == "A"
+    assert conv["bytes"] == "41"
 
 
 @test()
 def test_int_convert_invalid_text():
-    """int_convert handles invalid number text"""
+    """int_convert reports invalid numeric text."""
     result = int_convert({"text": "not_a_number"})
     assert_is_list(result, min_length=1)
     assert result[0]["result"] is None
-    assert result[0]["error"] is not None
-    assert "Invalid number" in result[0]["error"]
+    assert_error(result[0], contains="Invalid number")
 
 
 @test()
 def test_int_convert_overflow():
-    """int_convert handles overflow with small size"""
-    # Try to fit a large number into 1 byte
+    """int_convert reports overflow when the requested size is too small."""
     result = int_convert({"text": "0xFFFF", "size": 1})
     assert_is_list(result, min_length=1)
     assert result[0]["result"] is None
-    assert result[0]["error"] is not None
-    assert "too big" in result[0]["error"]
+    assert_error(result[0], contains="too big")
 
 
 @test()
 def test_int_convert_non_ascii():
-    """int_convert handles non-ASCII bytes"""
-    # 0x01 is not a printable ASCII character (control char)
+    """int_convert returns ascii=None for non-printable bytes."""
     result = int_convert({"text": "0x01"})
     assert_is_list(result, min_length=1)
-    assert result[0]["error"] is None
-    # ascii should be None for non-printable bytes
+    assert_ok(result[0], "result")
     assert result[0]["result"]["ascii"] is None
 
 
-# ============================================================================
-# Tests for list_funcs
-# ============================================================================
-
-
 @test()
-def test_list_funcs():
-    """list_funcs returns functions with proper structure"""
-    result = list_funcs({})
+def test_list_funcs_returns_non_empty_page_of_functions():
+    """list_funcs returns a non-empty page and every function round-trips through lookup_funcs."""
+    result = list_funcs({"offset": 0, "count": 10})
     assert_is_list(result, min_length=1)
     page = result[0]
-    assert_has_keys(page, "data", "next_offset")
-    if page["data"]:
-        assert_all_have_keys(page["data"], "addr", "name", "size")
+    assert_shape(
+        page, {"data": list_of(Function, min_length=1), "next_offset": optional(int)}
+    )
+
+    for fn in page["data"][:5]:
+        resolved = lookup_funcs(fn["addr"])
+        assert_ok(resolved[0], "fn")
+        assert resolved[0]["fn"]["addr"] == fn["addr"]
+        assert resolved[0]["fn"]["name"] == fn["name"]
+
+
+@test(binary="crackme03.elf")
+def test_list_funcs_contains_known_crackme_functions():
+    """list_funcs includes the known crackme functions main and check_pw."""
+    page = list_funcs({"filter": "*", "offset": 0, "count": 100})[0]
+    names = {fn["name"]: fn["addr"] for fn in page["data"]}
+    assert names.get("main") == CRACKME_MAIN
+    assert names.get("check_pw") == CRACKME_CHECK_PW
 
 
 @test()
 def test_list_funcs_pagination():
-    """list_funcs respects pagination parameters"""
-    result = list_funcs({"offset": 0, "count": 5})
-    assert_is_list(result, min_length=1)
-    page = result[0]
+    """list_funcs enforces count limits and returns a usable next_offset."""
+    page = list_funcs({"offset": 0, "count": 5})[0]
     assert len(page["data"]) <= 5
-    assert "next_offset" in page
-
-
-# ============================================================================
-# Tests for list_globals
-# ============================================================================
+    if page["next_offset"] is not None:
+        next_page = list_funcs({"offset": page["next_offset"], "count": 5})[0]
+        assert next_page["data"] != page["data"]
 
 
 @test()
-def test_list_globals():
-    """list_globals returns globals with proper structure"""
-    result = list_globals({})
-    assert_is_list(result, min_length=1)
-    page = result[0]
-    assert_has_keys(page, "data", "next_offset")
+def test_list_globals_returns_non_empty_results_for_all_query():
+    """list_globals('*') returns at least one global item."""
+    page = list_globals({"filter": "*", "offset": 0, "count": 50})[0]
+    assert_shape(
+        page,
+        {
+            "data": list_of({"addr": is_hex_address, "name": str}, min_length=1),
+            "next_offset": optional(int),
+        },
+    )
+
+
+@test(binary="crackme03.elf")
+def test_list_globals_filter_matches_known_symbol():
+    """list_globals can find the known crackme format string symbol."""
+    page = list_globals({"filter": "format", "offset": 0, "count": 10})[0]
+    assert_is_list(page["data"], min_length=1)
+    first = page["data"][0]
+    assert first["name"] == "format"
+    assert first["addr"] == CRACKME_FORMAT
 
 
 @test()
-def test_list_globals_pagination():
-    """list_globals respects pagination parameters"""
-    result = list_globals({"offset": 0, "count": 5})
-    assert_is_list(result, min_length=1)
-    page = result[0]
-    assert len(page["data"]) <= 5
-    assert "next_offset" in page
-
-
-# ============================================================================
-# Tests for imports
-# ============================================================================
-
-
-@test()
-def test_imports():
-    """imports returns import list with proper structure"""
+def test_imports_returns_non_empty_page():
+    """imports returns a non-empty page of typed import objects."""
     page = imports(0, 50)
-    assert isinstance(page, dict)
-    assert_has_keys(page, "data", "next_offset")
+    assert_shape(
+        page,
+        {
+            "data": list_of(
+                {"addr": is_hex_address, "imported_name": str, "module": str},
+                min_length=1,
+            ),
+            "next_offset": optional(int),
+        },
+    )
 
 
-@test()
-def test_imports_pagination():
-    """imports respects pagination parameters"""
-    page = imports(0, 5)
-    assert isinstance(page, dict)
-    assert len(page["data"]) <= 5
-    assert "next_offset" in page
+@test(binary="crackme03.elf")
+def test_imports_contains_printf():
+    """imports contains the expected printf import for the crackme fixture."""
+    page = imports(0, 50)
+    matches = [item for item in page["data"] if item["addr"] == CRACKME_PRINTF]
+    assert matches, "expected to find printf import at 0x4040"
+    assert "printf" in matches[0]["imported_name"]
 
 
-# ============================================================================
-# Tests for find_regex
-# ============================================================================
-
-
-@test()
-def test_find_regex():
-    """find_regex can search for patterns"""
-    # Search for a common pattern that should exist in most binaries
-    result = find_regex(".*")
-    assert isinstance(result, dict)
-    # Result structure should have matches
-    assert_has_keys(result, "matches", "n", "cursor")
+@test(binary="crackme03.elf")
+def test_find_regex_matches_known_correct_strings():
+    """find_regex('correct') returns the two known crackme result strings."""
+    result = find_regex("correct")
+    assert_shape(
+        result,
+        {
+            "n": int,
+            "matches": list_of({"addr": is_hex_address, "string": str}, min_length=1),
+            "cursor": dict,
+        },
+    )
+    by_addr = {item["addr"]: item["string"] for item in result["matches"]}
+    assert by_addr.get("0x201f") == "Yes, %s is correct!\n"
+    assert by_addr.get("0x2034") == "No, %s is not correct.\n"
+    assert result["n"] >= 2
