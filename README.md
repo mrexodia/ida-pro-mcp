@@ -5,8 +5,8 @@
 | Name                              |    Stmts |     Miss |  Cover |   Missing |
 |---------------------------------- | -------: | -------: | -----: | --------: |
 | src/ida\_pro\_mcp/\_\_init\_\_.py |        0 |        0 |   100% |           |
-| src/ida\_pro\_mcp/test.py         |       78 |       74 |     5% |    20-186 |
-| **TOTAL**                         |   **78** |   **74** | **5%** |           |
+| src/ida\_pro\_mcp/test.py         |       80 |       75 |     6% |    21-188 |
+| **TOTAL**                         |   **80** |   **75** | **6%** |           |
 
 
 ## Setup coverage badge
