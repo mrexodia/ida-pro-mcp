@@ -11,6 +11,7 @@ With coverage:
     uv run coverage html
 """
 
+import os
 import sys
 import argparse
 from pathlib import Path
@@ -140,14 +141,15 @@ With coverage:
             return 0
 
         # Run tests
+        in_ci = os.environ.get("CI", "").lower() not in ("", "0", "false", "no")
         interactive_output = sys.stdout.isatty()
-        show_all_test_output = (not args.quiet) and interactive_output
+        show_all_test_output = (not args.quiet) and (interactive_output or in_ci)
         results = run_tests(
             pattern=args.pattern,
             category=args.category,
             verbose=show_all_test_output,
             stop_on_failure=args.stop_on_failure,
-            failures_only=(not args.quiet) and not interactive_output,
+            failures_only=(not args.quiet) and not show_all_test_output,
         )
 
         # No matched tests is likely a configuration/test-selection mistake
