@@ -1,278 +1,156 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for working in this repository.
 
-## Project Overview
+## What this project is
 
-IDA Pro MCP Server - enables LLM-assisted reverse engineering by bridging IDA Pro with Model Context Protocol clients through a JSON-RPC HTTP server.
+IDA Pro MCP Server: exposes IDA Pro / idalib functionality to MCP clients.
 
-**Architecture**: Dual-process design
-- **MCP Server** (`server.py`): Python >=3.11, runs via `uv`, proxies to the MCP server hosted by IDA
-- **IDA Plugin** (`ida_mcp/`): Runs inside IDA Pro, exposes MCP server over HTTP (port 13337+)
-- **Headless idalib Server** (`idalib_server.py`): many->many context-bound sessions for multi-agent use
+Main pieces:
+- `src/ida_pro_mcp/server.py`: MCP server entrypoint
+- `src/ida_pro_mcp/idalib_server.py`: headless idalib server
+- `src/ida_pro_mcp/ida_mcp/`: IDA/plugin-side APIs
 
-## Development Commands
+Important API modules:
+- `api_core.py`: IDB metadata, functions, strings, imports
+- `api_analysis.py`: decompilation, disassembly, xrefs, paths, pattern search
+- `api_memory.py`: bytes/ints/strings, patching
+- `api_types.py`: structs, type inference, type application
+- `api_modify.py`: comments, renaming, asm patching
+- `api_stack.py`: stack frame operations
+- `api_debug.py`: debugger control, unsafe / low priority for tests
+- `api_python.py`: execute Python in IDA context
+- `api_resources.py`: `ida://` MCP resources
 
-### Testing MCP Server
-```bash
-# Interactive MCP inspector (web UI at http://localhost:5173)
-uv run mcp dev src/ida_pro_mcp/server.py
+## Core implementation rules
+
+### IDA thread safety
+All IDA SDK calls must run on the main thread.
+Use:
+```python
+from .rpc import tool
+from .sync import idasync
+
+@tool
+@idasync
+def my_tool(...):
+    ...
 ```
 
-### Installation
-```bash
-# Install package + configure all MCP clients + install IDA plugin
-pip install https://github.com/mrexodia/ida-pro-mcp/archive/refs/heads/main.zip
-ida-pro-mcp --install
+### API conventions
+- Prefer batch-first APIs.
+- Many functions accept either a comma-separated string or a list.
+- Use full type hints and `Annotated[...]` descriptions.
+- The function docstring becomes the MCP tool description.
 
-# Manual plugin install (creates symlinks or copies to IDA plugins folder)
-uv run ida-pro-mcp --install
-
-# Uninstall everything
-uv run ida-pro-mcp --uninstall
+Example:
+```python
+def my_api(addrs: Annotated[str, "Addresses (0x401000, main) or list"]) -> list[dict]:
+    ...
 ```
 
-### Running
+### Common helpers
+- Parse addresses with `parse_address()`
+- Normalize batch input with `normalize_list_input()` / `normalize_dict_list()`
+- Use shared pagination / filtering helpers from `utils.py`
+
+### Unsafe operations
+Debugger or destructive operations should be marked unsafe:
+```python
+from .rpc import tool, unsafe
+
+@unsafe
+@tool
+@idasync
+def dangerous_op(...):
+    ...
+```
+
+## Development commands
+
+### Run
 ```bash
-# Standard stdio transport (used by most MCP clients)
 uv run ida-pro-mcp
-
-# SSE transport for headless/remote use
 uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
-
-# Headless mode with idalib (default shared fallback context)
 uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/binary
-
-# Strict many-to-many isolation mode
 uv run idalib-mcp --isolated-contexts --host 127.0.0.1 --port 8745 path/to/binary
-
-# Enable unsafe debugger functions
 uv run ida-pro-mcp --unsafe
 ```
 
-### Changelog Generation
+### MCP inspector
 ```bash
-# Direct commits to main since tag
-git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
+uv run mcp dev src/ida_pro_mcp/server.py
 ```
 
-## Architecture Deep Dive
-
-### Plugin Architecture (ida_mcp/)
-
-**Modular API**: 9 specialized modules
-- `api_core.py`: IDB metadata, function/string/import listing
-- `api_analysis.py`: Decompilation, disassembly, xrefs, paths, patterns
-- `api_memory.py`: Read bytes/integers/strings, patch operations
-- `api_types.py`: Structures, type inference, type application
-- `api_modify.py`: Comments, assembly patching, renaming
-- `api_stack.py`: Stack frame operations
-- `api_debug.py`: Debugger control (unsafe, requires `--unsafe` flag)
-- `api_python.py`: Python code execution in IDA context
-- `api_resources.py`: MCP resources (24 URI patterns for RESTful access via `ida://` URIs)
-
-**Infrastructure**:
-- `rpc.py`: JSON-RPC registry + type checking (`@tool`, `@resource`, `@unsafe` decorators)
-- `sync.py`: IDA thread synchronization (`@idasync` decorator)
-- `zeromcp/mcp.py`: HTTP/SSE server implementation (Streamable HTTP + SSE transports)
-- `utils.py`: TypedDict schemas, address parsing, pagination helpers
-
-### Decorator Chain Pattern
-
-Every API function follows this pattern:
-```python
-@tool             # 1. Register MCP tool
-@idasync          # 2. Execute on IDA's main thread
-def my_api(param: Annotated[str, "description"]) -> ReturnType:
-    """Docstring becomes MCP tool description"""
-    # Implementation uses IDA SDK
+### Install / uninstall
+```bash
+uv run ida-pro-mcp --install
+uv run ida-pro-mcp --uninstall
 ```
 
-### Thread Safety
+## Testing and coverage
 
-**All IDA SDK calls MUST run on main thread** - enforced by `@idasync`:
-- Use `@idasync` for all IDA SDK operations (both read and write)
-- Implementation: `sync_wrapper()` uses `idaapi.execute_sync()` with queue-based result passing
-
-### Type Annotations
-
-**Batch-first API convention**: Most functions accept `str` (comma-separated) OR `list`:
-```python
-def my_api(addrs: Annotated[str, "Addresses (0x401000, 0x402000) or list"]):
-    parsed = normalize_list_input(addrs)  # Handles both formats
+### Run tests
+Use the headless test runner:
+```bash
+uv run ida-mcp-test tests/crackme03.elf -q
+uv run ida-mcp-test tests/typed_fixture.elf -q
+uv run ida-mcp-test tests/crackme03.elf -c api_analysis
+uv run ida-mcp-test tests/typed_fixture.elf -p "*stack*"
 ```
 
-**Annotated types**: Description text becomes MCP parameter description
-```python
-count: Annotated[int, "Maximum number of results"]
+Notes:
+- Use `uv run ...`
+- Non-interactive output should show failures only plus a summary
+- Binary-specific tests should use `@test(binary="...")` with the executable basename
+
+### Coverage
+Measure coverage across both maintained fixtures:
+```bash
+uv run coverage erase
+uv run coverage run -m ida_pro_mcp.test tests/crackme03.elf -q
+uv run coverage run --append -m ida_pro_mcp.test tests/typed_fixture.elf -q
+uv run coverage report --show-missing
 ```
 
-## Adding New API Functions
+Current fixture intent:
+- `tests/crackme03.elf`: compact general regression fixture
+- `tests/typed_fixture.elf`: typed globals / structs / locals / stack coverage fixture
 
-### Step-by-step
+### Test expectations
+- Prefer semantic assertions, not weak "field exists" checks
+- Prefer round-trip tests for mutating APIs
+- If tests expose clearly wrong API behavior, fix the API instead of weakening the test
+- Focus on IDA-facing modules, not server/config plumbing
+- Expect some IDA / Hex-Rays variance; guarded assertions or runtime skips are acceptable when justified
 
-1. Choose the appropriate `api_*.py` file (or create new one following `api_*.py` pattern)
-2. Import required IDA SDK modules and decorators:
-   ```python
-   from .rpc import tool
-   from .sync import idasync
-   ```
-3. Define function with full type hints:
-   ```python
-   @tool
-   @idasync
-   def my_function(param: Annotated[str, "param description"]) -> dict:
-       """Tool description (first line used in MCP schema)"""
-       # Use IDA SDK here
-       return {"result": value}
-   ```
-4. Test with MCP inspector: `uv run mcp dev src/ida_pro_mcp/server.py`
-
-**No other changes needed** - AST parsing auto-discovers and registers the function.
-
-### Unsafe Functions
-
-Mark debugger operations or destructive actions as unsafe:
-```python
-@unsafe           # Requires --unsafe flag
-@tool
-@idasync
-def dangerous_op():
-    pass
+### Generic-test sanity check
+When adding generic tests, also try a non-fixture binary to avoid ELF-specific assumptions:
+```bash
+uv run ida-mcp-test "C:\CodeBlocks\x64dbg\bin\x64\x64dbg.dll" -q
 ```
 
-### MCP Resources
+## Scope priorities
 
-Expose RESTful URI-based access to IDA data using `@resource`:
-```python
-@resource(uri="ida://functions/{pattern}")
-@idasync
-def functions_resource(pattern: str = "*") -> list[dict]:
-    """Get functions matching pattern via ida://functions/pattern URI"""
-    # Return data accessible via MCP resource protocol
-    return filtered_functions
-```
+High priority:
+- `api_analysis.py`
+- `api_types.py`
+- `api_modify.py`
+- `api_stack.py`
+- `api_memory.py`
+- `api_core.py`
+- `api_resources.py`
+- `utils.py`
+- `framework.py`
 
-Resources provide read-only access to IDA data via URI patterns. All resources use `@idasync`.
+Lower priority:
+- `api_debug.py`
+- MCP transport / hosting details
+- install / config mutation logic
 
-## Common Patterns
+## Practical notes
 
-### Address Parsing
-```python
-addr = parse_address(input_str)  # Handles hex, decimal, function names
-```
-
-### Batch Operations
-```python
-addrs = normalize_list_input(input)  # "0x401000, main" -> [0x401000, 0x140001000]
-results = []
-for addr in addrs:
-    try:
-        results.append({"addr": addr, "data": process(addr), "error": None})
-    except Exception as e:
-        results.append({"addr": addr, "error": str(e)})
-return results
-```
-
-### Pagination
-```python
-from .utils import paginate, Page
-
-@tool
-@idasync
-def list_items(queries: Annotated[str, "offset:count or pattern"]) -> Page:
-    all_items = get_all_items()
-    return paginate(all_items, queries)
-```
-
-### Pattern Filtering
-```python
-from .utils import pattern_filter
-
-filtered = pattern_filter(items, "name", pattern)  # Glob-style matching
-```
-
-## Testing Workflow
-
-1. **Install plugin symlink**: `uv run ida-pro-mcp --install` (one-time)
-2. **Load binary in IDA**: Plugin appears under Edit → Plugins → MCP (Ctrl+Alt+M)
-3. **Start MCP server**: Click plugin menu item or hotkey
-4. **Test via MCP inspector**: `uv run mcp dev src/ida_pro_mcp/server.py`
-5. **Direct JSON-RPC testing**: POST to `http://localhost:13337/mcp`:
-   ```json
-   {"jsonrpc": "2.0", "method": "my_function", "params": ["arg"], "id": 1}
-   ```
-
-## Error Handling
-
-- **IDAError**: Raised for IDA-specific errors (function not found, invalid address)
-- **JSONRPCError**: Protocol-level errors (invalid params, method not found)
-- **IDASyncError**: Thread synchronization failures (should never happen in production)
-
-## Transport Modes
-
-1. **stdio** (default): Standard MCP client transport
-2. **Streamable HTTP**: `POST /mcp` with `Mcp-Session-Id` header
-3. **SSE**: `GET /sse` for connection, `POST /sse?session=X` for requests
-
-Server auto-negotiates based on client request.
-
-## Headless idalib Session Semantics
-
-- Default mode uses a shared fallback context (`shared:fallback`) for session-bound operations.
-- `--isolated-contexts` enables strict many-to-many binding by transport context.
-- In isolated mode, unbound contexts fail for IDB-dependent tools/resources.
-- In isolated mode, Streamable HTTP enforces `Mcp-Session-Id` session semantics.
-
-## Prompting Best Practices
-
-**Critical for LLM accuracy**:
-- Always use `int_convert` tool for number base conversions (LLMs hallucinate on hex/decimal)
-- Remove obfuscation before LLM analysis (string encryption, control flow flattening)
-- Use FLIRT/Lumina to resolve library functions first
-- Avoid asking LLM to brute force - derive solutions from disassembly
-
-**Recommended prompt template** (from README:169-182):
-> - Inspect decompilation and add comments
-> - Rename variables to sensible names
-> - Change types if necessary (especially pointers/arrays)
-> - NEVER convert number bases yourself - use `int_convert` MCP tool
-> - Do not brute force - derive solutions from disassembly
-
-## File Structure
-
-```
-src/ida_pro_mcp/
-├── server.py              # MCP server + AST parser + installer
-├── idalib_server.py       # Headless idalib support
-├── ida_mcp.py             # IDA plugin loader
-└── ida_mcp/
-    ├── __init__.py        # Package exports
-    ├── rpc.py             # JSON-RPC registry
-    ├── sync.py            # IDA thread sync
-    ├── utils.py           # Shared helpers
-    ├── zeromcp/           # Vendored MCP server implementation
-    │   ├── mcp.py         # HTTP/SSE server
-    │   └── jsonrpc.py     # JSON-RPC protocol
-    └── api_*.py           # Modular API implementations
-```
-
-## Installation Mechanics
-
-**Plugin installation**:
-- Tries symlink first (development-friendly)
-- Falls back to copy on Windows/permission issues
-- Installs both `ida_mcp.py` (loader) and `ida_mcp/` (package)
-
-**MCP client configuration**:
-- Auto-detects Cline/Roo Code/Claude/Cursor/Windsurf/etc config paths
-- Injects server config into JSON/TOML files
-- Sets `autoApprove`/`alwaysAllow` for safe functions (non-debugger)
-
-## Python Version Requirements
-
-- **Server**: Python >=3.11 (uses vendored zeromcp MCP implementation)
-- **Plugin**: Python >=3.11
-- **IDA Pro**: 8.3+ (9.0 recommended), **IDA Free not supported** (no plugin API)
-
-Use `idapyswitch` to upgrade IDA's Python interpreter if needed.
+- Server/plugin Python: 3.11+
+- IDA Pro 8.3+; 9.0 recommended
+- IDA Free is not supported
+- If IDA uses the wrong Python, use `idapyswitch`
