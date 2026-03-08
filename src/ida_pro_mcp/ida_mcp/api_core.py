@@ -129,7 +129,7 @@ def int_convert(
         "Convert numbers to various formats (hex, decimal, binary, ascii)",
     ],
 ) -> list[dict]:
-    """Convert numbers to different formats"""
+    """Convert numbers to different formats. Use when the user wants to int convert."""
     inputs = normalize_dict_list(inputs, lambda s: {"text": s, "size": 64})
 
     results = []

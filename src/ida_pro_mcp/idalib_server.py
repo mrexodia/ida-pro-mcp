@@ -109,7 +109,7 @@ def idalib_open(
         Optional[str], "Custom session ID (auto-generated if not provided)"
     ] = None,
 ) -> dict:
-    """Open a binary and bind it to the active idalib context policy."""
+    """Open a binary and bind it to the active idalib context policy. Use when the user wants to idalib open."""
 
     try:
         manager = get_session_manager()
@@ -135,7 +135,7 @@ def idalib_open(
 
 @tool
 def idalib_close(session_id: Annotated[str, "Session ID to close"]) -> dict:
-    """Close an IDA session and remove all context bindings targeting it."""
+    """Close an IDA session and remove all context bindings targeting it. Use when the user wants to idalib close."""
 
     try:
         manager = get_session_manager()
@@ -150,7 +150,7 @@ def idalib_close(session_id: Annotated[str, "Session ID to close"]) -> dict:
 def idalib_switch(
     session_id: Annotated[str, "Session ID to bind to active context"],
 ) -> dict:
-    """Bind the active idalib context to a session and activate it."""
+    """Bind the active idalib context to a session and activate it. Use when the user wants to idalib switch."""
 
     try:
         manager = get_session_manager()
@@ -174,7 +174,7 @@ def idalib_switch(
 
 @tool
 def idalib_unbind() -> dict:
-    """Unbind the active idalib context from any session."""
+    """Unbind the active idalib context from any session. Use when the user wants to idalib unbind."""
 
     try:
         manager = get_session_manager()
@@ -196,7 +196,7 @@ def idalib_unbind() -> dict:
 
 @tool
 def idalib_list() -> dict:
-    """List sessions with context-binding and active-database metadata."""
+    """List sessions with context-binding and active-database metadata. Use when the user wants to see all available items in a collection or directory."""
 
     try:
         manager = get_session_manager()
@@ -215,7 +215,7 @@ def idalib_list() -> dict:
 
 @tool
 def idalib_current() -> dict:
-    """Return the session bound to the active idalib context policy."""
+    """Return the session bound to the active idalib context policy. Use when the user wants to idalib current."""
 
     try:
         manager = get_session_manager()
