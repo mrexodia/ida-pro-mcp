@@ -1,8 +1,6 @@
-# Quick Start（本 fork：默认 compact 工具集）
+# Quick Start
 
-本文面向“从零安装 → 打开 IDA Pro 立刻可用”，并提供用 `@modelcontextprotocol/inspector` 快速验证 compact 工具集是否生效的方法。
-
-> 说明：这里的 **IDA** 指 Hex-Rays IDA Pro（不是 IntelliJ IDEA）。
+本文面向"从零安装 → 打开 IDA Pro 立刻可用"，并提供用 `@modelcontextprotocol/inspector` 快速验证 compact 工具集是否生效的方法。
 
 ## 0. 前置条件
 
@@ -10,11 +8,7 @@
 - IDA Pro **8.3+**（推荐 9.x），并确认能正常加载 IDAPython
 - （可选）Node.js 18+：用于运行 `@modelcontextprotocol/inspector`
 
-## 1. 从零安装（推荐开发模式：可直接改代码生效）
-
-在你 fork 的仓库根目录执行。
-
-### 用 uv（推荐）
+## 1. 从零安装
 
 ```sh
 # 1) 创建并同步虚拟环境（会读取 pyproject.toml / uv.lock）
@@ -37,46 +31,22 @@ Windows 默认路径是：`%APPDATA%\Hex-Rays\IDA Pro\plugins\`
 
 macOS/Linux 默认路径是：`~/.idapro/plugins/`
 
-> 多版本 IDA Pro：只要它们共用同一个用户目录（上面这个路径），就会共用同一套插件，所以一般没问题。
 
 ## 2. 启用 compact 工具集（默认就是 compact）
 
-这个 fork 默认 `IDA_MCP_TOOLSET=compact`，即只暴露少量聚合工具。
-
-如果你想显式指定（推荐在你调试工具集切换时使用），在启动 IDA 前设置环境变量：
-
-### Windows（CMD）
-
-```bat
-set IDA_MCP_TOOLSET=compact
-start "" "C:\Path\To\ida64.exe"
-```
-
-### Windows（PowerShell）
-
-```powershell
-$env:IDA_MCP_TOOLSET = "compact"
-Start-Process "C:\Path\To\ida64.exe"
-```
-
-### macOS/Linux
-
-```sh
-export IDA_MCP_TOOLSET=compact
-/path/to/ida64
-```
+默认 `IDA_MCP_TOOLSET=compact`，即只暴露少量聚合工具。
 
 如需恢复原版全量工具（full）：
 
 ```sh
-IDA_MCP_TOOLSET=full
+export IDA_MCP_TOOLSET=full
 ```
 
 ## 3. 在 IDA Pro 里启动 MCP Server
 
 1) 打开任意二进制（必须先有数据库/工程）
 2) 触发插件：`Edit -> Plugins -> MCP (Ctrl+Alt+M)`
-3) 看到类似提示表示服务已启动：`Config: http://127.0.0.1:13337/config.html`
+3) 看到类似提示表示服务已启动：`Config: http://0.0.0.0:13337/config.html`
 
 ## 4. 用 Inspector 快速验证 compact 是否可用
 
@@ -110,21 +80,3 @@ compact 生效时，你应该只看到 2 个工具：
 - `view_func`
 
 能正常返回 structured result 就说明 compact 工具集可用。
-
-## 5. 你改完代码后，如何让 IDA 立刻用到新代码
-
-关键取决于安装时是 **软链（symlink）** 还是 **复制（copy）** 安装：
-
-- **软链**：通常你改完仓库代码后，重启 IDA 即可；甚至可以在 IDA 里再次触发插件启动（它会先 `unload_package("ida_mcp")` 再 import，相当于热重载）。
-- **复制**：你改完代码后需要再跑一次安装命令把新代码复制到 `plugins/`，再重启 IDA。
-
-Windows 下如果你希望尽量走软链模式，一般需要开启"开发者模式"或使用管理员权限运行安装命令。
-
-### 重新安装命令
-
-如果需要重新安装插件：
-
-**使用 uv（推荐）：**
-```sh
-uv run python -m ida_pro_mcp.server --install
-```
