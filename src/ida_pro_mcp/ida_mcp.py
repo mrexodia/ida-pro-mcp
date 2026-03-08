@@ -31,7 +31,7 @@ class MCP(idaapi.plugin_t):
     wanted_hotkey = "Ctrl-Alt-M"
 
     # TODO: make these configurable
-    HOST = "127.0.0.1"
+    HOST = "0.0.0.0"
     PORT = 13337
 
     def init(self):

@@ -178,7 +178,12 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         """
         host = self.headers.get("Host")
         port = self.server_port
-        if host not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+        allowed_hosts = [
+            f"127.0.0.1:{port}",
+            f"localhost:{port}",
+            f"host.docker.internal:{port}",
+        ]
+        if host not in allowed_hosts:
             self.send_error(403, "Invalid Host")
             return False
         return True
