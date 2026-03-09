@@ -168,6 +168,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
 
     def _read_chunked(self) -> bytes:
         body = b""
+        limit = self.mcp_server.post_body_limit
         while True:
             line = self.rfile.readline().split(b";")[0].strip()
             chunk_size = int(line, 16)
@@ -176,6 +177,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                 while self.rfile.readline().strip():
                     pass
                 break
+            if len(body) + chunk_size > limit:
+                raise ValueError(f"Chunked body exceeds {limit} bytes")
             body += self.rfile.read(chunk_size)
             self.rfile.readline()
         return body
