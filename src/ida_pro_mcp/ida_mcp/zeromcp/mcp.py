@@ -408,17 +408,28 @@ class McpServer:
             request_handler,
             bind_and_activate=False
         )
-        # allow_reuse_address=True allows fast restarts (skip TCP TIME_WAIT).
-        # Do NOT set allow_reuse_port: on macOS SO_REUSEPORT lets multiple
-        # processes silently bind the same port, causing request mis-routing
-        # and SIGPIPE crashes when one instance closes.
-        self._http_server.allow_reuse_address = True
+        # On Unix, SO_REUSEADDR allows fast restarts (skip TCP TIME_WAIT).
+        # On Windows, SO_REUSEADDR silently allows multiple processes to bind
+        # the same port, causing request mis-routing. Use SO_EXCLUSIVEADDRUSE
+        # instead, which prevents port sharing while still allowing reuse
+        # after the previous socket is fully closed.
+        if sys.platform == "win32":
+            self._http_server.allow_reuse_address = False
+        else:
+            self._http_server.allow_reuse_address = True
 
         # Set the MCPServer instance on the handler class
         setattr(self._http_server, "mcp_server", self)
 
         try:
             # Bind and activate in main thread - errors propagate synchronously
+            if sys.platform == "win32":
+                # SO_EXCLUSIVEADDRUSE: prevent other processes from binding
+                # this port, while allowing reuse after socket close.
+                import socket
+                self._http_server.socket.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1  # type: ignore[attr-defined]
+                )
             self._http_server.server_bind()
             self._http_server.server_activate()
         except OSError:
@@ -590,7 +601,7 @@ class McpServer:
 
             result = tool_response.get("result") if tool_response else None
             return {
-                "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
+                "content": [{"type": "text", "text": json.dumps(result, separators=(',', ':'))}],
                 "structuredContent": result if isinstance(result, dict) else {"result": result},
                 "isError": False,
             }
@@ -671,7 +682,7 @@ class McpServer:
                         "contents": [{
                             "uri": uri,
                             "mimeType": "application/json",
-                            "text": json.dumps({"error": error.get("message", "Unknown error")}, indent=2),
+                            "text": json.dumps({"error": error.get("message", "Unknown error")}, separators=(',', ':')),
                         }],
                         "isError": True,
                     }
@@ -681,7 +692,7 @@ class McpServer:
                     "contents": [{
                         "uri": uri,
                         "mimeType": "application/json",
-                        "text": json.dumps(result, indent=2),
+                        "text": json.dumps(result, separators=(',', ':')),
                     }]
                 }
 
@@ -736,7 +747,7 @@ class McpServer:
 
         # Convert non-string results to JSON
         if not isinstance(result, str):
-            result = json.dumps(result, indent=2)
+            result = json.dumps(result, separators=(',', ':'))
         return {
             "messages": [
                 {

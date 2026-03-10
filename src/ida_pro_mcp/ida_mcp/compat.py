@@ -145,6 +145,12 @@ def inf_is_64bit() -> bool:
     return idaapi.get_inf_structure().is_64bit()
 
 
+def inf_get_procname() -> str:
+    if IDA_GE_85:
+        return ida_ida.inf_get_procname()
+    return idaapi.get_inf_structure().procname
+
+
 # ============================================================================
 # Function info compatibility
 # ============================================================================

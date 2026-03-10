@@ -24,39 +24,274 @@ else:
 
 IDA_HOST = "127.0.0.1"
 IDA_PORT = 13337
+IDA_PORT_RANGE = 100  # scan 13337..13436
 
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
 
 
+# ============================================================================
+# Multi-Instance Management
+# ============================================================================
+
+
+class IDAInstance:
+    """A discovered IDA Pro instance."""
+
+    __slots__ = ("host", "port", "binary_name", "binary_path", "base", "size",
+                 "processor", "bits", "analysis_complete")
+
+    def __init__(self, host: str, port: int, metadata: dict | None = None):
+        self.host = host
+        self.port = port
+        md = metadata or {}
+        self.binary_name: str = md.get("module", "")
+        self.binary_path: str = md.get("path", "")
+        self.base: str = md.get("base", "")
+        self.size: str = md.get("size", "")
+        self.processor: str = md.get("processor", "")
+        self.bits: int = md.get("bits", 0)
+        self.analysis_complete: bool = md.get("analysis_complete", False)
+
+    def to_dict(self) -> dict:
+        d: dict = {
+            "port": self.port,
+            "binary_name": self.binary_name,
+            "analysis_complete": self.analysis_complete,
+        }
+        if self.binary_path:
+            d["binary_path"] = self.binary_path
+        if self.processor:
+            d["processor"] = self.processor
+        if self.bits:
+            d["bits"] = self.bits
+        if self.base:
+            d["base"] = self.base
+        if self.size:
+            d["size"] = self.size
+        return d
+
+
+def _probe_instance(host: str, port: int, timeout: float = 0.5) -> IDAInstance | None:
+    """Try to connect to an IDA MCP plugin and fetch its metadata."""
+    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    try:
+        # Use resources/read to fetch IDB metadata
+        rpc_request = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "resources/read",
+            "params": {"uri": "ida://idb/metadata"},
+            "id": 1,
+        })
+        conn.request("POST", "/mcp", rpc_request, {"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        if resp.status != 200:
+            return None
+        data = json.loads(resp.read().decode())
+        # Extract metadata from resources/read response
+        result = data.get("result", {})
+        contents = result.get("contents", [])
+        if contents and "text" in contents[0]:
+            metadata = json.loads(contents[0]["text"])
+            return IDAInstance(host, port, metadata)
+        # Connected but no metadata (maybe no binary loaded yet)
+        return IDAInstance(host, port)
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+class InstanceManager:
+    """Manages discovery and routing for multiple IDA Pro instances."""
+
+    def __init__(self, host: str, base_port: int, port_range: int):
+        self.host = host
+        self.base_port = base_port
+        self.port_range = port_range
+        self.instances: dict[int, IDAInstance] = {}  # port -> instance
+        self.active_port: int | None = None
+
+    def discover(self) -> list[IDAInstance]:
+        """Scan the port range for active IDA instances."""
+        import concurrent.futures
+
+        found: dict[int, IDAInstance] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
+            futures = {
+                pool.submit(_probe_instance, self.host, port): port
+                for port in range(self.base_port, self.base_port + self.port_range)
+            }
+            for future in concurrent.futures.as_completed(futures):
+                inst = future.result()
+                if inst is not None:
+                    found[inst.port] = inst
+
+        self.instances = found
+
+        # Auto-select if we have no active or active is gone
+        if self.active_port not in self.instances:
+            if self.instances:
+                self.active_port = min(self.instances.keys())
+            else:
+                self.active_port = None
+
+        return list(self.instances.values())
+
+    def get_active(self) -> IDAInstance | None:
+        if self.active_port is not None and self.active_port in self.instances:
+            return self.instances[self.active_port]
+        return None
+
+    def switch(self, port: int | None = None, name: str | None = None) -> IDAInstance:
+        """Switch active instance by port or binary name substring."""
+        if port is not None:
+            if port not in self.instances:
+                raise ValueError(f"No instance on port {port}. Run list_instances to refresh.")
+            self.active_port = port
+            return self.instances[port]
+
+        if name is not None:
+            name_lower = name.lower()
+            matches = [
+                inst for inst in self.instances.values()
+                if name_lower in inst.binary_name.lower()
+                or name_lower in inst.binary_path.lower()
+            ]
+            if len(matches) == 0:
+                available = ", ".join(
+                    f"{i.binary_name} (:{i.port})" for i in self.instances.values()
+                )
+                raise ValueError(
+                    f"No instance matching '{name}'. Available: {available}"
+                )
+            if len(matches) > 1:
+                dupes = ", ".join(
+                    f"{m.binary_name} (:{m.port})" for m in matches
+                )
+                raise ValueError(
+                    f"Multiple instances match '{name}': {dupes}. Use port number instead."
+                )
+            self.active_port = matches[0].port
+            return matches[0]
+
+        raise ValueError("Provide either port or name")
+
+
+instance_manager = InstanceManager(IDA_HOST, IDA_PORT, IDA_PORT_RANGE)
+
+
+# ============================================================================
+# MCP Tools for instance management
+# ============================================================================
+
+
+@mcp.tool
+def list_instances() -> dict:
+    """Discover and list all running IDA Pro instances. Scans the port range for active MCP plugins."""
+    found = instance_manager.discover()
+    active = instance_manager.active_port
+    return {
+        "instances": [
+            {**inst.to_dict(), "active": inst.port == active}
+            for inst in sorted(found, key=lambda i: i.port)
+        ],
+        "count": len(found),
+    }
+
+
+@mcp.tool
+def switch_instance(
+    port: int | None = None,
+    name: str | None = None,
+) -> dict:
+    """Switch active IDA instance by port number or binary name substring.
+
+    Provide either port (e.g. 13337) or name (e.g. 'firmware' matches 'firmware_v2.bin').
+    """
+    # Re-discover first so we have fresh data
+    instance_manager.discover()
+    inst = instance_manager.switch(port=port, name=name)
+    return {"switched_to": inst.to_dict()}
+
+
+@mcp.tool
+def get_active_instance() -> dict:
+    """Get info about the currently active IDA instance."""
+    inst = instance_manager.get_active()
+    if inst is None:
+        return {"active": None, "hint": "No active instance. Run list_instances to discover."}
+    return {"active": inst.to_dict()}
+
+
+# ============================================================================
+# Dispatch proxy - routes to active IDA instance
+# ============================================================================
+
+MCP_INSTRUCTIONS = """This is a multi-instance IDA Pro MCP server. You may be connected to multiple IDA instances simultaneously, each with a different binary loaded.
+
+MULTI-INSTANCE WORKFLOW:
+- Use list_instances to discover all running IDA instances and which binary each has open.
+- Use switch_instance to change which instance your tool calls are routed to.
+- Every tool response includes an [instance: <binary> @ port <N>] tag. ALWAYS check this tag to verify you are querying the correct binary. If the tag shows an unexpected binary, you called the wrong instance -- switch first and retry.
+- Before analyzing a different binary, always switch_instance first. Do not assume which instance is active.
+
+EFFECTIVE USE OF IDA:
+- IDA has already performed deep analysis of the binary (functions, xrefs, types, strings, decompilation). Use IDA's tools instead of reimplementing analysis with capstone, manual parsing, or brute-force scripts.
+- Decompilation, xref queries, string searches, struct analysis, and rename/retype operations are all available as tools -- use them.
+- For understanding code, decompile functions rather than reading raw bytes. For finding references, use xref tools rather than scanning memory.
+- The string cache is pre-built on plugin start. Use find_regex for fast string searches instead of scanning memory manually.
+- Only fall back to raw memory reads or external tools for truly low-level tasks that IDA's analysis cannot cover.
+- list_instances reports analysis_complete for each instance. If analysis is still running, results may be incomplete -- wait or re-check later.
+
+WHEN TO ASK THE USER TO LOAD A BINARY:
+- If you need to analyze a binary that is not currently open in any IDA instance, ask the user to open it in IDA and start the MCP plugin (Ctrl+Alt+M). Then use list_instances to discover it.
+- Do not try to reverse-engineer binaries manually with capstone, struct.unpack, or byte-level parsing when IDA can do it better. Opening the binary in IDA and using MCP tools gives far superior results (full disassembly, decompilation, type recovery, xrefs, string analysis) with less effort.
+- For non-trivial analysis tasks, IDA + MCP is almost always the fastest path to high-quality results. Only use manual approaches for quick one-off checks on small data.
+"""
+
+# Tools handled locally by the MCP server (not forwarded to IDA plugin)
+_LOCAL_TOOLS = {"list_instances", "switch_instance", "get_active_instance"}
+
+
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
-    """Dispatch JSON-RPC requests to the MCP server registry"""
+    """Dispatch JSON-RPC requests, routing to the active IDA instance."""
     if not isinstance(request, dict):
         request_obj: JsonRpcRequest = json.loads(request)
     else:
         request_obj: JsonRpcRequest = request  # type: ignore
 
-    if request_obj["method"] == "initialize":
-        return dispatch_original(request)
-    elif request_obj["method"].startswith("notifications/"):
+    method = request_obj["method"]
+
+    # Protocol methods handled locally
+    if method == "initialize":
+        response = dispatch_original(request)
+        if response and "result" in response:
+            response["result"]["instructions"] = MCP_INSTRUCTIONS
+        return response
+    if method.startswith("notifications/"):
         return dispatch_original(request)
 
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
-    try:
-        if isinstance(request, dict):
-            request = json.dumps(request)
-        elif isinstance(request, str):
-            request = request.encode("utf-8")
-        conn.request("POST", "/mcp", request, {"Content-Type": "application/json"})
-        response = conn.getresponse()
-        data = response.read().decode()
-        return json.loads(data)
-    except Exception as e:
-        full_info = traceback.format_exc()
+    # tools/list and tools/call for local tools need special handling
+    if method == "tools/list":
+        # Forward to IDA for its tools, then merge our local tools
+        return _dispatch_tools_list(request_obj, request)
+    if method == "tools/call":
+        tool_name = request_obj.get("params", {}).get("name", "")
+        if tool_name in _LOCAL_TOOLS:
+            return dispatch_original(request)
+
+    # Everything else goes to the active IDA instance
+    active = instance_manager.get_active()
+    if active is None:
+        # Auto-discover on first use
+        instance_manager.discover()
+        active = instance_manager.get_active()
+
+    if active is None:
         id = request_obj.get("id")
         if id is None:
-            return None  # Notification, no response needed
-
+            return None
         if sys.platform == "darwin":
             shortcut = "Ctrl+Option+M"
         else:
@@ -66,7 +301,56 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
                 "jsonrpc": "2.0",
                 "error": {
                     "code": -32000,
-                    "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?\n{full_info}",
+                    "message": (
+                        "No IDA Pro instances found! "
+                        f"Open IDA and run Edit -> Plugins -> MCP ({shortcut}) to start the server, "
+                        "then call list_instances to discover it."
+                    ),
+                },
+                "id": id,
+            }
+        )
+
+    response = _forward_to_ida(active.host, active.port, request_obj, request)
+
+    # Tag tool call responses when multiple instances are active
+    if method == "tools/call" and len(instance_manager.instances) > 1 and response and "result" in response:
+        result = response["result"]
+        content = result.get("content")
+        if isinstance(content, list):
+            instance_tag = f"[instance: {active.binary_name or 'unknown'} @ port {active.port}]"
+            content.insert(0, {"type": "text", "text": instance_tag})
+
+    return response
+
+
+def _forward_to_ida(
+    host: str, port: int, request_obj: dict, raw_request: dict | str | bytes | bytearray
+) -> JsonRpcResponse | None:
+    """Forward a JSON-RPC request to an IDA instance."""
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        if isinstance(raw_request, dict):
+            body = json.dumps(raw_request)
+        elif isinstance(raw_request, str):
+            body = raw_request.encode("utf-8")
+        else:
+            body = raw_request
+        conn.request("POST", "/mcp", body, {"Content-Type": "application/json"})
+        response = conn.getresponse()
+        data = response.read().decode()
+        return json.loads(data)
+    except Exception as e:
+        full_info = traceback.format_exc()
+        id = request_obj.get("id")
+        if id is None:
+            return None
+        return JsonRpcResponse(
+            {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32000,
+                    "message": f"Failed to connect to IDA Pro on port {port}: {e}\n{full_info}",
                     "data": str(e),
                 },
                 "id": id,
@@ -74,6 +358,33 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
         )
     finally:
         conn.close()
+
+
+def _dispatch_tools_list(request_obj: dict, raw_request) -> JsonRpcResponse | None:
+    """Merge local tools into the IDA instance's tools/list response."""
+    # Get local tools (list_instances, switch_instance, get_active_instance)
+    local_response = dispatch_original(raw_request)
+    local_tools = []
+    if local_response and "result" in local_response:
+        local_tools = local_response["result"].get("tools", [])
+
+    # Try to get IDA instance tools
+    active = instance_manager.get_active()
+    if active is None:
+        instance_manager.discover()
+        active = instance_manager.get_active()
+
+    if active is not None:
+        ida_response = _forward_to_ida(active.host, active.port, request_obj, raw_request)
+        if ida_response and "result" in ida_response:
+            ida_tools = ida_response["result"].get("tools", [])
+            # Merge: IDA tools + local tools
+            merged = ida_tools + local_tools
+            ida_response["result"]["tools"] = merged
+            return ida_response
+
+    # No IDA instance - return just local tools
+    return local_response
 
 
 mcp.registry.dispatch = dispatch_proxy
@@ -1501,6 +1812,10 @@ def main():
         raise Exception(f"Invalid IDA RPC server: {args.ida_rpc}")
     IDA_HOST = ida_rpc.hostname
     IDA_PORT = ida_rpc.port
+
+    # Update instance manager with CLI-provided host/port
+    instance_manager.host = IDA_HOST
+    instance_manager.base_port = IDA_PORT
 
     is_install = args.install is not None
     is_uninstall = args.uninstall is not None

@@ -6,6 +6,7 @@ Use tools for actions that modify state or perform expensive computations.
 
 from typing import Annotated
 
+import ida_auto
 import ida_nalt
 import ida_segment
 import ida_typeinf
@@ -55,7 +56,7 @@ def idb_metadata_resource() -> Metadata:
     except Exception:
         md5 = sha256 = crc32 = filesize = "unavailable"
 
-    return Metadata(
+    result = Metadata(
         path=path,
         module=module,
         base=base,
@@ -65,6 +66,11 @@ def idb_metadata_resource() -> Metadata:
         crc32=crc32,
         filesize=filesize,
     )
+    # Add analysis status (not part of Metadata TypedDict, but useful)
+    result["analysis_complete"] = bool(ida_auto.auto_is_ok())  # type: ignore[typeddict-unknown-key]
+    result["processor"] = compat.inf_get_procname()
+    result["bits"] = 64 if compat.inf_is_64bit() else 32
+    return result
 
 
 @resource("ida://idb/segments")
