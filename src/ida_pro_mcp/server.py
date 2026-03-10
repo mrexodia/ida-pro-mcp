@@ -217,14 +217,25 @@ def infer_http_transport_type(transport_url: str) -> str:
 
 def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
     if transport == "stdio":
-        mcp_config = {
-            "command": get_python_executable(),
-            "args": [
-                __file__,
-                "--ida-rpc",
-                f"http://{IDA_HOST}:{IDA_PORT}",
-            ],
-        }
+        if client_name == "Opencode":
+            mcp_config = {
+                "type": "local",
+                "command": [
+                    get_python_executable(),
+                    __file__,
+                    "--ida-rpc",
+                    f"http://{IDA_HOST}:{IDA_PORT}",
+                ],
+            }
+        else:
+            mcp_config = {
+                "command": get_python_executable(),
+                "args": [
+                    __file__,
+                    "--ida-rpc",
+                    f"http://{IDA_HOST}:{IDA_PORT}",
+                ],
+            }
         env = {}
         if copy_python_env(env):
             print("[WARNING] Custom Python environment variables detected")
@@ -326,6 +337,7 @@ GLOBAL_SPECIAL_JSON_STRUCTURES: dict[str, tuple[str | None, str]] = {
     "VS Code": ("mcp", "servers"),
     "VS Code Insiders": ("mcp", "servers"),
     "Visual Studio 2022": (None, "servers"),  # servers at top level
+    "Opencode": (None, "mcp"),  # mcp at top level
 }
 
 
@@ -430,8 +442,8 @@ def get_global_configs() -> dict[str, tuple[str, str]]:
                 "mcp_config.json",
             ),
             "Opencode": (
-                os.path.join(os.path.expanduser("~"), ".opencode"),
-                "mcp_config.json",
+                os.path.join(os.path.expanduser("~"), ".config", "opencode"),
+                "opencode.json",
             ),
             "Kiro": (
                 os.path.join(os.path.expanduser("~"), ".kiro"),
@@ -589,8 +601,8 @@ def get_global_configs() -> dict[str, tuple[str, str]]:
                 "mcp_config.json",
             ),
             "Opencode": (
-                os.path.join(os.path.expanduser("~"), ".opencode"),
-                "mcp_config.json",
+                os.path.join(os.path.expanduser("~"), ".config", "opencode"),
+                "opencode.json",
             ),
             "Kiro": (
                 os.path.join(os.path.expanduser("~"), ".kiro"),
@@ -722,8 +734,8 @@ def get_global_configs() -> dict[str, tuple[str, str]]:
                 "mcp_config.json",
             ),
             "Opencode": (
-                os.path.join(os.path.expanduser("~"), ".opencode"),
-                "mcp_config.json",
+                os.path.join(os.path.expanduser("~"), ".config", "opencode"),
+                "opencode.json",
             ),
             "Kiro": (
                 os.path.join(os.path.expanduser("~"), ".kiro"),
