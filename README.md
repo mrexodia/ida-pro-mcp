@@ -130,6 +130,29 @@ Another thing to keep in mind is that LLMs will not perform well on obfuscated c
 
 You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
 
+## Multi-Instance Support
+
+The MCP server supports multiple IDA instances running simultaneously. Each IDA plugin auto-selects a free port starting from 13337 (scanning up to 13436). The MCP server discovers all running instances and routes tool calls to the active one.
+
+**Instance management tools:**
+
+| Tool | Description |
+|------|-------------|
+| `list_instances` | Discover and list all running IDA instances (binary name, port, processor, analysis status) |
+| `switch_instance` | Switch active instance by port number or binary name substring |
+| `get_active_instance` | Get info about the currently active instance |
+
+**Workflow:**
+
+1. Open multiple binaries in separate IDA instances
+2. Start the MCP plugin in each (Edit -> Plugins -> MCP, or Ctrl+Alt+M)
+3. Use `list_instances` to discover all instances
+4. Use `switch_instance(name="firmware")` or `switch_instance(port=13338)` to change which instance receives tool calls
+
+When multiple instances are active, tool responses are tagged with `[instance: <binary> @ port <N>]` so the AI can verify it is querying the correct binary. The MCP server also injects instructions into the initialize response to guide AI clients on multi-instance workflow, effective use of IDA tools, and when to ask the user to load additional binaries.
+
+**Windows port safety:** On Windows, `SO_EXCLUSIVEADDRUSE` prevents multiple IDA instances from silently sharing the same port (a common `SO_REUSEADDR` pitfall on Windows).
+
 ## SSE Transport & Headless MCP
 
 You can run an SSE server to connect to the user interface like this:
@@ -187,7 +210,7 @@ With `--isolated-contexts`, strict Streamable HTTP session semantics are enabled
 **Resources** represent browsable state (read-only data) following MCP's philosophy.
 
 **Core IDB State:**
-- `ida://idb/metadata` - IDB file info (path, arch, base, size, hashes)
+- `ida://idb/metadata` - IDB file info (path, arch, base, size, hashes, processor, bits, analysis status)
 - `ida://idb/segments` - Memory segments with permissions
 - `ida://idb/entrypoints` - Entry points (main, TLS callbacks, etc.)
 
@@ -323,6 +346,7 @@ http://127.0.0.1:13337/mcp?ext=dbg
 - **Consistent error handling**: All batch operations return `[{..., error: null|string}, ...]`
 - **Cursor-based pagination**: Search functions return `cursor: {next: offset}` or `{done: true}` (default limit: 1000, enforced max: 10000 to prevent token overflow)
 - **Performance**: Strings are cached with MD5-based invalidation to avoid repeated `build_strlist` calls in large projects
+- **Token efficiency**: JSON responses to LLM clients are minified (~28% smaller for structured data like function lists)
 
 ## Comparison with other MCP servers
 
