@@ -11,6 +11,7 @@ import ida_ua
 
 from .rpc import tool
 from .sync import idasync, IDAError
+from .api_core import invalidate_funcs_cache, invalidate_globals_cache
 from .utils import (
     parse_address,
     decompile_checked,
@@ -392,8 +393,10 @@ def rename(batch: RenameBatch) -> dict:
     result = {}
     if "func" in batch:
         result["func"] = _rename_funcs(_normalize_items(batch["func"]))
+        invalidate_funcs_cache()
     if "data" in batch:
         result["data"] = _rename_globals(_normalize_items(batch["data"]))
+        invalidate_globals_cache()
     if "local" in batch:
         result["local"] = _rename_locals(_normalize_items(batch["local"]))
     if "stack" in batch:
@@ -451,6 +454,10 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[dict]:
                 )
         except Exception as e:
             results.append({"addr": addr_str, "error": str(e)})
+
+    if any(r.get("ok") for r in results):
+        invalidate_funcs_cache()
+        invalidate_globals_cache()
 
     return results
 
