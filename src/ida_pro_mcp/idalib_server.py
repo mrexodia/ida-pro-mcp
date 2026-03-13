@@ -3,6 +3,7 @@ import json
 import logging
 import signal
 import sys
+import os
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -269,6 +270,9 @@ def main():
         "--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)"
     )
     parser.add_argument(
+        "--stdio", action="store_true", help="Use STDIO transportation"
+    )
+    parser.add_argument(
         "input_path",
         type=Path,
         nargs="?",
@@ -334,10 +338,15 @@ def main():
     MCP_SERVER.require_streamable_http_session = _ISOLATED_CONTEXTS_ENABLED
     _install_context_activation_hooks()
 
-    # NOTE: npx -y @modelcontextprotocol/inspector for debugging
-    # TODO: with background=True the main thread does not fake any
-    # work from @idasync, so we deadlock.
-    MCP_SERVER.serve(host=args.host, port=args.port, background=False)
+    if args.stdio:
+        # Disable logging since it interferes with stdout
+        os.environ["IDA_MCP_LOG_REQUESTS"] = "0"
+        MCP_SERVER.stdio()
+    else:
+        # NOTE: npx -y @modelcontextprotocol/inspector for debugging
+        # TODO: with background=True the main thread does not fake any
+        # work from @idasync, so we deadlock.
+        MCP_SERVER.serve(host=args.host, port=args.port, background=False)
 
 
 if __name__ == "__main__":
