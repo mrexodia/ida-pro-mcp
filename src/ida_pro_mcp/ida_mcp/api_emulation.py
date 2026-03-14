@@ -118,8 +118,8 @@ _ARM_ARG_REGS = [
 
 def _is_windows_binary():
     """Return True if the loaded binary is a PE file (Windows ABI)."""
-    import ida_nalt
-    return ida_nalt.get_filetype() == ida_nalt.f_PE
+    import ida_ida
+    return ida_ida.inf_get_filetype() == ida_ida.f_PE
 
 
 def _get_arch_config(func_ea=None):
