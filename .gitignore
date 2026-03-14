@@ -31,3 +31,4 @@ server_generated.py
 .coverage*
 htmlcov/
 scalene-profile.json
+.omp/

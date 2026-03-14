@@ -178,18 +178,10 @@ def _build_interesting_strings() -> list[dict]:
 
 
 def _is_library_func(ea: int, name: str, flags: int) -> bool:
-    """A function is 'library' if it has FLIRT signature or starts with '_' and has no user-assigned name."""
+    """A function is 'library' if it has a FLIRT signature."""
     import idaapi
 
-    if flags & idaapi.FUNC_LIB:
-        return True
-    # Starts with '_' and has no user-assigned name (auto-generated names like sub_ are
-    # already filtered by the caller; here we check for names like _foo that IDA assigned
-    # from import stubs or similar).
-    if name.startswith("_") and not (flags & idaapi.FUNC_USERDEFINED):
-        # Names from analysis that start with _ without user intervention
-        return True
-    return False
+    return bool(flags & idaapi.FUNC_LIB)
 
 
 def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[dict]:
