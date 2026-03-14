@@ -1049,8 +1049,6 @@ def list_available_clients():
         return
 
     print("Available installation targets:\n")
-    print(f"  {'ida-plugin':<25} IDA Pro plugin (user-level only)")
-    print()
     print("  MCP Clients:")
     for name in configs:
         supports_project = name in PROJECT_LEVEL_CONFIGS
@@ -1066,7 +1064,7 @@ def list_available_clients():
         "  ida-pro-mcp --install                                    # Interactive selector"
     )
     print(
-        "  ida-pro-mcp --install claude,cursor,ida-plugin            # Specific targets"
+        "  ida-pro-mcp --install claude,cursor                       # Specific client targets"
     )
     print(
         "  ida-pro-mcp --install vscode --scope project              # Project-level config"
@@ -1414,7 +1412,6 @@ def _interactive_install(*, uninstall: bool, args):
         global_configs = get_global_configs()
         if global_configs:
             items: list[tuple[str, bool]] = []
-            items.append(("IDA Plugin", is_ida_plugin_installed()))
             for name, (config_dir, config_file) in global_configs.items():
                 installed = is_client_installed(name, config_dir, config_file)
                 items.append((name, installed))
@@ -1424,16 +1421,11 @@ def _interactive_install(*, uninstall: bool, args):
                 print("Cancelled.")
                 return
 
-            if "IDA Plugin" in selected:
-                install_ida_plugin(
-                    uninstall=uninstall, allow_ida_free=args.allow_ida_free
-                )
-            client_names = [s for s in selected if s != "IDA Plugin"]
-            if client_names:
+            if selected:
                 install_mcp_servers(
                     transport=transport,
                     uninstall=uninstall,
-                    only=client_names,
+                    only=selected,
                 )
         else:
             print(f"Unsupported platform: {sys.platform}")
@@ -1472,7 +1464,8 @@ def main():
         default=None,
         metavar="TARGETS",
         help="Install the MCP Server and IDA plugin. "
-        "Optionally specify comma-separated targets (e.g., 'ida-plugin,claude,cursor'). "
+        "The IDA plugin is installed immediately. "
+        "Optionally specify comma-separated client targets (e.g., 'claude,cursor'). "
         "Without targets, an interactive selector is shown.",
     )
     parser.add_argument(
@@ -1482,7 +1475,8 @@ def main():
         default=None,
         metavar="TARGETS",
         help="Uninstall the MCP Server and IDA plugin. "
-        "Optionally specify comma-separated targets. "
+        "The IDA plugin is uninstalled immediately. "
+        "Optionally specify comma-separated client targets. "
         "Without targets, an interactive selector is shown.",
     )
     parser.add_argument(
@@ -1548,25 +1542,21 @@ def main():
         targets_str = args.install if is_install else args.uninstall
         uninstall = is_uninstall
 
+        install_ida_plugin(
+            uninstall=uninstall, allow_ida_free=args.allow_ida_free
+        )
+
         if targets_str:
-            # Explicit targets: --install claude,cursor,ida-plugin
+            # Explicit targets: --install claude,cursor
             # Use CLI flags for transport/scope (no interactive prompts)
             transport = _resolve_transport(args.transport or "streamable-http")
             scope = args.scope or "project"
 
-            targets = [t.strip() for t in targets_str.split(",") if t.strip()]
-            install_ida = False
-            client_targets = []
-            for target in targets:
-                if target.lower() == "ida-plugin":
-                    install_ida = True
-                else:
-                    client_targets.append(target)
-
-            if install_ida:
-                install_ida_plugin(
-                    uninstall=uninstall, allow_ida_free=args.allow_ida_free
-                )
+            client_targets = [
+                t.strip()
+                for t in targets_str.split(",")
+                if t.strip() and t.strip().lower() != "ida-plugin"
+            ]
             if client_targets:
                 do_global = scope == "global"
                 do_project = scope == "project"
@@ -1584,8 +1574,15 @@ def main():
                         project=True,
                     )
         else:
-            # No targets: full interactive flow
-            _interactive_install(uninstall=uninstall, args=args)
+            # No targets: interactive client selection when a TTY is available.
+            if sys.stdin.isatty():
+                _interactive_install(uninstall=uninstall, args=args)
+            else:
+                action = "installed" if is_install else "uninstalled"
+                print(
+                    f"IDA plugin {action}. No TTY available for interactive client selection; "
+                    "pass explicit client targets to configure MCP clients."
+                )
         return
 
     if args.config:

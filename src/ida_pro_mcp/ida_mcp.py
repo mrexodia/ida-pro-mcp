@@ -169,5 +169,3 @@ def PLUGIN_ENTRY():
     return MCP()
 
 
-# IDA plugin flags
-PLUGIN_FLAGS = idaapi.PLUGIN_HIDE | idaapi.PLUGIN_FIX
