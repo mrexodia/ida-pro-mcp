@@ -7,7 +7,7 @@ import re
 from itertools import islice
 from typing import Annotated
 
-from .rpc import tool, ext
+from .rpc import tool
 from .sync import idasync, tool_timeout
 from . import compat
 from .api_core import _get_strings_cache
@@ -309,7 +309,7 @@ def _build_call_graph_summary(func_eas: list[int]) -> dict:
     }
 
 
-@ext("aggregate")
+
 @tool
 @idasync
 @tool_timeout(120.0)

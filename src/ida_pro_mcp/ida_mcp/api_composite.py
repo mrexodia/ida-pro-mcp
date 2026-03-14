@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Annotated
 
-from .rpc import tool, unsafe, ext
+from .rpc import tool, unsafe
 from .sync import idasync, tool_timeout, IDAError
 from .utils import (
     parse_address,
@@ -172,7 +172,7 @@ def _analyze_function_internal(ea: int, *, include_asm: bool = False) -> dict:
 # Tool 1 — analyze_function
 # ---------------------------------------------------------------------------
 
-@ext("aggregate")
+
 @tool
 @idasync
 @tool_timeout(120.0)
@@ -200,7 +200,7 @@ def analyze_function(
 # Tool 2 — analyze_component
 # ---------------------------------------------------------------------------
 
-@ext("aggregate")
+
 @tool
 @idasync
 @tool_timeout(180.0)
@@ -358,7 +358,7 @@ def analyze_component(
 _VALID_ACTIONS = frozenset({"rename_func", "set_type", "set_comment"})
 
 
-@ext("aggregate")
+
 @tool
 @unsafe
 @idasync
@@ -451,7 +451,7 @@ _MAX_TRACE_NODES = 200
 _MAX_TRACE_EDGES = 500
 
 
-@ext("aggregate")
+
 @tool
 @idasync
 @tool_timeout(120.0)
