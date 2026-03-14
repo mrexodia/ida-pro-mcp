@@ -3,6 +3,7 @@
 from ..framework import (
     test,
     skip_test,
+    assert_has_keys,
     assert_valid_address,
     assert_non_empty,
     assert_is_list,
@@ -20,8 +21,13 @@ from ..api_core import (
     lookup_funcs,
     int_convert,
     list_funcs,
+    func_query,
     list_globals,
+    entity_query,
     imports,
+    imports_query,
+    server_health,
+    server_warmup,
     find_regex,
 )
 
@@ -231,6 +237,28 @@ def test_list_funcs_pagination():
 
 
 @test()
+def test_func_query():
+    """func_query returns richer function entries"""
+    result = func_query({})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "data", "next_offset")
+    if page["data"]:
+        assert_has_keys(page["data"][0], "addr", "name", "size", "has_type")
+
+
+@test()
+def test_func_query_filters():
+    """func_query supports size/type filters"""
+    result = func_query({"min_size": 0, "max_size": 0xFFFFFFFF, "has_type": False})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "data", "next_offset")
+    for fn in page["data"]:
+        assert fn["has_type"] is False
+
+
+@test()
 def test_list_globals_returns_non_empty_results_for_all_query():
     """list_globals('*') returns at least one global item."""
     page = list_globals({"filter": "*", "offset": 0, "count": 50})[0]
@@ -294,3 +322,147 @@ def test_find_regex_matches_known_correct_strings():
     assert by_addr.get("0x201f") == "Yes, %s is correct!\n"
     assert by_addr.get("0x2034") == "No, %s is not correct.\n"
     assert result["n"] >= 2
+
+
+@test()
+def test_func_query():
+    """func_query returns richer function entries"""
+    result = func_query({})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "data", "next_offset")
+    if page["data"]:
+        assert_has_keys(page["data"][0], "addr", "name", "size", "has_type")
+
+
+@test()
+def test_func_query_filters():
+    """func_query supports size/type filters"""
+    result = func_query({"min_size": 0, "max_size": 0xFFFFFFFF, "has_type": False})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "data", "next_offset")
+    for fn in page["data"]:
+        assert fn["has_type"] is False
+
+
+@test()
+def test_func_query_multi_query_preserves_size_sort_state():
+    """func_query should not mutate shared rows across multiple queries in one call."""
+    result = func_query(
+        [
+            {"offset": 0, "count": 1},
+            {"offset": 0, "count": 10, "sort_by": "size", "descending": True},
+        ]
+    )
+    assert_is_list(result, min_length=2)
+    second_page = result[1]
+    assert_has_keys(second_page, "data", "next_offset")
+    sizes = [int(str(item["size"]), 0) for item in second_page["data"]]
+    assert sizes == sorted(sizes, reverse=True)
+
+
+# ============================================================================
+# Tests for entity_query / health / warmup
+# ============================================================================
+
+
+@test()
+def test_entity_query_functions_projection():
+    """entity_query supports generic function query + field projection"""
+    result = entity_query(
+        {
+            "kind": "functions",
+            "filter": "*",
+            "fields": ["addr", "name"],
+            "offset": 0,
+            "count": 5,
+        }
+    )
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "kind", "data", "next_offset", "total", "error")
+    if page["data"]:
+        assert_has_keys(page["data"][0], "kind", "addr", "name")
+
+
+@test()
+def test_entity_query_functions_sort_by_size():
+    """entity_query sorts function rows by numeric size, including hex string sizes."""
+    result = entity_query(
+        {
+            "kind": "functions",
+            "filter": "*",
+            "sort_by": "size",
+            "descending": True,
+            "offset": 0,
+            "count": 10,
+        }
+    )
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "kind", "data", "next_offset", "total", "error")
+    sizes = [int(str(item["size"]), 0) for item in page["data"]]
+    assert sizes == sorted(sizes, reverse=True)
+
+
+@test()
+def test_server_health():
+    """server_health returns readiness payload"""
+    result = server_health()
+    assert_has_keys(
+        result,
+        "status",
+        "uptime_sec",
+        "module",
+        "imagebase",
+        "strings_cache_ready",
+        "hexrays_ready",
+    )
+
+
+@test()
+def test_server_warmup():
+    """server_warmup runs warmup steps and returns health"""
+    result = server_warmup(
+        wait_auto_analysis=False, build_caches=False, init_hexrays=False
+    )
+    assert_has_keys(result, "ok", "steps", "health")
+    assert_is_list(result["steps"])
+@test()
+def test_imports():
+    """imports returns import list with proper structure"""
+    page = imports(0, 100)
+    assert_has_keys(page, "data", "next_offset")
+    if page["data"]:
+        assert_has_keys(page["data"][0], "addr", "imported_name", "module")
+
+
+@test()
+def test_imports_pagination():
+    """imports respects pagination parameters"""
+    page = imports(0, 5)
+    assert len(page["data"]) <= 5
+
+
+@test()
+def test_imports_query():
+    """imports_query supports filtered import listing"""
+    result = imports_query({"filter": "*", "offset": 0, "count": 10})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "data", "next_offset")
+    if page["data"]:
+        assert_has_keys(page["data"][0], "addr", "imported_name", "module")
+
+
+# ============================================================================
+# Tests for find_regex
+# ============================================================================
+
+
+@test()
+def test_find_regex():
+    """find_regex can search for patterns"""
+    result = find_regex(".*")
+    assert_has_keys(result, "matches", "cursor")
