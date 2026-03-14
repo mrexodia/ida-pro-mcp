@@ -142,11 +142,9 @@ def _build_statistics(func_eas: list[int], string_count: int, segment_count: int
 
 def _build_interesting_strings() -> list[dict]:
     import idautils
-    import idc
 
     strings = _get_strings_cache()
 
-    # Cap total strings processed for performance on large binaries.
     if len(strings) > _MAX_STRING_ITER:
         strings = strings[:_MAX_STRING_ITER]
 
@@ -159,22 +157,11 @@ def _build_interesting_strings() -> list[dict]:
         scored.append((count, ea, s))
 
     scored.sort(key=lambda t: t[0], reverse=True)
-    top = scored[:50]
-
-    result = []
-    for xref_count, ea, s in top:
-        ref_funcs = set()
-        for xref in islice(idautils.XrefsTo(ea, 0), _MAX_XREFS_PER_STRING):
-            name = idc.get_func_name(xref.frm)
-            if name:
-                ref_funcs.add(name)
-        result.append({
-            "addr": hex(ea),
-            "string": s,
-            "xref_count": xref_count,
-            "referencing_functions": sorted(ref_funcs),
-        })
-    return result
+    # Top 15 only — compact: string value + xref count, no referencing function lists.
+    return [
+        {"addr": hex(ea), "string": s, "xref_count": xref_count}
+        for xref_count, ea, s in scored[:15]
+    ]
 
 
 def _is_library_func(ea: int, name: str, flags: int) -> bool:
@@ -184,12 +171,29 @@ def _is_library_func(ea: int, name: str, flags: int) -> bool:
     return bool(flags & idaapi.FUNC_LIB)
 
 
+def _classify_func(ea: int, func, name: str, callee_count: int) -> str:
+    """Classify function as thunk/wrapper/leaf/dispatcher/complex."""
+    import idaapi
+
+    flags = func.flags
+    size = func.end_ea - func.start_ea
+    if flags & idaapi.FUNC_THUNK or size <= 8:
+        return "thunk"
+    if callee_count == 1 and size < 100:
+        return "wrapper"
+    if callee_count == 0:
+        return "leaf"
+    if callee_count > 10:
+        return "dispatcher"
+    return "complex"
+
+
 def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[dict]:
     import idaapi
     import idautils
     import idc
 
-    candidates: list[tuple[int, int, str, int, int]] = []  # (xref_count, ea, name, size, flags)
+    candidates: list[tuple[int, int, str, int, int]] = []
 
     for ea in func_eas:
         func = idaapi.get_func(ea)
@@ -206,36 +210,26 @@ def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[d
         candidates.append((xref_count, ea, name, size, flags))
 
     candidates.sort(key=lambda t: t[0], reverse=True)
-    top = candidates[:30]
+    # Top 15 with classification hints.
+    top = candidates[:15]
 
     result = []
     for xref_count, ea, name, size, _flags in top:
-        # Count callees (code refs from this function)
+        func = idaapi.get_func(ea)
         callee_count = 0
         for item_ea in idautils.FuncItems(ea):
             for xref in idautils.XrefsFrom(item_ea, 0):
                 if xref.type in (idaapi.fl_CF, idaapi.fl_CN):
                     callee_count += 1
 
-        # Check if function references any strings
-        has_strings = False
-        for item_ea in idautils.FuncItems(ea):
-            for xref in idautils.XrefsFrom(item_ea, 0):
-                if xref.type == idaapi.dr_O:
-                    str_type = idc.get_str_type(xref.to)
-                    if str_type is not None and str_type >= 0:
-                        has_strings = True
-                        break
-            if has_strings:
-                break
-
+        classification = _classify_func(ea, func, name, callee_count)
         result.append({
             "addr": hex(ea),
             "name": name,
             "size": size,
             "xref_count": xref_count,
             "callee_count": callee_count,
-            "has_strings": has_strings,
+            "type": classification,
         })
     return result
 
@@ -322,14 +316,13 @@ def _build_call_graph_summary(func_eas: list[int]) -> dict:
 def survey_binary(
     detail_level: Annotated[str, "Detail level: 'standard' or 'minimal'"] = "standard",
 ) -> dict:
-    """Get a complete overview of the binary in one call. Returns file metadata,
-    segment layout, entry points, statistics (function counts, string counts),
-    the top strings and functions ranked by cross-reference count, imports sorted
-    by category (crypto, network, file I/O, process, registry), and a call graph
-    summary. Use this as your FIRST tool call when starting analysis of any binary.
-    Do not call list_funcs, imports, or find_regex separately for initial triage —
-    this tool returns all of that and more. Use detail_level='minimal' for very
-    large binaries (>10k functions) to skip the expensive xref ranking."""
+    """Get a compact overview of the binary in one call. Returns file metadata,
+    segment layout, entry points, statistics, top 15 strings and functions ranked
+    by xref count (functions include classification: thunk/wrapper/leaf/dispatcher/
+    complex), imports by category, and call graph summary. Use this as your FIRST
+    tool call when starting analysis. Do not call list_funcs, imports, or find_regex
+    separately for triage — this returns all of that. Use detail_level='minimal'
+    for binaries with >10k functions."""
     import idautils
 
     minimal = detail_level == "minimal"

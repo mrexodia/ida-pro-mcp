@@ -23,6 +23,11 @@ from .utils import (
     normalize_list_input,
 )
 
+# Max decompile lines before truncation.
+_DECOMPILE_LINE_CAP = 100
+# Max strings/constants returned in compact mode.
+_TOP_STRINGS = 10
+_TOP_CONSTANTS = 10
 # Constants filtered out of extract_function_constants results.
 _BORING_CONSTANTS = frozenset({0, 1, -1, 0xFF, 0xFFFF, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF})
 
@@ -60,23 +65,59 @@ def _basic_block_info(ea: int) -> dict:
         for _ in block.succs():
             edges += 1
 
-    # M = E - N + 2 (for a single connected component)
     return {"count": nodes, "cyclomatic_complexity": edges - nodes + 2}
 
 
-def _filter_constants(raw: list[dict]) -> list[dict]:
-    """Drop small / common constants from extract_function_constants output."""
+def _filter_constants(raw: list[dict], limit: int = _TOP_CONSTANTS) -> list[dict]:
+    """Drop boring constants, return top N by absolute value."""
     out = []
     for c in raw:
         val = c.get("value", 0)
         if isinstance(val, int) and (abs(val) < 0x100 or val in _BORING_CONSTANTS):
             continue
         out.append(c)
+    out.sort(key=lambda c: abs(c.get("value", 0)), reverse=True)
+    return out[:limit]
+
+
+def _cap_decompile(code: str | None) -> tuple[str | None, int | None]:
+    """Cap decompiled output at _DECOMPILE_LINE_CAP lines.
+    Returns (possibly_truncated_code, total_lines_or_None)."""
+    if code is None:
+        return None, None
+    lines = code.split("\n")
+    total = len(lines)
+    if total <= _DECOMPILE_LINE_CAP:
+        return code, None  # not truncated
+    truncated = "\n".join(lines[:_DECOMPILE_LINE_CAP])
+    return truncated, total
+
+
+def _compact_strings(raw: list[dict], limit: int = _TOP_STRINGS) -> list[str]:
+    """Return just the string values, deduplicated, capped at limit."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for s in raw:
+        val = s.get("value") or s.get("string", "")
+        if val and val not in seen:
+            seen.add(val)
+            out.append(val)
+            if len(out) >= limit:
+                break
     return out
 
 
-def _analyze_function_internal(ea: int) -> dict:
-    """Core analysis logic — must be called from an @idasync context."""
+def _compact_callees(raw: list[dict]) -> list[str]:
+    """Return just callee names/addresses as strings."""
+    return [c.get("name") or c.get("addr", "?") for c in raw]
+
+
+def _analyze_function_internal(ea: int, *, include_asm: bool = False) -> dict:
+    """Core analysis logic — must be called from an @idasync context.
+
+    Returns a compact response by default: decompilation capped at 100 lines,
+    top 10 strings as values only, top 10 non-trivial constants, no disassembly.
+    Pass include_asm=True to include full disassembly."""
     import idaapi
 
     result: dict = {"addr": hex(ea), "error": None}
@@ -89,23 +130,32 @@ def _analyze_function_internal(ea: int) -> dict:
 
         result["name"] = idaapi.get_func_name(ea) or ""
         result["prototype"] = get_prototype(func)
+        result["size"] = func.end_ea - func.start_ea
 
-        # Decompilation may fail — non-fatal.
+        # Decompilation — capped at _DECOMPILE_LINE_CAP lines.
         try:
-            result["decompiled"] = decompile_function_safe(ea)
+            raw_code = decompile_function_safe(ea)
+            code, total_lines = _cap_decompile(raw_code)
+            result["decompiled"] = code
+            if total_lines is not None:
+                result["decompile_truncated"] = total_lines
         except Exception:
             result["decompiled"] = None
 
-        try:
-            result["assembly"] = get_assembly_lines(ea)
-        except Exception:
-            result["assembly"] = None
+        # Assembly — opt-in only.
+        if include_asm:
+            try:
+                result["assembly"] = get_assembly_lines(ea)
+            except Exception:
+                result["assembly"] = None
 
-        result["stack_frame"] = get_stack_frame_variables_internal(ea, raise_error=False)
-        result["strings"] = extract_function_strings(ea)
+        # Strings — top 10 values only.
+        result["strings"] = _compact_strings(extract_function_strings(ea))
+        # Constants — top 10 non-trivial.
         result["constants"] = _filter_constants(extract_function_constants(ea))
-        result["callees"] = get_callees(hex(ea))
-        result["callers"] = get_callers(hex(ea))
+        # Callees/callers — names only.
+        result["callees"] = _compact_callees(get_callees(hex(ea)))
+        result["callers"] = _compact_callees(get_callers(hex(ea)))
         result["xrefs"] = get_all_xrefs(ea)
         result["comments"] = get_all_comments(ea)
         result["basic_blocks"] = _basic_block_info(ea)
@@ -126,21 +176,22 @@ def _analyze_function_internal(ea: int) -> dict:
 @tool_timeout(120.0)
 def analyze_function(
     addr: Annotated[str, "Function address or name"],
+    include_asm: Annotated[bool, "Include full disassembly (default: false, saves tokens)"] = False,
 ) -> dict:
-    """Get everything about a single function in one call: decompiled pseudocode,
-    disassembly, all strings it references, non-trivial constants, its callers
-    and callees, cross-references, stack frame variables, comments, and basic
-    block count with cyclomatic complexity. Use this instead of calling decompile,
-    disasm, callees, xrefs_to, stack_frame, and basic_blocks separately. Use it
-    whenever you need to understand what a function does. Pass a function address
-    or a name like 'main' or 'sub_401000'."""
+    """Get a compact analysis of a single function: decompiled pseudocode (capped
+    at 100 lines), top 10 strings as values, top 10 non-trivial constants, caller
+    and callee names, cross-references, and basic block metrics. Disassembly is
+    excluded by default to save context tokens — set include_asm=true only when
+    you need raw instructions (crypto analysis, shellcode, decompiler failure).
+    Use this instead of calling decompile, disasm, callees, xrefs_to, stack_frame,
+    and basic_blocks separately."""
 
     try:
         ea = _resolve_addr(addr)
     except IDAError as exc:
         return {"addr": addr, "error": str(exc)}
 
-    return _analyze_function_internal(ea)
+    return _analyze_function_internal(ea, include_asm=include_asm)
 
 
 # ---------------------------------------------------------------------------
@@ -154,16 +205,13 @@ def analyze_function(
 def analyze_component(
     addrs: Annotated[list[str] | str, "Function addresses (comma-separated or list)"],
 ) -> dict:
-    """Analyze a group of functions as one logical unit. Pass 2-10 function
-    addresses that you believe are related (they call each other, share globals,
-    or were called sequentially from the same caller). Returns full analysis of
-    each function PLUS: the internal call graph between them, globals accessed by
-    two or more functions in the group, which functions have external callers
-    (interface) vs only internal callers (helpers), and strings used by multiple
-    functions. Use this when you see a cluster of sub_* functions that a parent
-    function calls in sequence, or when callees/callers overlap suggests a module.
-    Do not use for unrelated functions — the shared-globals and call-graph data
-    is only meaningful when the functions actually form a component."""
+    """Analyze a group of related functions as one logical unit. Returns a COMPACT
+    summary of each function (name, prototype, size, callee names, top 5 strings,
+    block count) plus relationship data: internal call graph, shared globals,
+    interface vs internal classification, and strings used by multiple functions.
+    Use analyze_function on individual addresses if you need full decompilation.
+    Use this when you see a cluster of sub_* functions called from the same parent
+    or when callees/callers overlap suggests a module."""
 
     import idaapi
     import idautils
@@ -172,8 +220,7 @@ def analyze_component(
     if not raw:
         return {"error": "Empty address list"}
 
-    # Resolve all addresses first.
-    ea_map: dict[int, str] = {}  # ea -> original addr string
+    ea_map: dict[int, str] = {}
     for a in raw:
         try:
             ea_map[_resolve_addr(a)] = a
@@ -182,10 +229,28 @@ def analyze_component(
 
     ea_set = set(ea_map.keys())
 
-    # --- Per-function analysis ---
+    # --- Per-function COMPACT summary (no decompile, no disasm) ---
     functions: list[dict] = []
     for ea in ea_set:
-        functions.append(_analyze_function_internal(ea))
+        func = idaapi.get_func(ea)
+        if func is None:
+            functions.append({"addr": hex(ea), "error": "No function"})
+            continue
+        name = idaapi.get_func_name(ea) or ""
+        strings_raw = extract_function_strings(ea)
+        top_strings = _compact_strings(strings_raw, limit=5)
+        callee_list = _compact_callees(get_callees(hex(ea)))
+        bb = _basic_block_info(ea)
+        functions.append({
+            "addr": hex(ea),
+            "name": name,
+            "prototype": get_prototype(func),
+            "size": func.end_ea - func.start_ea,
+            "callees": callee_list,
+            "strings": top_strings,
+            "basic_blocks": bb["count"],
+            "complexity": bb["cyclomatic_complexity"],
+        })
 
     # --- Internal call graph ---
     nodes = [hex(ea) for ea in ea_set]
@@ -206,8 +271,7 @@ def analyze_component(
                 })
 
     # --- Shared globals ---
-    # For each function, collect data xrefs-from and identify global names.
-    func_globals: dict[int, set[int]] = {}  # ea -> set of global eas
+    func_globals: dict[int, set[int]] = {}
     for ea in ea_set:
         globals_accessed: set[int] = set()
         func = idaapi.get_func(ea)
@@ -218,13 +282,11 @@ def analyze_component(
             for xref in idautils.XrefsFrom(head, 0):
                 if xref.iscode:
                     continue
-                # Data references to addresses outside any function are globals.
                 ref_func = idaapi.get_func(xref.to)
                 if ref_func is None and idaapi.is_loaded(xref.to):
                     globals_accessed.add(xref.to)
         func_globals[ea] = globals_accessed
 
-    # Find globals referenced by 2+ functions.
     global_refcount: dict[int, list[str]] = defaultdict(list)
     for ea, gset in func_globals.items():
         fname = idaapi.get_func_name(ea) or hex(ea)
@@ -245,24 +307,24 @@ def analyze_component(
     internal_only: list[str] = []
     for ea in ea_set:
         callers = get_callers(hex(ea))
-        has_external_caller = False
+        has_external = False
         for c in (callers or []):
             caller_addr = c.get("addr") or c.get("start_ea")
             if isinstance(caller_addr, str):
                 try:
                     caller_addr = int(caller_addr, 16)
                 except (ValueError, TypeError):
-                    has_external_caller = True
+                    has_external = True
                     break
             if caller_addr not in ea_set:
-                has_external_caller = True
+                has_external = True
                 break
-        if has_external_caller:
+        if has_external:
             interface_functions.append(hex(ea))
         else:
             internal_only.append(hex(ea))
 
-    # --- String usage ---
+    # --- String usage across functions ---
     string_funcs: dict[str, set[str]] = defaultdict(set)
     for ea in ea_set:
         fname = idaapi.get_func_name(ea) or hex(ea)
