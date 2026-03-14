@@ -1,4 +1,4 @@
-"""Tests for concise, high-signal MCP tool metadata."""
+"""Tests for high-signal MCP tool metadata."""
 
 import ast
 import re
@@ -7,7 +7,14 @@ from pathlib import Path
 from ..framework import test
 
 
-MAX_DOCSTRING_WORDS = 12
+# Tool docstrings are model-facing MCP descriptions in this repository; see
+# CLAUDE.md: "The function docstring becomes the MCP tool description."
+# Anthropic's tool-use guidance recommends detailed descriptions, ideally 3-4
+# sentences, rather than ultra-short labels:
+# https://docs.anthropic.com/en/docs/build-with-claude/tool-use/implement-tool-use
+# Keep a loose upper bound here to catch accidental prompt stuffing / policy text
+# while still allowing informative descriptions for richer tools.
+MAX_DOCSTRING_WORDS = 120
 PLACEHOLDER_PARAM_DESCRIPTIONS = {"address", "offset", "count"}
 
 
@@ -51,8 +58,8 @@ def _iter_annotated_descriptions(node: ast.FunctionDef):
 
 
 @test()
-def test_tool_docstrings_concise():
-    """Tool docstrings are concise and avoid anti-py_eval nudging text."""
+def test_tool_docstrings_present_and_high_signal():
+    """Tool docstrings are present, informative, and avoid anti-py_eval nudging."""
     failures: list[str] = []
     for path, node in _iter_tool_functions():
         doc = ast.get_docstring(node) or ""
