@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Annotated
 
-from .rpc import tool, unsafe
+from .rpc import tool, unsafe, ext
 from .sync import idasync, tool_timeout, IDAError
 from .utils import (
     parse_address,
@@ -120,15 +120,20 @@ def _analyze_function_internal(ea: int) -> dict:
 # Tool 1 — analyze_function
 # ---------------------------------------------------------------------------
 
+@ext("aggregate")
 @tool
 @idasync
 @tool_timeout(120.0)
 def analyze_function(
     addr: Annotated[str, "Function address or name"],
 ) -> dict:
-    """Deep single-function analysis aggregating decompilation, disassembly,
-    xrefs, strings, constants, call graph, stack frame, and basic-block metrics
-    into a single response."""
+    """Get everything about a single function in one call: decompiled pseudocode,
+    disassembly, all strings it references, non-trivial constants, its callers
+    and callees, cross-references, stack frame variables, comments, and basic
+    block count with cyclomatic complexity. Use this instead of calling decompile,
+    disasm, callees, xrefs_to, stack_frame, and basic_blocks separately. Use it
+    whenever you need to understand what a function does. Pass a function address
+    or a name like 'main' or 'sub_401000'."""
 
     try:
         ea = _resolve_addr(addr)
@@ -142,15 +147,23 @@ def analyze_function(
 # Tool 2 — analyze_component
 # ---------------------------------------------------------------------------
 
+@ext("aggregate")
 @tool
 @idasync
 @tool_timeout(180.0)
 def analyze_component(
     addrs: Annotated[list[str] | str, "Function addresses (comma-separated or list)"],
 ) -> dict:
-    """Analyze a set of related functions as a component: individual analysis,
-    internal call graph, shared globals, interface boundaries, and shared string
-    usage."""
+    """Analyze a group of functions as one logical unit. Pass 2-10 function
+    addresses that you believe are related (they call each other, share globals,
+    or were called sequentially from the same caller). Returns full analysis of
+    each function PLUS: the internal call graph between them, globals accessed by
+    two or more functions in the group, which functions have external callers
+    (interface) vs only internal callers (helpers), and strings used by multiple
+    functions. Use this when you see a cluster of sub_* functions that a parent
+    function calls in sequence, or when callees/callers overlap suggests a module.
+    Do not use for unrelated functions — the shared-globals and call-graph data
+    is only meaningful when the functions actually form a component."""
 
     import idaapi
     import idautils
@@ -281,6 +294,7 @@ def analyze_component(
 _VALID_ACTIONS = frozenset({"rename_func", "set_type", "set_comment"})
 
 
+@ext("aggregate")
 @tool
 @unsafe
 @idasync
@@ -290,8 +304,13 @@ def diff_before_after(
     action: Annotated[str, "Action: 'rename_func', 'set_type', 'set_comment'"],
     action_args: Annotated[dict, "Arguments for the action"],
 ) -> dict:
-    """Apply a modification to a function and return before/after decompilation
-    so the caller can see the impact of the change."""
+    """Rename a function, set its type, or add a comment, and immediately see the
+    before/after decompilation side by side. Use this instead of calling rename
+    then decompile separately when you want to verify that a rename or type change
+    actually improved readability. Actions: 'rename_func' (action_args: {name: str}),
+    'set_type' (action_args: {type: str}), 'set_comment' (action_args: {comment: str}).
+    Returns {before, after, action_applied, changes_detected}. Especially useful
+    during batch renaming to confirm each change had the intended effect."""
 
     import idaapi
     import ida_typeinf
@@ -368,6 +387,7 @@ _MAX_TRACE_NODES = 200
 _MAX_TRACE_EDGES = 500
 
 
+@ext("aggregate")
 @tool
 @idasync
 @tool_timeout(120.0)
@@ -376,8 +396,14 @@ def trace_data_flow(
     direction: Annotated[str, "'forward' (xrefs from) or 'backward' (xrefs to)"] = "forward",
     max_depth: Annotated[int, "Maximum traversal depth"] = 5,
 ) -> dict:
-    """BFS traversal following cross-references from or to an address,
-    recording function context, instructions, and data accesses at each node."""
+    """Follow cross-references from or to an address, automatically traversing
+    multiple hops. Use 'forward' to see where data flows TO (xrefs-from), or
+    'backward' to see where data flows FROM (xrefs-to). At each node in the
+    traversal, returns the function name, instruction, and whether it's code or
+    data. Use this when you find an interesting string, constant, or global and
+    want to understand every code path that touches it without manually chaining
+    xrefs_to calls. Do not use for call graph traversal — use callgraph for that.
+    max_depth controls how many hops to follow (default 5, max 20)."""
 
     import idaapi
     import idautils

@@ -7,7 +7,7 @@ import re
 from itertools import islice
 from typing import Annotated
 
-from .rpc import tool
+from .rpc import tool, ext
 from .sync import idasync, tool_timeout
 from . import compat
 from .api_core import _get_strings_cache
@@ -315,18 +315,21 @@ def _build_call_graph_summary(func_eas: list[int]) -> dict:
     }
 
 
+@ext("aggregate")
 @tool
 @idasync
 @tool_timeout(120.0)
 def survey_binary(
     detail_level: Annotated[str, "Detail level: 'standard' or 'minimal'"] = "standard",
 ) -> dict:
-    """Complete binary triage in one call. Returns metadata, statistics, segments,
-    entrypoints, interesting strings (by xref count), interesting functions (by xref count),
-    import categorization, and call graph summary. Replaces 10-15 individual tool calls.
-
-    With detail_level='minimal', returns only metadata, statistics, segments, and entrypoints
-    (skips the expensive xref-based analysis)."""
+    """Get a complete overview of the binary in one call. Returns file metadata,
+    segment layout, entry points, statistics (function counts, string counts),
+    the top strings and functions ranked by cross-reference count, imports sorted
+    by category (crypto, network, file I/O, process, registry), and a call graph
+    summary. Use this as your FIRST tool call when starting analysis of any binary.
+    Do not call list_funcs, imports, or find_regex separately for initial triage —
+    this tool returns all of that and more. Use detail_level='minimal' for very
+    large binaries (>10k functions) to skip the expensive xref ranking."""
     import idautils
 
     minimal = detail_level == "minimal"
