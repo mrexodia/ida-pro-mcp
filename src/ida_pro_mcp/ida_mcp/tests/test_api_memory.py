@@ -159,6 +159,7 @@ def test_patch_invalid_hex_data():
 @test(binary="crackme03.elf")
 def test_put_int_roundtrip_u64():
     """put_int writes a 64-bit value that can be read back and restored."""
+    print("Hello from PR!")
     original = get_int({"addr": CRACKME_DSO_HANDLE, "ty": "u64"})[0]
     assert_ok(original, "value")
     original_value = original["value"]
