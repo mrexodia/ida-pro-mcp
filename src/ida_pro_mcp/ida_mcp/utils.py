@@ -1117,16 +1117,16 @@ def handle_large_output(result: Any, line_threshold: int = 3000) -> Any:
         Either the original result or a dict with file path if written to file
     """
     try:
-        serialized = json.dumps(result, indent=2)
-        line_count = serialized.count("\n") + 1
+        serialized = json.dumps(result, separators=(',', ':'))
+        line_count = serialized.count("\\n") + 1  # count escaped newlines in content
 
-        if line_count > line_threshold:
+        if len(serialized) > line_threshold * 80:  # ~80 chars per line equivalent
             fd, temp_path = tempfile.mkstemp(
                 suffix=".json", prefix="ida_mcp_", text=True
             )
             try:
                 with os.fdopen(fd, "w") as f:
-                    f.write(serialized)
+                    f.write(json.dumps(result, indent=2))  # pretty for file
 
                 return {
                     "type": "file_reference",
