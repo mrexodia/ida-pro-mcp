@@ -3,7 +3,6 @@ on:
   push:
     branches:
       - main
-  pull_request:
   pull_request_target:
   workflow_dispatch:
 
@@ -11,10 +10,6 @@ jobs:
   idalib-tests:
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'pull_request_target' && 'external-pr' || '' }}
-    # Skip pull_request from forks (those go through pull_request_target instead)
-    if: |
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: write
       packages: read
