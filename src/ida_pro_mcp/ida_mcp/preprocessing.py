@@ -257,8 +257,7 @@ def detect_obfuscation() -> dict:
     import ida_bytes
     import ida_segment
 
-    processor = idaapi.get_inf_structure().procname.lower()
-    is_x86 = processor in ("metapc", "")
+    is_x86 = idaapi.ph.id == idaapi.PLFM_386
 
     # --- helpers ---
     def _hex(ea: int) -> str:
@@ -286,10 +285,8 @@ def detect_obfuscation() -> dict:
         # Count how many blocks each block is targeted by
         target_counts: dict[int, int] = {}
         for blk in blocks:
-            for succ_idx in range(blk.nsucc()):
-                succ_ea = fc[blk.succ(succ_idx)].start_ea if blk.succ(succ_idx) < len(blocks) else None
-                if succ_ea is not None:
-                    target_counts[succ_ea] = target_counts.get(succ_ea, 0) + 1
+            for succ in blk.succs():
+                target_counts[succ.start_ea] = target_counts.get(succ.start_ea, 0) + 1
 
         # A dispatcher is a block targeted by >50% of blocks
         threshold = n_blocks * 0.5
