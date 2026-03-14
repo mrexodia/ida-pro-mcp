@@ -85,6 +85,15 @@ class CommentOp(TypedDict):
     comment: Annotated[str, "Comment text"]
 
 
+class CommentAppendOp(TypedDict, total=False):
+    """Comment append operation"""
+
+    addr: Annotated[str, "Address (hex or decimal)"]
+    comment: Annotated[str, "Comment text to append"]
+    scope: Annotated[str, "auto|func|line (default: auto)"]
+    dedupe: Annotated[bool, "Skip if exact text already exists (default: true)"]
+
+
 class AsmPatchOp(TypedDict):
     """Assembly patch operation"""
 
@@ -138,6 +147,12 @@ class RenameBatch(TypedDict, total=False):
     stack: Annotated[
         list[StackRename] | StackRename | None, "Stack variable rename operations"
     ]
+    stop_on_error: Annotated[bool, "Stop processing remaining items on first failure"]
+    dry_run: Annotated[bool, "Validate only; report what would change"]
+    allow_overwrite: Annotated[
+        bool,
+        "Allow renaming even if target name already exists when backend supports force mode",
+    ]
 
 
 class StructFieldQuery(TypedDict):
@@ -147,12 +162,141 @@ class StructFieldQuery(TypedDict):
     field: Annotated[str, "Field name"]
 
 
+class XrefQuery(TypedDict, total=False):
+    """Generic cross-reference query"""
+
+    query: Annotated[str, "Address or name to resolve"]
+    direction: Annotated[str, "to|from|both (default: both)"]
+    xref_type: Annotated[str, "any|code|data (default: any)"]
+    offset: Annotated[int, "Starting index (default: 0)"]
+    count: Annotated[int, "Maximum results (default: 200, max: 5000)"]
+    include_fn: Annotated[bool, "Include function metadata when available"]
+    dedup: Annotated[bool, "Deduplicate by address/type (default: true)"]
+    sort_by: Annotated[str, "Sort key: addr|type (default: addr)"]
+    descending: Annotated[bool, "Sort descending (default: false)"]
+
+
 class ListQuery(TypedDict, total=False):
     """Pagination query for listing operations"""
 
     filter: Annotated[str, "Optional glob pattern to filter results"]
     offset: Annotated[int, "Starting index (default: 0)"]
     count: Annotated[int, "Maximum number of results (default: 50, 0 for all)"]
+
+
+class FunctionQuery(TypedDict, total=False):
+    """Function query with richer filtering"""
+
+    filter: Annotated[str, "Optional function name glob/regex filter"]
+    name_regex: Annotated[str, "Optional regex to apply to function names"]
+    min_size: Annotated[int, "Minimum function size in bytes (inclusive)"]
+    max_size: Annotated[int, "Maximum function size in bytes (inclusive)"]
+    has_type: Annotated[bool, "Require function type information to be present"]
+    offset: Annotated[int, "Starting index (default: 0)"]
+    count: Annotated[int, "Maximum number of results (default: 50, 0 for all)"]
+    sort_by: Annotated[str, "Sort key: addr|name|size (default: addr)"]
+    descending: Annotated[bool, "Sort descending (default: false)"]
+
+
+class EntityQuery(TypedDict, total=False):
+    """Generic IDB entity query with filtering, projection, and pagination"""
+
+    kind: Annotated[str, "Entity kind: functions|globals|imports|strings|names"]
+    filter: Annotated[str, "Optional glob/regex filter (name/text depending on kind)"]
+    regex: Annotated[str, "Optional regex applied to the primary text field"]
+    min_addr: Annotated[str, "Optional minimum address bound (hex/decimal)"]
+    max_addr: Annotated[str, "Optional maximum address bound (hex/decimal)"]
+    segment: Annotated[str, "Optional segment filter for address-backed entities"]
+    module: Annotated[str, "Optional import module filter (imports only)"]
+    offset: Annotated[int, "Starting index (default: 0)"]
+    count: Annotated[int, "Maximum number of results (default: 100, 0 for all)"]
+    sort_by: Annotated[str, "Sort key, e.g. addr|name|size|length"]
+    descending: Annotated[bool, "Sort descending (default: false)"]
+    fields: Annotated[
+        list[str] | str,
+        "Optional projection list; only selected fields are returned",
+    ]
+
+
+class FuncProfileQuery(TypedDict, total=False):
+    """Function profiling query with pagination and optional detail lists"""
+
+    query: Annotated[str, "Address/name or '*' for all functions"]
+    filter: Annotated[str, "Optional function-name glob/regex filter"]
+    offset: Annotated[int, "Starting index (default: 0)"]
+    count: Annotated[int, "Maximum number of results (default: 50, 0 for all)"]
+    sort_by: Annotated[str, "Sort key: addr|name|size (default: addr)"]
+    descending: Annotated[bool, "Sort descending (default: false)"]
+    include_lists: Annotated[bool, "Include sampled callers/callees/strings/constants"]
+    max_items: Annotated[int, "Max sampled items per list when include_lists=true"]
+    include_prototype: Annotated[bool, "Include recovered function prototype text"]
+
+
+class AnalyzeBatchQuery(TypedDict, total=False):
+    """Comprehensive function analysis request"""
+
+    query: Annotated[str, "Function address or name"]
+    include_decompile: Annotated[bool, "Include decompiler output (default: true)"]
+    include_disasm: Annotated[
+        bool, "Include disassembly lines (default: false, use max_disasm_insns)"
+    ]
+    include_xrefs: Annotated[bool, "Include xrefs-to/from summary (default: true)"]
+    include_callers: Annotated[bool, "Include caller list (default: true)"]
+    include_callees: Annotated[bool, "Include callee list (default: true)"]
+    include_strings: Annotated[bool, "Include referenced strings (default: true)"]
+    include_constants: Annotated[
+        bool, "Include immediate constants referenced in function (default: true)"
+    ]
+    include_basic_blocks: Annotated[
+        bool, "Include CFG basic blocks (default: true, capped by max_blocks)"
+    ]
+    include_proto: Annotated[bool, "Include recovered prototype (default: true)"]
+    max_disasm_insns: Annotated[
+        int, "Maximum disassembly instructions when include_disasm=true (default: 300)"
+    ]
+    max_callers: Annotated[int, "Maximum callers returned (default: 100)"]
+    max_callees: Annotated[int, "Maximum callees returned (default: 100)"]
+    max_strings: Annotated[int, "Maximum string refs returned (default: 100)"]
+    max_constants: Annotated[int, "Maximum constants returned (default: 200)"]
+    max_blocks: Annotated[int, "Maximum basic blocks returned (default: 500)"]
+
+
+class ImportQuery(TypedDict, total=False):
+    """Import query with filtering and pagination"""
+
+    filter: Annotated[str, "Optional import name glob/regex filter"]
+    module: Annotated[str, "Optional module name glob/regex filter"]
+    offset: Annotated[int, "Starting index (default: 0)"]
+    count: Annotated[int, "Maximum number of results (default: 100, 0 for all)"]
+
+
+class TypeInspectQuery(TypedDict, total=False):
+    """Type inspection request"""
+
+    name: Annotated[str, "Type name"]
+    include_members: Annotated[bool, "Include member details for UDT types"]
+    max_members: Annotated[int, "Maximum members to include (default: 128)"]
+
+
+class TypeQuery(TypedDict, total=False):
+    """Type catalog query with filtering, pagination, and optional relationships"""
+
+    filter: Annotated[str, "Optional type name glob/regex filter"]
+    kind: Annotated[
+        str,
+        "any|struct|union|enum|typedef|func|ptr|udt (default: any)",
+    ]
+    offset: Annotated[int, "Starting index (default: 0)"]
+    count: Annotated[int, "Maximum results (default: 100, 0 for all)"]
+    sort_by: Annotated[str, "Sort key: name|size|ordinal (default: name)"]
+    descending: Annotated[bool, "Sort descending (default: false)"]
+    include_decl: Annotated[bool, "Include declaration text (default: true)"]
+    include_members: Annotated[bool, "Include UDT member details (default: false)"]
+    max_members: Annotated[int, "Maximum members per UDT (default: 64)"]
+    include_relationships: Annotated[
+        bool,
+        "Include related/member type names to support type navigation (default: false)",
+    ]
 
 
 class BreakpointOp(TypedDict):
@@ -174,8 +318,16 @@ class InsnPattern(TypedDict, total=False):
     segment: Annotated[str, "Segment name to scope the scan"]
     start: Annotated[str, "Start address (hex/dec) to scope the scan"]
     end: Annotated[str, "End address (hex/dec, exclusive) to scope the scan"]
+    offset: Annotated[int, "Starting match index (default: 0)"]
+    count: Annotated[int, "Maximum matches to return (default: 100, max: 5000)"]
     max_scan_insns: Annotated[
         int, "Max instructions to scan (default: 200000, max: 2000000)"
+    ]
+    include_fn: Annotated[
+        bool, "Include containing function metadata for each match (default: false)"
+    ]
+    include_disasm: Annotated[
+        bool, "Include disassembly text for each match (default: false)"
     ]
     allow_broad: Annotated[
         bool,
@@ -212,6 +364,28 @@ class TypeEdit(TypedDict, total=False):
     kind: Annotated[str, "Type of entity (auto-detected if omitted)"]
     signature: Annotated[str, "Function signature (for kind=function)"]
     variable: Annotated[str, "Local variable name (for kind=local)"]
+
+
+class EnumMemberUpsert(TypedDict, total=False):
+    """Enum member upsert operation"""
+
+    name: Annotated[str, "Enum member name"]
+    value: Annotated[int | str, "Enum member value"]
+
+
+class EnumUpsert(TypedDict, total=False):
+    """Enum create/update operation"""
+
+    name: Annotated[str, "Enum type name"]
+    members: Annotated[list[EnumMemberUpsert] | EnumMemberUpsert, "Members to upsert"]
+    bitfield: Annotated[bool, "Whether the enum is a bitfield (default: false)"]
+
+
+class TypeApplyBatch(TypedDict, total=False):
+    """Batch type application configuration"""
+
+    edits: Annotated[list[TypeEdit] | TypeEdit, "Type edits to apply"]
+    stop_on_error: Annotated[bool, "Stop processing remaining edits on first failure"]
 
 
 class StackVarDecl(TypedDict):

@@ -41,16 +41,30 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     elif request_obj["method"].startswith("notifications/"):
         return dispatch_original(request)
 
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+    payload: bytes | str | dict = request
+    if isinstance(payload, dict):
+        payload = json.dumps(payload)
+    elif isinstance(payload, str):
+        payload = payload.encode("utf-8")
+
     try:
-        if isinstance(request, dict):
-            request = json.dumps(request)
-        elif isinstance(request, str):
-            request = request.encode("utf-8")
-        conn.request("POST", "/mcp", request, {"Content-Type": "application/json"})
-        response = conn.getresponse()
-        data = response.read().decode()
-        return json.loads(data)
+        conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+        try:
+            conn.request(
+                "POST",
+                "/mcp",
+                payload,
+                {"Content-Type": "application/json"},
+            )
+            response = conn.getresponse()
+            raw_data = response.read().decode()
+            if response.status >= 400:
+                raise RuntimeError(
+                    f"HTTP {response.status} {response.reason}: {raw_data}"
+                )
+            return json.loads(raw_data)
+        finally:
+            conn.close()
     except Exception as e:
         full_info = traceback.format_exc()
         id = request_obj.get("id")
@@ -66,14 +80,18 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
                 "jsonrpc": "2.0",
                 "error": {
                     "code": -32000,
-                    "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?\n{full_info}",
+                    "message": (
+                        "Failed to complete request to IDA Pro. "
+                        f"Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?\n"
+                        "The request was not retried automatically. "
+                        "If this was a mutating operation, verify IDA state before retrying.\n"
+                        f"{full_info}"
+                    ),
                     "data": str(e),
                 },
                 "id": id,
             }
         )
-    finally:
-        conn.close()
 
 
 mcp.registry.dispatch = dispatch_proxy

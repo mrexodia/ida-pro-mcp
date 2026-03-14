@@ -227,6 +227,13 @@ def assert_is_list(value: Any, min_length: int = 0) -> None:
     )
 
 
+def assert_has_keys(mapping: Any, *keys: str) -> None:
+    """Assert mapping contains the requested keys."""
+    assert isinstance(mapping, dict), f"Expected dict, got {type(mapping).__name__}"
+    missing = [key for key in keys if key not in mapping]
+    assert not missing, f"Missing keys: {', '.join(repr(key) for key in missing)}"
+
+
 def _assert_shape(value: Any, schema: Any, path: str) -> None:
     if isinstance(schema, OptionalShape):
         if value is None:

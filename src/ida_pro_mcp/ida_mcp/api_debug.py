@@ -162,7 +162,7 @@ def list_breakpoints():
 @tool
 @idasync
 def dbg_start():
-    """Start debugger"""
+    """Start debugger session for current target."""
     if len(list_breakpoints()) == 0:
         for i in range(ida_entry.get_entry_qty()):
             ordinal = ida_entry.get_entry_ordinal(i)
@@ -182,7 +182,7 @@ def dbg_start():
 @tool
 @idasync
 def dbg_exit():
-    """Exit debugger"""
+    """Terminate active debugger session."""
     dbg_ensure_running()
     if idaapi.exit_process():
         return
@@ -194,7 +194,7 @@ def dbg_exit():
 @tool
 @idasync
 def dbg_continue() -> str:
-    """Continue debugger"""
+    """Resume execution in active debugger session."""
     dbg_ensure_running()
     if idaapi.continue_process():
         ip = ida_dbg.get_ip_val()
@@ -208,9 +208,9 @@ def dbg_continue() -> str:
 @tool
 @idasync
 def dbg_run_to(
-    addr: Annotated[str, "Address"],
+    addr: Annotated[str, "Target execution address (hex or decimal)"],
 ):
-    """Run to address"""
+    """Run debuggee until target address is reached."""
     dbg_ensure_running()
     ea = parse_address(addr)
     if idaapi.run_to(ea):
@@ -225,7 +225,7 @@ def dbg_run_to(
 @tool
 @idasync
 def dbg_step_into():
-    """Step into"""
+    """Execute one instruction, stepping into calls."""
     dbg_ensure_running()
     if idaapi.step_into():
         ip = ida_dbg.get_ip_val()
@@ -239,7 +239,7 @@ def dbg_step_into():
 @tool
 @idasync
 def dbg_step_over():
-    """Step over"""
+    """Execute one instruction, stepping over calls."""
     dbg_ensure_running()
     if idaapi.step_over():
         ip = ida_dbg.get_ip_val()
@@ -258,7 +258,7 @@ def dbg_step_over():
 @tool
 @idasync
 def dbg_bps():
-    """List breakpoints"""
+    """List breakpoints with address and enabled status."""
     return list_breakpoints()
 
 
@@ -269,7 +269,7 @@ def dbg_bps():
 def dbg_add_bp(
     addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"],
 ) -> list[dict]:
-    """Add breakpoints"""
+    """Add breakpoints at one or more addresses."""
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -299,7 +299,7 @@ def dbg_add_bp(
 def dbg_delete_bp(
     addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"],
 ) -> list[dict]:
-    """Delete breakpoints"""
+    """Delete breakpoints at one or more addresses."""
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -321,7 +321,7 @@ def dbg_delete_bp(
 @tool
 @idasync
 def dbg_toggle_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
-    """Enable/disable breakpoints"""
+    """Enable or disable existing breakpoints in batch."""
 
     items = normalize_dict_list(items)
 
@@ -357,7 +357,7 @@ def dbg_toggle_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
 @tool
 @idasync
 def dbg_regs_all() -> list[ThreadRegisters]:
-    """Get all registers"""
+    """Return full register sets for all debugger threads."""
     result: list[ThreadRegisters] = []
     dbg = dbg_ensure_running()
     for thread_index in range(ida_dbg.get_thread_qty()):
@@ -373,7 +373,7 @@ def dbg_regs_all() -> list[ThreadRegisters]:
 def dbg_regs_remote(
     tids: Annotated[list[int] | int, "Thread ID(s) to get registers for"],
 ) -> list[dict]:
-    """Get thread registers"""
+    """Return full register sets for specified thread IDs."""
     if isinstance(tids, int):
         tids = [tids]
 
@@ -401,7 +401,7 @@ def dbg_regs_remote(
 @tool
 @idasync
 def dbg_regs() -> ThreadRegisters:
-    """Get current thread registers"""
+    """Return full registers for current debugger thread."""
     dbg = dbg_ensure_running()
     tid = ida_dbg.get_current_thread()
     return _get_registers_for_thread(dbg, tid)
@@ -458,7 +458,7 @@ def dbg_regs_named_remote(
         str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
     ],
 ) -> ThreadRegisters:
-    """Get specific thread registers"""
+    """Return selected registers for a specific thread ID."""
     dbg = dbg_ensure_running()
     if thread_id not in [
         ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())
@@ -494,7 +494,7 @@ def dbg_regs_named(
 @tool
 @idasync
 def dbg_stacktrace() -> list[dict[str, str]]:
-    """Get call stack"""
+    """Return current call stack with module and symbol context."""
     callstack = []
     try:
         tid = ida_dbg.get_current_thread()
@@ -546,7 +546,7 @@ def dbg_stacktrace() -> list[dict[str, str]]:
 @tool
 @idasync
 def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
-    """Read debug memory"""
+    """Read debuggee memory from one or more regions."""
 
     regions = normalize_dict_list(regions)
     dbg_ensure_running()
@@ -590,7 +590,7 @@ def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
 @tool
 @idasync
 def dbg_write(regions: list[MemoryPatch] | MemoryPatch) -> list[dict]:
-    """Write debug memory"""
+    """Write bytes to debuggee memory regions."""
 
     regions = normalize_dict_list(regions)
     dbg_ensure_running()

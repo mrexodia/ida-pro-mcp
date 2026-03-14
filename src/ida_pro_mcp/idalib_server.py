@@ -8,8 +8,10 @@ from typing import Annotated, Optional
 
 # idapro must go first to initialize idalib
 import idapro
+import ida_loader
 
 from ida_pro_mcp.ida_mcp import MCP_SERVER
+from ida_pro_mcp.ida_mcp.api_core import server_health, server_warmup
 from ida_pro_mcp.ida_mcp.rpc import get_current_transport_session_id, tool
 from ida_pro_mcp.idalib_session_manager import get_session_manager
 
@@ -24,6 +26,9 @@ IDALIB_MANAGEMENT_TOOLS = {
     "idalib_unbind",
     "idalib_list",
     "idalib_current",
+    "idalib_save",
+    "idalib_health",
+    "idalib_warmup",
 }
 
 _ISOLATED_CONTEXTS_ENABLED = False
@@ -241,6 +246,134 @@ def idalib_current() -> dict:
         return {**session.to_dict(), **_context_response_fields(context_id)}
     except Exception as e:
         return {"error": f"Failed to get current session: {e}"}
+
+
+@tool
+def idalib_save(
+    path: Annotated[str, "Optional destination path (default: current IDB path)"] = "",
+    session_id: Annotated[
+        Optional[str], "Optional session to activate before saving"
+    ] = None,
+) -> dict:
+    """Save the active (or requested) IDA session database to disk."""
+
+    try:
+        manager = get_session_manager()
+        context_id = _resolve_effective_context_id()
+
+        if session_id:
+            manager.bind_context(context_id, session_id, activate=True)
+        else:
+            manager.activate_context(context_id)
+
+        save_path = path.strip() if path else ""
+        if not save_path:
+            save_path = ida_loader.get_path(ida_loader.PATH_TYPE_IDB)
+        if not save_path:
+            return {
+                "ok": False,
+                **_context_response_fields(context_id),
+                "error": "Could not resolve IDB path",
+            }
+
+        ok = bool(ida_loader.save_database(save_path, 0))
+        return {
+            "ok": ok,
+            "path": save_path,
+            **_context_response_fields(context_id),
+            "error": None if ok else "save_database returned false",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@tool
+def idalib_health(
+    session_id: Annotated[
+        Optional[str], "Optional session to bind/activate before probing health"
+    ] = None,
+) -> dict:
+    """Health/ready probe for idalib context + core server status."""
+    try:
+        manager = get_session_manager()
+        context_id = _resolve_effective_context_id()
+
+        if session_id:
+            session = manager.bind_context(context_id, session_id, activate=True)
+        else:
+            session = manager.get_context_session(context_id)
+            if session is None:
+                return {
+                    "ready": False,
+                    **_context_response_fields(context_id),
+                    "session": None,
+                    "health": None,
+                    "error": (
+                        "No session bound for this context. "
+                        "Use idalib_open(...) or idalib_switch(session_id) first."
+                    ),
+                }
+            manager.activate_context(context_id)
+            session = manager.get_context_session(context_id)
+
+        health = server_health()
+        return {
+            "ready": bool(health.get("status") == "ok"),
+            **_context_response_fields(context_id),
+            "session": session.to_dict() if session is not None else None,
+            "health": health,
+            "error": None,
+        }
+    except Exception as e:
+        return {"ready": False, "error": str(e)}
+
+
+@tool
+def idalib_warmup(
+    session_id: Annotated[
+        Optional[str], "Optional session to bind/activate before warmup"
+    ] = None,
+    wait_auto_analysis: Annotated[bool, "Wait for auto analysis queue"] = True,
+    build_caches: Annotated[bool, "Build core caches"] = True,
+    init_hexrays: Annotated[bool, "Initialize Hex-Rays plugin"] = True,
+) -> dict:
+    """Warm up idalib context and core subsystems."""
+    try:
+        manager = get_session_manager()
+        context_id = _resolve_effective_context_id()
+
+        if session_id:
+            session = manager.bind_context(context_id, session_id, activate=True)
+        else:
+            session = manager.get_context_session(context_id)
+            if session is None:
+                return {
+                    "ready": False,
+                    **_context_response_fields(context_id),
+                    "session": None,
+                    "warmup": None,
+                    "error": (
+                        "No session bound for this context. "
+                        "Use idalib_open(...) or idalib_switch(session_id) first."
+                    ),
+                }
+            manager.activate_context(context_id)
+            session = manager.get_context_session(context_id)
+
+        warmup = server_warmup(
+            wait_auto_analysis=wait_auto_analysis,
+            build_caches=build_caches,
+            init_hexrays=init_hexrays,
+        )
+        return {
+            "ready": bool(warmup.get("ok")),
+            **_context_response_fields(context_id),
+            "session": session.to_dict() if session is not None else None,
+            "warmup": warmup,
+            "error": None,
+        }
+    except Exception as e:
+        return {"ready": False, "error": str(e)}
 
 
 def main():

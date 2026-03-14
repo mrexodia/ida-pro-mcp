@@ -15,9 +15,13 @@ from ..framework import (
 )
 from ..api_types import (
     declare_type,
+    enum_upsert,
     read_struct,
     search_structs,
+    type_query,
+    type_inspect,
     set_type,
+    type_apply_batch,
     infer_types,
 )
 
@@ -25,6 +29,13 @@ from ..api_types import (
 TEST_STRUCT_NAME = "__TestStruct__"
 NAME_RESOLUTION_STRUCT = "__NameResolutionTest__"
 CRACKME_DSO_HANDLE = "0x4008"
+TYPE_APPLY_SIGNATURE = "int"
+TYPED_FIXTURE_SUM_POINT = "0x1013c10"
+TYPED_FIXTURE_USE_WRAPPER = "0x1013dc0"
+TYPED_FIXTURE_G_POINT = "0x1069f70"
+TYPED_FIXTURE_G_WRAPPER = "0x1069f80"
+TYPED_FIXTURE_INFER_FALLBACK = "0x1069fa4"
+TYPED_FIXTURE_LOCAL_NAME = "rhs_handle"
 
 
 def create_test_struct(name: str = TEST_STRUCT_NAME) -> bool:
@@ -50,6 +61,13 @@ def create_test_struct(name: str = TEST_STRUCT_NAME) -> bool:
 
     search_result = search_structs(name)
     return bool(search_result and any(s["name"] == name for s in search_result))
+
+
+def _require_any_function() -> str:
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+    return fn_addr
 
 
 @test()
@@ -96,7 +114,7 @@ def test_read_struct_returns_named_members():
 @test(binary="typed_fixture.elf")
 def test_read_struct_wrapper_values():
     """read_struct reads the deterministic Wrapper global contents from the typed fixture."""
-    result = read_struct({"addr": "0x1069f80", "struct": "Wrapper"})
+    result = read_struct({"addr": TYPED_FIXTURE_G_WRAPPER, "struct": "Wrapper"})
     assert_is_list(result, min_length=1)
     entry = result[0]
     assert_ok(entry, "members")
@@ -193,6 +211,120 @@ def test_search_structs_exact_wrapper_match():
     assert wrapper["size"] == 24
 
 
+@test()
+def test_type_query():
+    """type_query supports filtered type listing"""
+    result = type_query(
+        {
+            "filter": "*",
+            "kind": "any",
+            "offset": 0,
+            "count": 10,
+            "include_decl": False,
+        }
+    )
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert "kind" in page
+    assert "data" in page
+    assert "next_offset" in page
+    assert "total" in page
+    assert "error" in page
+    if page["data"]:
+        assert "ordinal" in page["data"][0]
+        assert "name" in page["data"][0]
+        assert "size" in page["data"][0]
+        assert "kind" in page["data"][0]
+
+
+@test()
+def test_type_inspect():
+    """type_inspect returns metadata for declared struct"""
+    tname = "__TypeInspectTest__"
+    if not create_test_struct(tname):
+        skip_test("failed to declare type-inspect struct")
+
+    result = type_inspect({"name": tname, "include_members": True})
+    assert_is_list(result, min_length=1)
+    r = result[0]
+    assert r["name"] == tname
+    assert r["exists"] is True
+    assert r["error"] is None
+    assert r.get("member_count", 0) >= 0
+
+
+@test()
+def test_set_type():
+    """set_type applies type to address"""
+    result = set_type({"addr": _require_any_function(), "ty": TYPE_APPLY_SIGNATURE})
+    assert_is_list(result, min_length=1)
+
+
+@test()
+def test_enum_upsert_creates_and_replays_idempotently():
+    """enum_upsert creates a new enum and skips exact repeats."""
+    import idc
+
+    enum_name = "__TestEnumUpsert__"
+    enum_id = idc.get_enum(enum_name)
+    if enum_id != idc.BADADDR:
+        idc.del_enum(enum_id)
+
+    try:
+        first = enum_upsert(
+            {
+                "name": enum_name,
+                "members": [
+                    {"name": "__TEST_ENUM_ZERO__", "value": 0},
+                    {"name": "__TEST_ENUM_ONE__", "value": 1},
+                ],
+            }
+        )
+        second = enum_upsert(
+            {
+                "name": enum_name,
+                "members": [
+                    {"name": "__TEST_ENUM_ZERO__", "value": 0},
+                    {"name": "__TEST_ENUM_ONE__", "value": 1},
+                ],
+            }
+        )
+        assert_is_list(first, min_length=1)
+        assert first[0].get("ok") is True
+        assert first[0].get("created") is True
+        assert first[0]["summary"]["created"] == 2
+        assert_is_list(second, min_length=1)
+        assert second[0].get("ok") is True
+        assert second[0]["summary"]["skipped"] == 2
+    finally:
+        enum_id = idc.get_enum(enum_name)
+        if enum_id != idc.BADADDR:
+            idc.del_enum(enum_id)
+
+
+@test()
+def test_enum_upsert_reports_conflicting_member_value():
+    """enum_upsert reports conflicting member names cleanly."""
+    import idc
+
+    enum_name = "__TestEnumConflict__"
+    enum_id = idc.get_enum(enum_name)
+    if enum_id != idc.BADADDR:
+        idc.del_enum(enum_id)
+
+    try:
+        enum_upsert({"name": enum_name, "members": [{"name": "__TEST_ENUM_CONFLICT__", "value": 1}]})
+        result = enum_upsert({"name": enum_name, "members": [{"name": "__TEST_ENUM_CONFLICT__", "value": 2}]})
+        assert_is_list(result, min_length=1)
+        assert result[0].get("ok") is False
+        assert result[0]["summary"]["conflicts"] == 1
+        assert "conflict" in (result[0]["members"][0].get("error") or "").lower()
+    finally:
+        enum_id = idc.get_enum(enum_name)
+        if enum_id != idc.BADADDR:
+            idc.del_enum(enum_id)
+
+
 @test(binary="crackme03.elf")
 def test_set_type_applies_named_global_type():
     """set_type applies a concrete type to a known crackme global and reports success."""
@@ -222,9 +354,21 @@ def test_set_type_global_by_name_branch():
 @test(binary="typed_fixture.elf")
 def test_set_type_global_invalid_type_name():
     """set_type(kind=global) reports invalid type names cleanly."""
-    result = set_type({"addr": "0x1069f70", "ty": "NoSuchType", "kind": "global"})
+    result = set_type({"addr": TYPED_FIXTURE_G_POINT, "ty": "NoSuchType", "kind": "global"})
     assert_is_list(result, min_length=1)
     assert_error(result[0])
+
+
+@test()
+def test_type_apply_batch():
+    """type_apply_batch applies edits and returns summary counters"""
+    result = type_apply_batch({"edits": [{"addr": _require_any_function(), "ty": TYPE_APPLY_SIGNATURE}]})
+    assert "ok" in result
+    assert "applied" in result
+    assert "failed" in result
+    assert "stopped" in result
+    assert "results" in result
+    assert_is_list(result["results"], min_length=1)
 
 
 @test()
@@ -260,7 +404,7 @@ def test_set_type_stack_missing_member():
 def test_set_type_stack_missing_member_typed_fixture():
     """typed_fixture reports missing stack members against a stable non-main function."""
     result = set_type(
-        {"addr": "0x1013dc0", "kind": "stack", "name": "nope", "ty": "int"}
+        {"addr": TYPED_FIXTURE_USE_WRAPPER, "kind": "stack", "name": "nope", "ty": TYPE_APPLY_SIGNATURE}
     )
     assert_is_list(result, min_length=1)
     assert_error(result[0], contains="not found")
@@ -287,7 +431,7 @@ def test_set_type_function_branch():
     """set_type(kind=function) applies a function signature to a typed fixture function."""
     result = set_type(
         {
-            "addr": "0x1013c10",
+            "addr": TYPED_FIXTURE_SUM_POINT,
             "signature": "int __fastcall sum_point(struct Point *p)",
             "kind": "function",
         }
@@ -301,8 +445,8 @@ def test_set_type_function_invalid_signature():
     """set_type(kind=function) rejects non-function signatures."""
     result = set_type(
         {
-            "addr": "0x1013c10",
-            "signature": "int",
+            "addr": TYPED_FIXTURE_SUM_POINT,
+            "signature": TYPE_APPLY_SIGNATURE,
             "kind": "function",
         }
     )
@@ -315,15 +459,16 @@ def test_set_type_local_branch():
     """set_type(kind=local) reaches the local-variable type application path."""
     result = set_type(
         {
-            "addr": "0x1013dc0",
+            "addr": TYPED_FIXTURE_USE_WRAPPER,
             "kind": "local",
-            "variable": "rhs_handle",
-            "ty": "int",
+            "variable": TYPED_FIXTURE_LOCAL_NAME,
+            "ty": TYPE_APPLY_SIGNATURE,
         }
     )
     assert_is_list(result, min_length=1)
     assert (
-        result[0].get("ok") is True or result[0].get("error") == "Failed to apply type"
+        result[0].get("ok") is True
+        or result[0].get("error") == "Failed to apply local variable type"
     )
 
 
@@ -332,9 +477,9 @@ def test_set_type_local_invalid_type_name():
     """set_type(kind=local) reports invalid local type names cleanly."""
     result = set_type(
         {
-            "addr": "0x1013dc0",
+            "addr": TYPED_FIXTURE_USE_WRAPPER,
             "kind": "local",
-            "variable": "rhs_handle",
+            "variable": TYPED_FIXTURE_LOCAL_NAME,
             "ty": "NoSuchType",
         }
     )
@@ -347,10 +492,10 @@ def test_set_type_stack_branch():
     """set_type(kind=stack) applies a type to a real stack-frame member."""
     result = set_type(
         {
-            "addr": "0x1013dc0",
+            "addr": TYPED_FIXTURE_USE_WRAPPER,
             "kind": "stack",
-            "name": "rhs_handle",
-            "ty": "int",
+            "name": TYPED_FIXTURE_LOCAL_NAME,
+            "ty": TYPE_APPLY_SIGNATURE,
         }
     )
     assert_is_list(result, min_length=1)
@@ -360,7 +505,7 @@ def test_set_type_stack_branch():
 @test(binary="typed_fixture.elf")
 def test_infer_types_size_based_low_confidence():
     """infer_types falls back to size-based inference on a typed-fixture interior data address."""
-    result = infer_types("0x1069fa4")
+    result = infer_types(TYPED_FIXTURE_INFER_FALLBACK)
     assert_is_list(result, min_length=1)
     entry = result[0]
     assert entry["method"] == "size_based"
@@ -371,7 +516,7 @@ def test_infer_types_size_based_low_confidence():
 @test(binary="typed_fixture.elf")
 def test_infer_types_existing_or_hexrays_wrapper():
     """infer_types returns a strong typed result for the typed fixture wrapper object."""
-    result = infer_types("0x1069f80")
+    result = infer_types(TYPED_FIXTURE_G_WRAPPER)
     assert_is_list(result, min_length=1)
     entry = result[0]
     assert entry["method"] in {"hexrays", "existing"}

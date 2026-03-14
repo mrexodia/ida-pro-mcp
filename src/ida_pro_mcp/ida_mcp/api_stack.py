@@ -30,7 +30,7 @@ from .utils import (
 @tool
 @idasync
 def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
-    """Get stack vars"""
+    """Return stack variables for function address(es)."""
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -50,7 +50,7 @@ def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
 def declare_stack(
     items: list[StackVarDecl] | StackVarDecl,
 ):
-    """Create stack vars"""
+    """Create stack variables from typed stack declarations."""
     items = normalize_dict_list(items)
     results = []
     for item in items:
@@ -95,7 +95,7 @@ def declare_stack(
 def delete_stack(
     items: list[StackVarDelete] | StackVarDelete,
 ):
-    """Delete stack vars"""
+    """Delete stack variables by name or offset."""
 
     items = normalize_dict_list(items)
     results = []

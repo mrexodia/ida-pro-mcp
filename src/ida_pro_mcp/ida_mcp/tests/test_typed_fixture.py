@@ -39,6 +39,7 @@ G_NUMBERS = "0x1069fa0"
 G_MESSAGE = "0x1000c00"
 CALL_USE_WRAPPER = "0x1013f1b"
 IMMEDIATE_1234 = "0x1013e44"
+TYPED_FIXTURE_LOCAL_NAME = "rhs_handle"
 
 
 def _plain_hex_bytes(text: str) -> str:
@@ -166,12 +167,15 @@ def test_typed_fixture_struct_types_and_resources():
 def test_typed_fixture_set_type_local_and_stack_paths():
     """typed fixture hits set_type() local and stack branches on deterministic variables."""
     local = set_type(
-        {"addr": USE_WRAPPER, "kind": "local", "variable": "rhs_handle", "ty": "int"}
+        {"addr": USE_WRAPPER, "kind": "local", "variable": TYPED_FIXTURE_LOCAL_NAME, "ty": "int"}
     )[0]
-    assert local.get("ok") is True or local.get("error") == "Failed to apply type"
+    assert (
+        local.get("ok") is True
+        or local.get("error") == "Failed to apply local variable type"
+    )
 
     stack = set_type(
-        {"addr": USE_WRAPPER, "kind": "stack", "name": "rhs_handle", "ty": "int"}
+        {"addr": USE_WRAPPER, "kind": "stack", "name": TYPED_FIXTURE_LOCAL_NAME, "ty": "int"}
     )[0]
     assert stack.get("ok") is True
 
@@ -183,7 +187,7 @@ def test_typed_fixture_rename_local_and_stack_paths():
         local = rename(
             {
                 "local": [
-                    {"func_addr": USE_WRAPPER, "old": "rhs_handle", "new": "rhs_value"}
+                    {"func_addr": USE_WRAPPER, "old": TYPED_FIXTURE_LOCAL_NAME, "new": "rhs_value"}
                 ]
             }
         )
@@ -194,7 +198,7 @@ def test_typed_fixture_rename_local_and_stack_paths():
         stack = rename(
             {
                 "stack": [
-                    {"func_addr": USE_WRAPPER, "old": "rhs_handle", "new": "rhs_stack"}
+                    {"func_addr": USE_WRAPPER, "old": TYPED_FIXTURE_LOCAL_NAME, "new": "rhs_stack"}
                 ]
             }
         )
@@ -206,14 +210,14 @@ def test_typed_fixture_rename_local_and_stack_paths():
         rename(
             {
                 "local": [
-                    {"func_addr": USE_WRAPPER, "old": "rhs_value", "new": "rhs_handle"}
+                    {"func_addr": USE_WRAPPER, "old": "rhs_value", "new": TYPED_FIXTURE_LOCAL_NAME}
                 ]
             }
         )
         rename(
             {
                 "stack": [
-                    {"func_addr": USE_WRAPPER, "old": "rhs_stack", "new": "rhs_handle"}
+                    {"func_addr": USE_WRAPPER, "old": "rhs_stack", "new": TYPED_FIXTURE_LOCAL_NAME}
                 ]
             }
         )

@@ -10,6 +10,7 @@ from ..framework import (
     get_named_address,
 )
 from ..api_modify import (
+    append_comments,
     set_comments,
     patch_asm,
     rename,
@@ -24,6 +25,16 @@ from ..api_core import lookup_funcs
 CRACKME_MAIN = "0x123e"
 CRACKME_PATCH_ASM_ADDR = "0x125e"
 CRACKME_FRAME_DUMMY = "0x11a0"
+TYPED_FIXTURE_IMMEDIATE_1234 = "0x1013e44"
+TYPED_FIXTURE_USE_WRAPPER = "0x1013dc0"
+TYPED_FIXTURE_LOCAL_NAME = "rhs_handle"
+
+
+def _require_any_function() -> str:
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+    return fn_addr
 
 
 def _plain_hex_bytes(text: str) -> str:
@@ -57,7 +68,7 @@ def test_set_comment_interior_address_roundtrip():
     """set_comments also succeeds for an interior instruction address inside a function."""
     import idaapi
 
-    addr = 0x1013E44
+    addr = int(TYPED_FIXTURE_IMMEDIATE_1234, 16)
     original = idaapi.get_cmt(addr, False) or ""
     try:
         result = set_comments({"addr": hex(addr), "comment": "__INNER_COMMENT__"})
@@ -69,6 +80,71 @@ def test_set_comment_interior_address_roundtrip():
 
     restored = idaapi.get_cmt(addr, False) or ""
     assert restored == original
+
+
+@test()
+def test_append_comment_function_dedupes():
+    """append_comments appends once to a function comment and skips exact duplicates."""
+    import idc
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    addr = int(fn_addr, 16)
+    original = idc.get_func_cmt(addr, False) or ""
+    try:
+        first = append_comments({"addr": fn_addr, "comment": "__APPEND_COMMENT__", "scope": "func"})
+        second = append_comments({"addr": fn_addr, "comment": "__APPEND_COMMENT__", "scope": "func"})
+        assert_is_list(first, min_length=1)
+        assert first[0].get("ok") is True
+        assert first[0].get("appended") is True
+        assert_is_list(second, min_length=1)
+        assert second[0].get("ok") is True
+        assert second[0].get("skipped") is True
+        updated = idc.get_func_cmt(addr, False) or ""
+        assert updated.count("__APPEND_COMMENT__") == 1
+    finally:
+        idc.set_func_cmt(addr, original, False)
+
+
+@test()
+def test_append_comment_function_dedupe_does_not_skip_substrings():
+    """append_comments should only dedupe exact existing entries, not substrings."""
+    import idc
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    addr = int(fn_addr, 16)
+    original = idc.get_func_cmt(addr, False) or ""
+    try:
+        idc.set_func_cmt(addr, "foobar", False)
+        result = append_comments({"addr": fn_addr, "comment": "foo", "scope": "func"})
+        assert_is_list(result, min_length=1)
+        assert result[0].get("ok") is True
+        assert result[0].get("appended") is True
+        updated = idc.get_func_cmt(addr, False) or ""
+        assert updated == "foobar\nfoo"
+    finally:
+        idc.set_func_cmt(addr, original, False)
+
+
+@test(binary="typed_fixture.elf")
+def test_append_comment_interior_address_roundtrip():
+    """append_comments appends to an interior line comment when scoped to line."""
+    import idaapi
+
+    addr = int(TYPED_FIXTURE_IMMEDIATE_1234, 16)
+    original = idaapi.get_cmt(addr, False) or ""
+    try:
+        result = append_comments({"addr": hex(addr), "comment": "__LINE_APPEND__", "scope": "line"})
+        assert_is_list(result, min_length=1)
+        assert result[0].get("ok") is True
+        assert "__LINE_APPEND__" in (idaapi.get_cmt(addr, False) or "")
+    finally:
+        idaapi.set_cmt(addr, original, False)
 
 
 @test(binary="typed_fixture.elf")
@@ -103,7 +179,7 @@ def test_patch_asm_roundtrip():
 @test(binary="typed_fixture.elf")
 def test_patch_asm_invalid_instruction_reports_error():
     """patch_asm reports assembly failures without crashing or partially succeeding."""
-    result = patch_asm({"addr": "0x1013e44", "asm": "not an instruction"})
+    result = patch_asm({"addr": TYPED_FIXTURE_IMMEDIATE_1234, "asm": "not an instruction"})
     assert_is_list(result, min_length=1)
     assert_error(result[0], contains="Failed to assemble")
 
@@ -155,6 +231,37 @@ def test_rename_data_roundtrip():
 
 
 @test()
+def test_rename_dry_run_summary():
+    """rename supports dry_run and returns summary counters"""
+    result = rename({"func": [{"addr": _require_any_function(), "name": "__test_dry_run__"}], "dry_run": True})
+    assert isinstance(result, dict)
+    assert "func" in result
+    assert "summary" in result
+    assert result["summary"]["dry_run"] is True
+    assert_is_list(result["func"], min_length=1)
+    assert result["func"][0].get("dry_run") is True
+
+
+@test()
+def test_rename_stop_on_error():
+    """rename can stop on first error"""
+    result = rename(
+        {
+            "func": [
+                {"addr": "0x0", "name": "__invalid__"},
+                {"addr": _require_any_function(), "name": "__should_not_run__"},
+            ],
+            "stop_on_error": True,
+        }
+    )
+    assert isinstance(result, dict)
+    assert "func" in result
+    assert "summary" in result
+    assert len(result["func"]) == 1
+    assert result["summary"]["stopped"] is True
+
+
+@test()
 def test_rename_local_error_handling():
     """rename(local=...) reports a structured error for a missing local variable."""
     fn_addr = get_any_function()
@@ -184,7 +291,7 @@ def test_rename_local_roundtrip():
         result = rename(
             {
                 "local": [
-                    {"func_addr": "0x1013dc0", "old": "rhs_handle", "new": "rhs_value"}
+                    {"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": TYPED_FIXTURE_LOCAL_NAME, "new": "rhs_value"}
                 ]
             }
         )
@@ -196,7 +303,7 @@ def test_rename_local_roundtrip():
         rename(
             {
                 "local": [
-                    {"func_addr": "0x1013dc0", "old": "rhs_value", "new": "rhs_handle"}
+                    {"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "rhs_value", "new": TYPED_FIXTURE_LOCAL_NAME}
                 ]
             }
         )
@@ -211,18 +318,18 @@ def test_rename_stack_roundtrip():
         result = rename(
             {
                 "stack": [
-                    {"func_addr": "0x1013dc0", "old": "rhs_handle", "new": "rhs_stack"}
+                    {"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": TYPED_FIXTURE_LOCAL_NAME, "new": "rhs_stack"}
                 ]
             }
         )
         assert result["stack"][0]["ok"] is True
-        names = {var["name"] for var in stack_frame("0x1013dc0")[0]["vars"]}
+        names = {var["name"] for var in stack_frame(TYPED_FIXTURE_USE_WRAPPER)[0]["vars"]}
         assert "rhs_stack" in names
     finally:
         rename(
             {
                 "stack": [
-                    {"func_addr": "0x1013dc0", "old": "rhs_stack", "new": "rhs_handle"}
+                    {"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "rhs_stack", "new": TYPED_FIXTURE_LOCAL_NAME}
                 ]
             }
         )
@@ -231,7 +338,7 @@ def test_rename_stack_roundtrip():
 @test(binary="typed_fixture.elf")
 def test_rename_stack_missing_member_error():
     """rename(stack=...) reports missing frame members explicitly."""
-    result = rename({"stack": [{"func_addr": "0x1013dc0", "old": "nope", "new": "x"}]})
+    result = rename({"stack": [{"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "nope", "new": "x"}]})
     assert result["stack"][0]["ok"] is False
     assert_error(result["stack"][0], contains="not found")
 
@@ -240,7 +347,7 @@ def test_rename_stack_missing_member_error():
 def test_rename_stack_special_member_error():
     """rename(stack=...) rejects special frame members like saved registers/return address."""
     result = rename(
-        {"stack": [{"func_addr": "0x1013dc0", "old": "__return_address", "new": "x"}]}
+        {"stack": [{"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "__return_address", "new": "x"}]}
     )
     assert result["stack"][0]["ok"] is False
     assert_error(result["stack"][0], contains="Special frame member")

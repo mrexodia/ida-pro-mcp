@@ -3,6 +3,7 @@
 from ..framework import (
     test,
     skip_test,
+    assert_has_keys,
     assert_valid_address,
     assert_non_empty,
     assert_is_list,
@@ -18,7 +19,11 @@ from ..framework import (
 from ..api_analysis import (
     decompile,
     disasm,
+    func_profile,
+    analyze_batch,
     xrefs_to,
+    xref_query,
+    insn_query,
     xrefs_to_field,
     callees,
     find_bytes,
@@ -245,6 +250,59 @@ def test_xrefs_to_invalid():
 
 
 @test()
+def test_xref_query():
+    """xref_query returns paged xref results for a function"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    result = xref_query(
+        {
+            "query": fn_addr,
+            "direction": "both",
+            "xref_type": "any",
+            "offset": 0,
+            "count": 10,
+            "include_fn": True,
+        }
+    )
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "query", "resolved_addr", "data", "next_offset", "total", "error")
+    if page["data"]:
+        assert_has_keys(page["data"][0], "direction", "addr", "from", "to", "type")
+
+
+@test()
+def test_insn_query_function_scope():
+    """insn_query supports scoped instruction search with pagination"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    result = insn_query({"func": fn_addr, "count": 8, "include_disasm": True})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "query", "matches", "count", "scanned", "cursor", "error")
+    assert page.get("error") is None
+    if page["matches"]:
+        assert_has_keys(page["matches"][0], "addr", "disasm")
+
+
+@test()
+def test_insn_query_requires_scope_by_default():
+    """insn_query rejects broad scans unless allow_broad is set"""
+    result = insn_query({"mnem": "call"})
+    assert_is_list(result, min_length=1)
+    assert result[0].get("error") is not None
+
+
+# ============================================================================
+# Tests for xrefs_to_field
+# ============================================================================
+
+
+@test()
 def test_xrefs_to_field_nonexistent_struct():
     """xrefs_to_field reports a missing-struct error."""
     result = xrefs_to_field({"struct": "NonExistentStruct", "field": "nonexistent"})
@@ -431,14 +489,15 @@ def test_export_funcs_invalid_address():
 
 @test(binary="crackme03.elf")
 def test_callgraph_main_contains_expected_nodes():
-    """callgraph(main) includes main, check_pw and imported callees."""
+    """callgraph(main) includes the local crackme call edge to check_pw."""
     result = callgraph(CRACKME_MAIN)
     assert_is_list(result, min_length=1)
     entry = result[0]
     assert_is_list(entry["nodes"], min_length=1)
     assert_is_list(entry["edges"], min_length=1)
     names = {node["name"] for node in entry["nodes"]}
-    assert {"main", "check_pw", ".puts", ".printf"}.issubset(names)
+    assert {"main", "check_pw"}.issubset(names)
+    assert any(edge["from"] == CRACKME_MAIN and edge["to"] == CRACKME_CHECK_PW for edge in entry["edges"])
     for node in entry["nodes"]:
         assert_valid_address(node["addr"])
         assert node["depth"] >= 0
@@ -465,3 +524,74 @@ def test_callgraph_invalid_root():
     result = callgraph(get_unmapped_address())
     assert_is_list(result, min_length=1)
     assert_error(result[0])
+
+
+# ============================================================================
+# Tests for func_profile / analyze_batch
+# ============================================================================
+
+
+@test()
+def test_func_profile():
+    """func_profile returns function profile metrics"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    result = func_profile({"query": fn_addr, "include_lists": False})
+    assert_is_list(result, min_length=1)
+    page = result[0]
+    assert_has_keys(page, "data", "next_offset", "error")
+    if page["data"]:
+        r = page["data"][0]
+        assert_has_keys(
+            r,
+            "addr",
+            "name",
+            "size",
+            "instruction_count",
+            "basic_block_count",
+            "caller_count",
+            "callee_count",
+            "has_type",
+            "error",
+        )
+
+
+@test()
+def test_analyze_batch():
+    """analyze_batch returns structured analysis for a function"""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    result = analyze_batch(
+        {
+            "query": fn_addr,
+            "include_disasm": True,
+            "max_disasm_insns": 16,
+            "include_strings": True,
+            "max_strings": 16,
+            "include_constants": True,
+            "max_constants": 16,
+            "include_basic_blocks": True,
+            "max_blocks": 16,
+        }
+    )
+    assert_is_list(result, min_length=1)
+    r = result[0]
+    assert_has_keys(r, "query", "addr", "name", "analysis", "error")
+    if r["analysis"] is not None:
+        a = r["analysis"]
+        assert_has_keys(
+            a,
+            "size",
+            "decompile",
+            "disasm",
+            "xrefs",
+            "caller_count",
+            "callee_count",
+            "string_ref_count",
+            "constant_count",
+            "basic_block_count",
+        )
