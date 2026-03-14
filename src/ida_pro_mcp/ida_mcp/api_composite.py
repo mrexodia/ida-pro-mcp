@@ -73,10 +73,12 @@ def _filter_constants(raw: list[dict], limit: int = _TOP_CONSTANTS) -> list[dict
     out = []
     for c in raw:
         val = c.get("value", 0)
-        if isinstance(val, int) and (abs(val) < 0x100 or val in _BORING_CONSTANTS):
+        if not isinstance(val, int):
+            continue
+        if abs(val) < 0x100 or val in _BORING_CONSTANTS:
             continue
         out.append(c)
-    out.sort(key=lambda c: abs(c.get("value", 0)), reverse=True)
+    out.sort(key=lambda c: abs(c.get("value", 0)) if isinstance(c.get("value"), int) else 0, reverse=True)
     return out[:limit]
 
 
