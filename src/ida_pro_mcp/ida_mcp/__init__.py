@@ -34,6 +34,11 @@ from . import api_stack
 from . import api_debug
 from . import api_python
 from . import api_resources
+from . import api_survey
+from . import api_composite
+from . import notebook
+from . import preprocessing
+from . import api_emulation
 
 # Re-export key components for external use
 from .sync import idasync, IDAError, IDASyncError, CancelledError
@@ -56,6 +61,11 @@ __all__ = [
     "api_debug",
     "api_python",
     "api_resources",
+    "api_survey",
+    "api_composite",
+    "notebook",
+    "preprocessing",
+    "api_emulation",
     # Re-exported components
     "idasync",
     "IDAError",
