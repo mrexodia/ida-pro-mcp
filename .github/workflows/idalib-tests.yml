@@ -10,6 +10,7 @@ on:
 jobs:
   idalib-tests:
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'pull_request_target' && 'external-pr' || '' }}
     # Skip pull_request from forks (those go through pull_request_target instead)
     if: |
       github.event_name != 'pull_request' ||
@@ -31,24 +32,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
 
-      - name: Run tests with coverage
+      - name: Run tests
         run: |
-          uv run coverage erase
-          uv run coverage run -m ida_pro_mcp.test tests/crackme03.elf -q
-          uv run coverage run --append -m ida_pro_mcp.test tests/typed_fixture.elf -q
-
-      - name: Fix git safe directory
-        run: git config --global --add safe.directory /github/workspace
-
-      - name: Coverage comment
-        id: coverage_comment
-        uses: py-cov-action/python-coverage-comment-action@v3
-        with:
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Store PR comment artifact
-        uses: actions/upload-artifact@v4
-        if: steps.coverage_comment.outputs.COMMENT_FILE_WRITTEN == 'true'
-        with:
-          name: python-coverage-comment-action
-          path: python-coverage-comment-action.txt
+          uv run ida-mcp-test tests/crackme03.elf -q
+          uv run ida-mcp-test tests/typed_fixture.elf -q
