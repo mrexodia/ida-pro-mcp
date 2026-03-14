@@ -148,6 +148,7 @@ PROJECT_LEVEL_CONFIGS: dict[str, tuple[str, str]] = {
     "VS Code": (".vscode", "mcp.json"),
     "VS Code Insiders": (".vscode", "mcp.json"),
     "Windsurf": (".windsurf", "mcp.json"),
+    "Opencode": (".config/opencode", "opencode.json"),
     "Zed": (".zed", "settings.json"),
 }
 
@@ -272,7 +273,7 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
         return {"url": force_mcp_path(transport_url)}
 
     # Claude/Claude Code support explicit transport type in JSON config.
-    if client_name in ("Claude", "Claude Code"):
+    if client_name in ("Claude", "Claude Code", "Opencode"):
         return {"type": infer_http_transport_type(transport_url), "url": transport_url}
 
     # Keep all other clients on streamable HTTP /mcp for compatibility.
