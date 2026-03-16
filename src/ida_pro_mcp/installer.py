@@ -156,8 +156,7 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
 
     transport_url = normalize_transport_url(transport)
     if client_name == "Opencode":
-        # Opencode requires local (stdio) transport
-        return generate_mcp_config(client_name=client_name, transport="stdio")
+        return {"type": "remote", "url": transport_url}
     if client_name == "Codex":
         return {"url": force_mcp_path(transport_url)}
     if client_name in ("Claude", "Claude Code"):
