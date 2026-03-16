@@ -53,6 +53,9 @@ class MCPConfigHandler(idaapi.action_handler_t):
         self.plugin = plugin
 
     def activate(self, ctx):
+        old_host = self.plugin.host
+        old_port = self.plugin.port
+
         form = MCPConfigForm(self.plugin.host, self.plugin.port)
         form.Compile()
         ok = form.Execute()
@@ -68,9 +71,18 @@ class MCPConfigHandler(idaapi.action_handler_t):
             print(f"[MCP] Invalid port: {port}")
             return 0
 
+        if host == old_host and port == old_port:
+            print(f"[MCP] Configuration unchanged: {host}:{port}")
+            return 1
+
         self.plugin.host = host
         self.plugin.port = port
         print(f"[MCP] Configuration updated: {host}:{port}")
+
+        # Apply new endpoint immediately if the server is running.
+        if self.plugin.mcp is not None:
+            print("[MCP] Applying configuration change without manual restart...")
+            self.plugin.run(0)
         return 1
 
     def update(self, ctx):
