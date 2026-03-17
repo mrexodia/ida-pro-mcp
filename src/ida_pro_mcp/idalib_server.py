@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -408,6 +409,12 @@ def main():
         help="Listen on a Unix domain socket instead of TCP (overrides --host/--port)",
     )
     parser.add_argument(
+        "--auth-token",
+        type=str,
+        default=os.environ.get("IDA_MCP_AUTH_TOKEN"),
+        help="Bearer token for HTTP authentication (or set IDA_MCP_AUTH_TOKEN)",
+    )
+    parser.add_argument(
         "input_path",
         type=Path,
         nargs="?",
@@ -472,6 +479,9 @@ def main():
     # In isolated mode we require Streamable HTTP session semantics.
     MCP_SERVER.require_streamable_http_session = _ISOLATED_CONTEXTS_ENABLED
     _install_context_activation_hooks()
+
+    if args.auth_token:
+        MCP_SERVER.auth_token = args.auth_token
 
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread does not fake any

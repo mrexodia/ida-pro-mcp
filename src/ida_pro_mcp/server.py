@@ -153,6 +153,12 @@ def main():
         action="store_true",
         help="List all available MCP client targets",
     )
+    parser.add_argument(
+        "--auth-token",
+        type=str,
+        default=os.environ.get("IDA_MCP_AUTH_TOKEN"),
+        help="Bearer token for HTTP authentication (or set IDA_MCP_AUTH_TOKEN)",
+    )
     args = parser.parse_args()
 
     # Handle --list-clients independently
@@ -191,6 +197,9 @@ def main():
     if args.config:
         print_mcp_config()
         return
+
+    if args.auth_token:
+        mcp.auth_token = args.auth_token
 
     try:
         transport = args.transport or "stdio"

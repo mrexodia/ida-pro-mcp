@@ -135,9 +135,20 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", origin)
         if preflight:
             self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, Mcp-Session-Id, Mcp-Protocol-Version")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, Mcp-Session-Id, Mcp-Protocol-Version, Authorization")
             if self.headers.get("Access-Control-Request-Private-Network") == "true":
                 self.send_header("Access-Control-Allow-Private-Network", "true")
+
+    def _check_auth(self) -> bool:
+        """Validate Bearer token if configured.  Returns True if OK."""
+        token = self.mcp_server.auth_token
+        if token is None:
+            return True
+        auth = self.headers.get("Authorization", "")
+        if auth != f"Bearer {token}":
+            self.send_error(401, "Unauthorized")
+            return False
+        return True
 
     def send_error(self, code, message=None, explain=None):
         self.send_response(code)
@@ -155,6 +166,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        if not self._check_auth():
+            return
         match urlparse(self.path).path:
             case "/sse":
                 self._handle_sse_get()
@@ -164,6 +177,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(404, "Not Found")
 
     def do_POST(self):
+        if not self._check_auth():
+            return
         body = self._read_body()
         if body is None:
             return
@@ -390,6 +405,7 @@ class McpServer:
         self.version = version
         self.cors_allowed_origins: Callable[[str], bool] | list[str] | str | None = self.cors_localhost
         self.post_body_limit = 10 * 1024 * 1024  # 10MB
+        self.auth_token: str | None = None  # Bearer token; None = no auth
         self.tools = McpRpcRegistry()
         self.resources = McpRpcRegistry()
         self.prompts = McpRpcRegistry()
