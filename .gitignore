@@ -32,3 +32,6 @@ server_generated.py
 htmlcov/
 scalene-profile.json
 .omp/
+
+# MCP config
+.mcp.json

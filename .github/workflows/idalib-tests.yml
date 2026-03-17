@@ -1,19 +1,24 @@
 name: idalib-tests
 on:
   push:
-    branches:
-      - main
   pull_request_target:
-  workflow_dispatch:
 
 jobs:
   idalib-tests:
+    # Run on all pushes, but only run pull_request_target for fork PRs so
+    # same-repo contributors use normal push CI and only external contributors
+    # require manual approval via the external-pr environment.
+    if: |
+      github.event_name == 'push' ||
+      (
+        github.event_name == 'pull_request_target' &&
+        github.event.pull_request.head.repo.full_name != github.repository
+      )
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'pull_request_target' && 'external-pr' || '' }}
     permissions:
-      contents: write
+      contents: read
       packages: read
-      pull-requests: write
     container:
       image: ghcr.io/mrexodia/ida-docker/ida:9.1
       credentials:
@@ -22,8 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          persist-credentials: true
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - uses: astral-sh/setup-uv@v7
 
