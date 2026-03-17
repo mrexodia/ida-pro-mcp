@@ -3,6 +3,7 @@ import queue
 import functools
 import os
 import sys
+import threading
 import time
 import idaapi
 import idc
@@ -14,6 +15,13 @@ from .zeromcp.jsonrpc import get_current_cancel_event, RequestCancelledError
 # ============================================================================
 
 ida_major, ida_minor = map(int, idaapi.get_kernel_version().split("."))
+
+# Capture main thread ID at module load time.  In headless idalib mode the
+# main thread is the only thread that can call IDA APIs directly, and
+# execute_sync() will deadlock if called *from* the main thread (because the
+# callback is queued for the same thread that is waiting).  We detect this
+# case and execute directly instead.
+_main_thread_id = threading.current_thread().ident
 
 
 class IDAError(McpToolError):
@@ -53,27 +61,39 @@ def _get_tool_timeout_seconds() -> float:
 call_stack = queue.LifoQueue()
 
 
+def _run_with_batch(ff):
+    """Execute *ff* inside batch mode with call-stack reentry detection."""
+    if not call_stack.empty():
+        last_func_name = call_stack.get()
+        error_str = f"Call stack is not empty while calling the function {ff.__name__} from {last_func_name}"
+        raise IDASyncError(error_str)
+
+    call_stack.put(ff.__name__)
+    old_batch = idc.batch(1)
+    try:
+        return ff()
+    finally:
+        idc.batch(old_batch)
+        call_stack.get()
+
+
 def _sync_wrapper(ff):
-    """Call a function ff with a specific IDA safety_mode."""
+    """Call a function ff on the IDA main thread in write mode.
+
+    If already on the main thread (common in headless idalib with
+    background=False), execute directly to avoid a deadlock where
+    execute_sync queues a callback for a thread that is itself waiting.
+    """
+    if threading.current_thread().ident == _main_thread_id:
+        return _run_with_batch(ff)
 
     res_container = queue.Queue()
 
     def runned():
-        if not call_stack.empty():
-            last_func_name = call_stack.get()
-            error_str = f"Call stack is not empty while calling the function {ff.__name__} from {last_func_name}"
-            raise IDASyncError(error_str)
-
-        call_stack.put((ff.__name__))
-        # Enable batch mode for all synchronized operations
-        old_batch = idc.batch(1)
         try:
-            res_container.put(ff())
+            res_container.put(_run_with_batch(ff))
         except Exception as x:
             res_container.put(x)
-        finally:
-            idc.batch(old_batch)
-            call_stack.get()
 
     idaapi.execute_sync(runned, idaapi.MFF_WRITE)
     res = res_container.get()
