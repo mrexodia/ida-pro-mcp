@@ -402,6 +402,12 @@ def main():
         "--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)"
     )
     parser.add_argument(
+        "--unix-socket",
+        type=str,
+        default=None,
+        help="Listen on a Unix domain socket instead of TCP (overrides --host/--port)",
+    )
+    parser.add_argument(
         "input_path",
         type=Path,
         nargs="?",
@@ -470,7 +476,10 @@ def main():
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread does not fake any
     # work from @idasync, so we deadlock.
-    MCP_SERVER.serve(host=args.host, port=args.port, background=False)
+    if args.unix_socket:
+        MCP_SERVER.serve(unix_socket=args.unix_socket, background=False)
+    else:
+        MCP_SERVER.serve(host=args.host, port=args.port, background=False)
 
 
 if __name__ == "__main__":

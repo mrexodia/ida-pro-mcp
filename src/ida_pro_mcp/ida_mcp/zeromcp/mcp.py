@@ -1,6 +1,8 @@
+import os
 import re
 import select
 import socket
+import socketserver
 import sys
 import time
 import uuid
@@ -62,6 +64,36 @@ class _McpSseConnection:
         except (BrokenPipeError, OSError):
             self.alive = False
             return False
+
+class _UnixHTTPServerMixin:
+    """Mixin that makes an HTTPServer subclass listen on a Unix domain socket."""
+
+    address_family = socket.AF_UNIX
+
+    def server_bind(self):
+        if isinstance(self.server_address, str) and os.path.exists(self.server_address):
+            os.unlink(self.server_address)
+        # Skip HTTPServer.server_bind which unpacks (host, port) — that
+        # crashes for AF_UNIX where getsockname() returns a path string.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = 0
+
+    def server_close(self):
+        super().server_close()
+        if isinstance(self.server_address, str) and os.path.exists(self.server_address):
+            os.unlink(self.server_address)
+
+
+class UnixHTTPServer(_UnixHTTPServerMixin, HTTPServer):
+    """Single-threaded HTTPServer on a Unix domain socket."""
+    pass
+
+
+class UnixThreadingHTTPServer(_UnixHTTPServerMixin, ThreadingHTTPServer):
+    """Multi-threaded HTTPServer on a Unix domain socket."""
+    pass
+
 
 class McpHttpRequestHandler(BaseHTTPRequestHandler):
     server_version = "zeromcp/1.3.0"
@@ -399,23 +431,31 @@ class McpServer:
     def prompt(self, func: Callable) -> Callable:
         return self.prompts.method(func)
 
-    def serve(self, host: str, port: int, *, background = True, request_handler = McpHttpRequestHandler):
+    def serve(self, host: str = "", port: int = 0, *, unix_socket: str | None = None, background = True, request_handler = McpHttpRequestHandler):
         if self._running:
             print("[MCP] Server is already running")
             return
 
         # Create server with deferred binding
         assert issubclass(request_handler, McpHttpRequestHandler)
-        self._http_server = (ThreadingHTTPServer if background else HTTPServer)(
-            (host, port),
+        if unix_socket:
+            server_cls = UnixThreadingHTTPServer if background else UnixHTTPServer
+            server_address: str | tuple[str, int] = unix_socket
+        else:
+            server_cls = ThreadingHTTPServer if background else HTTPServer
+            server_address = (host, port)
+
+        self._http_server = server_cls(
+            server_address,
             request_handler,
             bind_and_activate=False
         )
-        # allow_reuse_address=True allows fast restarts (skip TCP TIME_WAIT).
-        # Do NOT set allow_reuse_port: on macOS SO_REUSEPORT lets multiple
-        # processes silently bind the same port, causing request mis-routing
-        # and SIGPIPE crashes when one instance closes.
-        self._http_server.allow_reuse_address = True
+        if not unix_socket:
+            # allow_reuse_address=True allows fast restarts (skip TCP TIME_WAIT).
+            # Do NOT set allow_reuse_port: on macOS SO_REUSEPORT lets multiple
+            # processes silently bind the same port, causing request mis-routing
+            # and SIGPIPE crashes when one instance closes.
+            self._http_server.allow_reuse_address = True
 
         # Set the MCPServer instance on the handler class
         setattr(self._http_server, "mcp_server", self)
@@ -433,9 +473,12 @@ class McpServer:
         # Only start thread after successful bind
         self._running = True
 
-        print("[MCP] Server started:")
-        print(f"  Streamable HTTP: http://{host}:{port}/mcp")
-        print(f"  SSE: http://{host}:{port}/sse")
+        if unix_socket:
+            print(f"[MCP] Server started on unix:{unix_socket}")
+        else:
+            print("[MCP] Server started:")
+            print(f"  Streamable HTTP: http://{host}:{port}/mcp")
+            print(f"  SSE: http://{host}:{port}/sse")
 
         def serve_forever():
             try:
