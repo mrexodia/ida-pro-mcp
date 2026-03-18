@@ -4,23 +4,36 @@ on:
   pull_request_target:
 
 jobs:
-  idalib-tests:
-    # Run on all pushes, but only run pull_request_target for fork PRs so
-    # same-repo contributors use normal push CI and only external contributors
-    # require manual approval via the external-pr environment.
+  approval:
+    # Only gate fork PRs. Pushes run normally, and same-repo contributors use
+    # normal push CI instead of pull_request_target.
     if: |
-      github.event_name == 'push' ||
-      (
-        github.event_name == 'pull_request_target' &&
-        github.event.pull_request.head.repo.full_name != github.repository
-      )
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
-    environment: ${{ github.event_name == 'pull_request_target' && 'external-pr' || '' }}
+    environment: external-pr
+    steps:
+      - name: Approval granted
+        run: echo "Approved to run fork PR tests"
+
+  idalib-tests:
+    # Run on all pushes, and on fork PRs only after the approval job passes.
+    if: |
+      always() &&
+      (
+        github.event_name == 'push' ||
+        needs.approval.result == 'success'
+      )
+    needs: approval
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ida-version: ['9.0', '9.1', '9.2', '9.3']
     permissions:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mrexodia/ida-docker/ida:9.1
+      image: ghcr.io/mrexodia/ida-docker/ida:${{ matrix.ida-version }}
       credentials:
         username: ${{ github.repository_owner }}
         password: ${{ secrets.GITHUB_TOKEN }}
