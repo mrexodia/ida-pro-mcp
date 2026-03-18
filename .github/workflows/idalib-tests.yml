@@ -15,12 +15,15 @@ jobs:
         github.event.pull_request.head.repo.full_name != github.repository
       )
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ida-version: ['9.0', '9.1', '9.2', '9.3']
     environment: ${{ github.event_name == 'pull_request_target' && 'external-pr' || '' }}
     permissions:
       contents: read
       packages: read
     container:
-      image: ghcr.io/mrexodia/ida-docker/ida:9.1
+      image: ghcr.io/mrexodia/ida-docker/ida:${{ matrix.ida-version }}
       credentials:
         username: ${{ github.repository_owner }}
         password: ${{ secrets.GITHUB_TOKEN }}
