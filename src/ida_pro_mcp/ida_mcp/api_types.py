@@ -27,6 +27,7 @@ from .utils import (
     EnumUpsert,
 )
 from . import compat
+from .compat import tinfo_get_udm
 
 
 # ============================================================================
@@ -739,7 +740,8 @@ def _parse_type_tinfo(type_text: str) -> ida_typeinf.tinfo_t:
         for candidate in candidates:
             tif = ida_typeinf.tinfo_t()
             try:
-                if parse_decl(tif, None, candidate, flags):
+                # parse_decl returns '' on success in IDA 9.0, check is not None
+                if parse_decl(tif, None, candidate, flags) is not None and not tif.empty():
                     return tif
             except Exception:
                 continue
@@ -773,7 +775,8 @@ def _parse_function_tinfo(signature_text: str) -> ida_typeinf.tinfo_t:
         for candidate in candidates:
             tif = ida_typeinf.tinfo_t()
             try:
-                if parse_decl(tif, None, candidate, flags) and tif.is_func():
+                # parse_decl returns '' on success in IDA 9.0, check is not None
+                if parse_decl(tif, None, candidate, flags) is not None and tif.is_func():
                     return tif
             except Exception:
                 continue
@@ -804,7 +807,7 @@ def _infer_type_edit_kind(edit: dict) -> str:
             if fn:
                 frame_tif = ida_typeinf.tinfo_t()
                 if ida_frame.get_func_frame(frame_tif, fn):
-                    _, udm = frame_tif.get_udm(str(edit["name"]))
+                    _, udm = tinfo_get_udm(frame_tif, str(edit["name"]))
                     if udm:
                         return "stack"
         except Exception:
@@ -898,7 +901,7 @@ def _apply_type_edit(edit: dict) -> dict:
             if not ida_frame.get_func_frame(frame_tif, func):
                 return {"edit": edit, "kind": kind, "error": "No frame available"}
 
-            idx, udm = frame_tif.get_udm(stack_name)
+            idx, udm = tinfo_get_udm(frame_tif, stack_name)
             if not udm:
                 return {
                     "edit": edit,
