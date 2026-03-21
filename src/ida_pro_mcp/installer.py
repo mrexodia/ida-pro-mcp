@@ -124,7 +124,7 @@ def infer_http_transport_type(transport_url: str) -> str:
 
 def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
     if transport == "stdio":
-        if client_name == "Opencode":
+        if client_name in ("Opencode", "Kilo Code"):
             mcp_config = {
                 "type": "local",
                 "command": [
@@ -133,6 +133,7 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
                     "--ida-rpc",
                     f"http://{IDA_HOST}:{IDA_PORT}",
                 ],
+                **({"enabled": True} if client_name == "Kilo Code" else {}),
             }
         else:
             mcp_config = {
@@ -155,8 +156,12 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
         transport = f"http://{IDA_HOST}:{IDA_PORT}/sse"
 
     transport_url = normalize_transport_url(transport)
-    if client_name == "Opencode":
-        return {"type": "remote", "url": transport_url}
+    if client_name in ("Opencode", "Kilo Code"):
+        return {
+            "type": "remote",
+            "url": transport_url,
+            **({"enabled": True} if client_name == "Kilo Code" else {}),
+        }
     if client_name == "Codex":
         return {"url": force_mcp_path(transport_url)}
     if client_name in ("Claude", "Claude Code"):
@@ -328,9 +333,10 @@ def list_available_clients():
     print("Usage examples:")
     print("  ida-pro-mcp --install                                    # Interactive selector")
     print("  ida-pro-mcp --install claude,cursor                       # Specific client targets")
-    print("  ida-pro-mcp --install vscode --scope project              # Project-level config")
-    print("  ida-pro-mcp --install cursor --transport streamable-http  # Streamable HTTP config")
-    print("  ida-pro-mcp --uninstall cursor                            # Uninstall specific target")
+    print("  ida-pro-mcp --install --targets=kilo,opencode,zed         # Targets via --targets")
+    print("  ida-pro-mcp --install --targets=cursor --scope=global     # Global scope")
+    print("  ida-pro-mcp --install --targets=cursor --transport=sse    # SSE transport")
+    print("  ida-pro-mcp --uninstall --targets=cursor                  # Uninstall specific target")
 
 
 def install_mcp_servers(
@@ -403,6 +409,9 @@ def install_mcp_servers(
                 client_name=name,
                 transport=transport,
             )
+
+        if not uninstall and name == "Kilo Code":
+            config["$schema"] = "https://app.kilo.ai/config.json"
 
         _write_config_file(config_path, config, is_toml=is_toml)
         if not quiet:

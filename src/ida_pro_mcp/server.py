@@ -133,6 +133,14 @@ def main():
         "For running: use stdio (default) or pass a URL (e.g., http://127.0.0.1:8744[/mcp|/sse])",
     )
     parser.add_argument(
+        "--targets",
+        type=str,
+        default=None,
+        metavar="TARGETS",
+        help="Comma-separated MCP client targets for install/uninstall (e.g., 'kilo,opencode,zed'). "
+        "Use with --install or --uninstall to skip the interactive selector.",
+    )
+    parser.add_argument(
         "--scope",
         type=str,
         choices=["global", "project"],
@@ -176,14 +184,25 @@ def main():
         print("--scope requires --install or --uninstall")
         return
 
+    if args.targets and not (is_install or is_uninstall):
+        print("--targets requires --install or --uninstall")
+        return
+
     if is_install and is_uninstall:
         print("Cannot install and uninstall at the same time")
         return
 
     if is_install or is_uninstall:
+        # Merge --targets with --install/--uninstall positional targets
+        positional = args.install if is_install else args.uninstall
+        targets = positional or ""
+        if args.targets:
+            # Combine: positional targets (if any) + --targets
+            parts = [t.strip() for t in (targets, args.targets) if t.strip()]
+            targets = ",".join(parts)
         run_install_command(
             uninstall=is_uninstall,
-            targets_str=args.install if is_install else args.uninstall,
+            targets_str=targets,
             args=args,
         )
         return
