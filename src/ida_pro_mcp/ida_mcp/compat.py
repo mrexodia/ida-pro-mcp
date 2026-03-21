@@ -151,15 +151,17 @@ def inf_is_64bit() -> bool:
 
 
 def get_func_name(func: ida_funcs.func_t) -> str | None:
-    # func_t.get_name() introduced in 8.5
-    if IDA_GE_85:
+    # func_t.get_name() introduced in 8.5, but missing in early 9.0 builds (build 240925)
+    # Use hasattr() to handle early IDA 9.0 builds that lack the method
+    if IDA_GE_85 and hasattr(func, "get_name"):
         return func.get_name()
     return ida_funcs.get_func_name(func.start_ea)
 
 
 def get_func_prototype(func: ida_funcs.func_t) -> ida_typeinf.tinfo_t | None:
-    # func_t.get_prototype() introduced in 8.5
-    if IDA_GE_85:
+    # func_t.get_prototype() introduced in 8.5, but missing in early 9.0 builds (build 240925)
+    # Use hasattr() to handle early IDA 9.0 builds that lack the method
+    if IDA_GE_85 and hasattr(func, "get_prototype"):
         return func.get_prototype()
 
     tif = ida_typeinf.tinfo_t()
@@ -249,3 +251,39 @@ def guess_tinfo(tif: ida_typeinf.tinfo_t, ea: int) -> bool:
             pass
 
     return False
+
+
+# ============================================================================
+# UDM (struct/union member) compatibility
+# ============================================================================
+
+
+def tinfo_get_udm(
+    tif: ida_typeinf.tinfo_t, name: str
+) -> tuple[int, ida_typeinf.udm_t | None]:
+    """
+    Get a UDM (user-defined member) from a tinfo_t by name.
+
+    tinfo_t.get_udm() was introduced in IDA 8.5 but is missing in early
+    IDA 9.0 builds (build 240925). This wrapper provides a fallback using
+    the older find_udm() + get_udm_by_tid() APIs.
+
+    Returns:
+        tuple of (index, udm) where udm is None if not found
+    """
+    # Try modern API first (available in 8.5+ but not early 9.0 builds)
+    if hasattr(tif, "get_udm"):
+        return tif.get_udm(name)
+
+    # Fallback for early 9.0 builds using find_udm + get_udm_by_tid
+    idx = tif.find_udm(name)
+    if idx == -1:
+        return -1, None
+
+    udm = ida_typeinf.udm_t()
+    tid = tif.get_udm_tid(idx)
+    # get_udm_by_tid returns 0 on success (C convention), check if udm.name is populated
+    tif.get_udm_by_tid(udm, tid)
+    if udm.name:
+        return idx, udm
+    return -1, None
