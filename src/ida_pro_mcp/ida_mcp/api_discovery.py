@@ -22,6 +22,9 @@ from .discovery import discover_instances, probe_instance
 _LOCAL_PORT: int | None = None
 _LOCAL_HOST: str = "127.0.0.1"
 
+# Thread-local: set by HTTP handler when request is a proxied forward
+_request_context = threading.local()
+
 # Redirect target: when set, tool calls are proxied to this instance
 _redirect_host: str | None = None
 _redirect_port: int | None = None
@@ -42,10 +45,6 @@ def get_redirect_target() -> tuple[str, int] | None:
     if _redirect_host is not None and _redirect_port is not None:
         return (_redirect_host, _redirect_port)
     return None
-
-
-# Thread-local: set by HTTP handler when request is a proxied forward
-_request_context = threading.local()
 
 
 def set_request_proxied(proxied: bool):

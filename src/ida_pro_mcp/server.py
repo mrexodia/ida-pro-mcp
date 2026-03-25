@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 if TYPE_CHECKING:
     from ida_pro_mcp.ida_mcp.zeromcp import McpServer
     from ida_pro_mcp.ida_mcp.zeromcp.jsonrpc import JsonRpcRequest, JsonRpcResponse
+    from ida_pro_mcp.ida_mcp.discovery import InstanceInfo
 else:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ida_mcp"))
     from zeromcp import McpServer
@@ -66,6 +67,7 @@ def _proxy_to_ida(payload: bytes | str | dict) -> dict:
         return json.loads(raw_data)
     finally:
         conn.close()
+
 
 
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:

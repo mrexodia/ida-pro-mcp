@@ -1,7 +1,6 @@
 from typing import Annotated
 import ast
 import io
-import os
 import sys
 import idaapi
 import idc
@@ -19,6 +18,8 @@ import ida_name
 import ida_segment
 import ida_typeinf
 import ida_xref
+
+import os
 
 from .rpc import tool, unsafe
 from .sync import idasync
