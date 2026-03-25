@@ -165,6 +165,41 @@ def select_instance(
 DEFAULT_IDA_RPC = f"http://{IDA_HOST}:{IDA_PORT}"
 
 
+def _resolve_ida_rpc(args) -> None:
+    """Resolve the IDA RPC target: explicit --ida-rpc, or auto-discovery."""
+    global IDA_HOST, IDA_PORT
+
+    if args.ida_rpc is not None:
+        # Explicit --ida-rpc: use directly (backwards compatible)
+        ida_rpc = urlparse(args.ida_rpc)
+        if ida_rpc.hostname is None or ida_rpc.port is None:
+            raise Exception(f"Invalid IDA RPC server: {args.ida_rpc}")
+        IDA_HOST = ida_rpc.hostname
+        IDA_PORT = ida_rpc.port
+        set_ida_rpc(IDA_HOST, IDA_PORT)
+        return
+
+    # Auto-discover running IDA instances
+    instances = discover_instances()
+    if len(instances) == 0:
+        print(f"[MCP] No IDA instances discovered, using default {IDA_HOST}:{IDA_PORT}", file=sys.stderr)
+    elif len(instances) == 1:
+        inst = instances[0]
+        IDA_HOST = inst["host"]
+        IDA_PORT = inst["port"]
+        print(f"[MCP] Auto-connected to: {inst['binary']} at {IDA_HOST}:{IDA_PORT}", file=sys.stderr)
+    else:
+        print(f"[MCP] Found {len(instances)} IDA instances:", file=sys.stderr)
+        for i, inst in enumerate(instances):
+            print(f"  [{i}] {inst['binary']} at {inst['host']}:{inst['port']}", file=sys.stderr)
+        inst = instances[0]
+        IDA_HOST = inst["host"]
+        IDA_PORT = inst["port"]
+        print(f"[MCP] Auto-selected: {inst['binary']}. Use select_instance tool to switch.", file=sys.stderr)
+
+    set_ida_rpc(IDA_HOST, IDA_PORT)
+
+
 def main():
     global IDA_HOST, IDA_PORT
 
@@ -213,8 +248,8 @@ def main():
     parser.add_argument(
         "--ida-rpc",
         type=str,
-        default=f"http://{IDA_HOST}:{IDA_PORT}",
-        help=f"IDA RPC server to use (default: http://{IDA_HOST}:{IDA_PORT})",
+        default=None,
+        help=f"IDA RPC server (default: auto-discover, fallback: {DEFAULT_IDA_RPC})",
     )
     parser.add_argument(
         "--config", action="store_true", help="Generate MCP config JSON"
@@ -231,13 +266,8 @@ def main():
         list_available_clients()
         return
 
-    # Parse IDA RPC server argument
-    ida_rpc = urlparse(args.ida_rpc)
-    if ida_rpc.hostname is None or ida_rpc.port is None:
-        raise Exception(f"Invalid IDA RPC server: {args.ida_rpc}")
-    IDA_HOST = ida_rpc.hostname
-    IDA_PORT = ida_rpc.port
-    set_ida_rpc(IDA_HOST, IDA_PORT)
+    # Resolve IDA RPC target (explicit or auto-discovery)
+    _resolve_ida_rpc(args)
 
     is_install = args.install is not None
     is_uninstall = args.uninstall is not None
