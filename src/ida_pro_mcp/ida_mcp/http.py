@@ -104,7 +104,13 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
                 return
             self._handle_config_post()
         else:
-            super().do_POST()
+            # Mark proxied requests so _redirecting_dispatch won't re-proxy (loop prevention)
+            from .api_discovery import PROXY_HEADER, set_request_proxied
+            set_request_proxied(self.headers.get(PROXY_HEADER) == "1")
+            try:
+                super().do_POST()
+            finally:
+                set_request_proxied(False)
 
     def do_GET(self):
         """Handles GET requests."""

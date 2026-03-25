@@ -5,13 +5,16 @@ select_instance makes this IDA instance proxy tool calls to the target.
 This lets a single MCP endpoint reach any running IDA instance.
 """
 
+import http.client
+import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from typing import Annotated
 
-from .rpc import tool
+from .rpc import tool, MCP_SERVER
 from .discovery import discover_instances, probe_instance
 
 
@@ -39,6 +42,133 @@ def get_redirect_target() -> tuple[str, int] | None:
     if _redirect_host is not None and _redirect_port is not None:
         return (_redirect_host, _redirect_port)
     return None
+
+
+# Thread-local: set by HTTP handler when request is a proxied forward
+_request_context = threading.local()
+
+
+def set_request_proxied(proxied: bool):
+    """Called by HTTP handler to mark the current request as proxied."""
+    _request_context.proxied = proxied
+
+
+def is_request_proxied() -> bool:
+    """Check if the current request was forwarded from another instance."""
+    return getattr(_request_context, "proxied", False)
+
+
+def is_local_tool(name: str) -> bool:
+    """Check if a tool should be handled locally even when redirecting."""
+    return name in _LOCAL_TOOL_NAMES
+
+
+PROXY_HEADER = "X-MCP-Proxied"
+
+
+def proxy_to_instance(host: str, port: int, payload: bytes) -> dict:
+    """Forward a JSON-RPC request to another IDA instance.
+
+    Sets X-MCP-Proxied header so the target knows this is a forwarded request
+    and won't follow its own redirect (preventing A→B→A loops).
+    """
+    headers = {
+        "Content-Type": "application/json",
+        PROXY_HEADER: "1",
+    }
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        conn.request("POST", "/mcp", payload, headers)
+        response = conn.getresponse()
+        raw_data = response.read().decode()
+        if response.status >= 400:
+            raise RuntimeError(f"HTTP {response.status} {response.reason}: {raw_data}")
+        return json.loads(raw_data)
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# Dispatch interception: proxy tools/call and tools/list when redirecting
+# ============================================================================
+
+_original_dispatch = MCP_SERVER.registry.dispatch
+
+
+def _redirecting_dispatch(request):
+    """Intercept dispatch to proxy tool calls when redirect is active."""
+    redirect = get_redirect_target()
+    if redirect is None or is_request_proxied():
+        # No redirect, or this request was already proxied here — handle locally
+        return _original_dispatch(request)
+
+    # Parse the request
+    if not isinstance(request, dict):
+        request_obj = json.loads(request)
+    else:
+        request_obj = request
+
+    method = request_obj.get("method", "")
+
+    # Always handle locally: initialize, notifications, non-tool methods
+    if method == "initialize" or method.startswith("notifications/"):
+        return _original_dispatch(request)
+
+    # tools/call: proxy unless it's a local tool
+    if method == "tools/call":
+        params = request_obj.get("params", {})
+        tool_name = params.get("name", "")
+        if is_local_tool(tool_name):
+            return _original_dispatch(request)
+        # Proxy to redirect target (with loop detection)
+        try:
+            payload = json.dumps(request_obj).encode("utf-8") if isinstance(request, dict) else request
+            if isinstance(payload, str):
+                payload = payload.encode("utf-8")
+            return proxy_to_instance(redirect[0], redirect[1], payload)
+        except Exception as e:
+            request_id = request_obj.get("id")
+            if request_id is None:
+                return None
+            return {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32000,
+                    "message": f"Failed to proxy to {redirect[0]}:{redirect[1]}: {e}",
+                },
+                "id": request_id,
+            }
+
+    # tools/list: merge local discovery tools with redirect target's tools
+    if method == "tools/list":
+        local_result = _original_dispatch(request)
+        try:
+            payload = json.dumps(request_obj).encode("utf-8") if isinstance(request, dict) else request
+            if isinstance(payload, str):
+                payload = payload.encode("utf-8")
+            remote_result = proxy_to_instance(redirect[0], redirect[1], payload)
+            if remote_result and "result" in remote_result:
+                remote_tools = remote_result["result"].get("tools", [])
+                # Filter out remote list_instances/select_instance to avoid duplicates
+                remote_tools = [t for t in remote_tools if t.get("name") not in _LOCAL_TOOL_NAMES]
+                if local_result and "result" in local_result:
+                    local_tools = local_result["result"].get("tools", [])
+                    local_result["result"]["tools"] = remote_tools + local_tools
+        except Exception:
+            pass  # Remote unreachable, show local tools only
+        return local_result
+
+    # Everything else (resources/list, etc.): proxy
+    try:
+        payload = json.dumps(request_obj).encode("utf-8") if isinstance(request, dict) else request
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+        return proxy_to_instance(redirect[0], redirect[1], payload)
+    except Exception:
+        return _original_dispatch(request)
+
+
+MCP_SERVER.registry.dispatch = _redirecting_dispatch
 
 
 # ============================================================================

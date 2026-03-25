@@ -42,6 +42,32 @@ dispatch_original = mcp.registry.dispatch
 LOCAL_TOOLS = {"select_instance"}
 
 
+def _proxy_to_ida(payload: bytes | str | dict) -> dict:
+    """Send a JSON-RPC request to the active IDA instance and return the response."""
+    if isinstance(payload, dict):
+        payload = json.dumps(payload)
+    elif isinstance(payload, str):
+        payload = payload.encode("utf-8")
+
+    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+    try:
+        conn.request(
+            "POST",
+            "/mcp",
+            payload,
+            {"Content-Type": "application/json"},
+        )
+        response = conn.getresponse()
+        raw_data = response.read().decode()
+        if response.status >= 400:
+            raise RuntimeError(
+                f"HTTP {response.status} {response.reason}: {raw_data}"
+            )
+        return json.loads(raw_data)
+    finally:
+        conn.close()
+
+
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
     """Dispatch JSON-RPC requests to the MCP server registry."""
     if not isinstance(request, dict):
@@ -54,30 +80,33 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     if request_obj["method"].startswith("notifications/"):
         return dispatch_original(request)
 
-    payload: bytes | str | dict = request
-    if isinstance(payload, dict):
-        payload = json.dumps(payload)
-    elif isinstance(payload, str):
-        payload = payload.encode("utf-8")
+    # Handle local tools (instance discovery) without proxying to IDA
+    if request_obj["method"] == "tools/call":
+        params = request_obj.get("params", {})
+        tool_name = params.get("name", "")
+        if tool_name in LOCAL_TOOLS:
+            return dispatch_original(request)
+
+    # Handle tools/list locally: always include local tools, merge IDA tools when available
+    if request_obj["method"] == "tools/list":
+        # Get local tools (always available)
+        local_result = dispatch_original(request)
+        local_tool_names = {t["name"] for t in local_result.get("result", {}).get("tools", [])} if local_result else set()
+        # Try to get IDA tools and merge them in
+        try:
+            ida_result = _proxy_to_ida(request)
+            if ida_result and "result" in ida_result:
+                # Filter out IDA tools that duplicate local tools (e.g. select_instance)
+                ida_tools = [t for t in ida_result["result"].get("tools", [])
+                             if t.get("name") not in local_tool_names]
+                if local_result and "result" in local_result:
+                    local_result["result"]["tools"] = ida_tools + local_result["result"].get("tools", [])
+        except Exception:
+            pass  # IDA unreachable — local tools still work
+        return local_result
 
     try:
-        conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
-        try:
-            conn.request(
-                "POST",
-                "/mcp",
-                payload,
-                {"Content-Type": "application/json"},
-            )
-            response = conn.getresponse()
-            raw_data = response.read().decode()
-            if response.status >= 400:
-                raise RuntimeError(
-                    f"HTTP {response.status} {response.reason}: {raw_data}"
-                )
-            return json.loads(raw_data)
-        finally:
-            conn.close()
+        return _proxy_to_ida(request)
     except Exception as e:
         full_info = traceback.format_exc()
         request_id = request_obj.get("id")
