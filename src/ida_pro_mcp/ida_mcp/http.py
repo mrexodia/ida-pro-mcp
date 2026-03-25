@@ -384,8 +384,11 @@ input[type="submit"]:hover {
         config_json_set("cors_policy", cors_policy)
         self.update_cors_policy()
 
-        # Update the server's tools
+        # Update the server's tools (discovery tools cannot be disabled)
+        from .api_discovery import _LOCAL_TOOL_NAMES as PROTECTED_TOOLS
         enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS.keys()}
+        for name in PROTECTED_TOOLS:
+            enabled_tools[name] = True
         self.mcp_server.tools.methods = {
             name: func
             for name, func in ORIGINAL_TOOLS.items()
