@@ -256,7 +256,6 @@ def _build_health_payload() -> dict:
         idb_path = None
 
     return {
-        "status": "ok",
         "uptime_sec": round(time.time() - _server_started_at, 3),
         "idb_path": idb_path,
         "module": ida_nalt.get_root_filename(),
@@ -299,14 +298,14 @@ def server_warmup(
     if init_hexrays:
         t0 = time.perf_counter()
         ok = bool(ida_hexrays.init_hexrays_plugin())
-        steps.append(
-            {
-                "step": "init_hexrays",
-                "ok": ok,
-                "ms": round((time.perf_counter() - t0) * 1000, 2),
-                "error": None if ok else "Hex-Rays unavailable",
-            }
-        )
+        step = {
+            "step": "init_hexrays",
+            "ok": ok,
+            "ms": round((time.perf_counter() - t0) * 1000, 2),
+        }
+        if not ok:
+            step["error"] = "Hex-Rays unavailable"
+        steps.append(step)
 
     return {
         "ok": all(bool(step.get("ok")) for step in steps),
@@ -330,7 +329,7 @@ def lookup_funcs(
             all_funcs.append(get_function(addr))
             if len(all_funcs) >= 1000:
                 break
-        return [{"query": "*", "fn": fn, "error": None} for fn in all_funcs]
+        return [{"query": "*", "fn": fn} for fn in all_funcs]
 
     results = []
     for query in queries:
@@ -345,15 +344,15 @@ def lookup_funcs(
             if ea != idaapi.BADADDR:
                 func = get_function(ea, raise_error=False)
                 if func:
-                    results.append({"query": query, "fn": func, "error": None})
+                    results.append({"query": query, "fn": func})
                 else:
                     results.append(
-                        {"query": query, "fn": None, "error": "Not a function"}
+                        {"query": query, "error": "Not a function"}
                     )
             else:
-                results.append({"query": query, "fn": None, "error": "Not found"})
+                results.append({"query": query, "error": "Not found"})
         except Exception as e:
-            results.append({"query": query, "fn": None, "error": str(e)})
+            results.append({"query": query, "error": str(e)})
 
     return results
 
@@ -420,7 +419,6 @@ def int_convert(
                     ascii=ascii_str,
                     binary=bin(value),
                 ),
-                "error": None,
             }
         )
 
@@ -682,7 +680,6 @@ def entity_query(
                 "data": data,
                 "next_offset": page["next_offset"],
                 "total": len(rows),
-                "error": None,
             }
         )
 
@@ -745,11 +742,10 @@ def idb_save(
             return {"ok": False, "path": None, "error": "Could not resolve IDB path"}
 
         ok = bool(ida_loader.save_database(save_path, 0))
-        return {
-            "ok": ok,
-            "path": save_path,
-            "error": None if ok else "save_database returned false",
-        }
+        result: dict = {"ok": ok, "path": save_path}
+        if not ok:
+            result["error"] = "save_database returned false"
+        return result
     except Exception as e:
         return {"ok": False, "path": path or None, "error": str(e)}
 

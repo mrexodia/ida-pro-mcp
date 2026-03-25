@@ -122,7 +122,7 @@ def _analyze_function_internal(ea: int, *, include_asm: bool = False) -> dict:
     Pass include_asm=True to include full disassembly."""
     import idaapi
 
-    result: dict = {"addr": hex(ea), "error": None}
+    result: dict = {"addr": hex(ea)}
 
     try:
         func = idaapi.get_func(ea)
@@ -180,13 +180,7 @@ def analyze_function(
     addr: Annotated[str, "Function address or name"],
     include_asm: Annotated[bool, "Include full disassembly (default: false, saves tokens)"] = False,
 ) -> dict:
-    """Get a compact analysis of a single function: decompiled pseudocode (capped
-    at 100 lines), top 10 strings as values, top 10 non-trivial constants, caller
-    and callee names, cross-references, and basic block metrics. Disassembly is
-    excluded by default to save context tokens — set include_asm=true only when
-    you need raw instructions (crypto analysis, shellcode, decompiler failure).
-    Use this instead of calling decompile, disasm, callees, xrefs_to, stack_frame,
-    and basic_blocks separately."""
+    """Compact single-function analysis: pseudocode, strings, constants, callers, callees, xrefs, blocks."""
 
     try:
         ea = _resolve_addr(addr)
@@ -207,13 +201,7 @@ def analyze_function(
 def analyze_component(
     addrs: Annotated[list[str] | str, "Function addresses (comma-separated or list)"],
 ) -> dict:
-    """Analyze a group of related functions as one logical unit. Returns a COMPACT
-    summary of each function (name, prototype, size, callee names, top 5 strings,
-    block count) plus relationship data: internal call graph, shared globals,
-    interface vs internal classification, and strings used by multiple functions.
-    Use analyze_function on individual addresses if you need full decompilation.
-    Use this when you see a cluster of sub_* functions called from the same parent
-    or when callees/callers overlap suggests a module."""
+    """Analyze related functions as a group: per-function summaries, internal call graph, shared data."""
 
     import idaapi
     import idautils

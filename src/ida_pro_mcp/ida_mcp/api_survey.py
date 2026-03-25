@@ -316,13 +316,7 @@ def _build_call_graph_summary(func_eas: list[int]) -> dict:
 def survey_binary(
     detail_level: Annotated[str, "Detail level: 'standard' or 'minimal'"] = "standard",
 ) -> dict:
-    """Get a compact overview of the binary in one call. Returns file metadata,
-    segment layout, entry points, statistics, top 15 strings and functions ranked
-    by xref count (functions include classification: thunk/wrapper/leaf/dispatcher/
-    complex), imports by category, and call graph summary. Use this as your FIRST
-    tool call when starting analysis. Do not call list_funcs, imports, or find_regex
-    separately for triage — this returns all of that. Use detail_level='minimal'
-    for binaries with >10k functions."""
+    """Compact binary overview: metadata, segments, entries, stats, top strings/functions, imports by category, call graph."""
     import idautils
 
     minimal = detail_level == "minimal"

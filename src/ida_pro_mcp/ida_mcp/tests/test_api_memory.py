@@ -71,7 +71,7 @@ def test_get_int_reads_common_integer_sizes():
         entry = result[0]
         assert entry["addr"] == start_addr
         assert entry["ty"].startswith(ty)
-        assert entry["error"] is None
+        assert "error" not in entry
         assert isinstance(entry["value"], int)
 
 
@@ -124,7 +124,7 @@ def test_patch_roundtrip_changes_and_restores_bytes():
 
     try:
         patched = patch({"addr": data_addr, "data": replacement})[0]
-        assert patched.get("ok") is True
+        assert "error" not in patched
         changed = get_bytes({"addr": data_addr, "size": 4})[0]
         assert _plain_hex_bytes(changed["data"]) == replacement.replace(" ", "")
     finally:
@@ -168,14 +168,14 @@ def test_put_int_roundtrip_u64():
         written = put_int(
             {"addr": CRACKME_DSO_HANDLE, "ty": "u64", "value": hex(new_value)}
         )[0]
-        assert written["ok"] is True
+        assert "error" not in written
         roundtrip = get_int({"addr": CRACKME_DSO_HANDLE, "ty": "u64"})[0]
         assert roundtrip["value"] == new_value
     finally:
         restore = put_int(
             {"addr": CRACKME_DSO_HANDLE, "ty": "u64", "value": hex(original_value)}
         )[0]
-        assert restore["ok"] is True
+        assert "error" not in restore
 
     restored = get_int({"addr": CRACKME_DSO_HANDLE, "ty": "u64"})[0]
     assert restored["value"] == original_value
@@ -194,7 +194,7 @@ def test_put_int_roundtrip_signed_i16():
 
     try:
         written = put_int({"addr": data_addr, "ty": "i16", "value": "-2"})[0]
-        assert written["ok"] is True
+        assert "error" not in written
         roundtrip = get_int({"addr": data_addr, "ty": "i16"})[0]
         assert roundtrip["value"] == -2
     finally:
@@ -212,7 +212,7 @@ def test_put_int_overflow():
         skip_test("binary has no data segment")
 
     result = put_int({"addr": data_addr, "ty": "u8", "value": "0x100"})[0]
-    assert result["ok"] is False
+    assert "error" in result
     assert_error(result, contains="does not fit")
 
 
@@ -220,7 +220,7 @@ def test_put_int_overflow():
 def test_put_int_invalid_address():
     """put_int rejects writes to unmapped addresses."""
     result = put_int({"addr": get_unmapped_address(), "ty": "u32", "value": "1"})[0]
-    assert result["ok"] is False
+    assert "error" in result
     assert_error(result, contains="Address not mapped")
 
 

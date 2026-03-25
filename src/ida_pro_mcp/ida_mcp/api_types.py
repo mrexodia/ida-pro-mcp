@@ -54,7 +54,7 @@ def declare_type(
                     {"decl": decl, "error": f"Failed to parse:\n{pretty_messages}"}
                 )
             else:
-                results.append({"decl": decl, "ok": True})
+                results.append({"decl": decl})
         except Exception as e:
             results.append({"decl": decl, "error": str(e)})
 
@@ -129,7 +129,7 @@ def enum_upsert(
                     existing_value = idc.get_enum_member_value(existing_member_id)
                     if existing_enum == enum_id and existing_value == value:
                         member_results.append(
-                            {"name": member_name, "value": value, "ok": True, "skipped": True}
+                            {"name": member_name, "value": value, "skipped": True}
                         )
                         skipped_count += 1
                         continue
@@ -151,7 +151,7 @@ def enum_upsert(
                     existing_name = idc.get_enum_member_name(existing_const) or ""
                     if existing_name == member_name:
                         member_results.append(
-                            {"name": member_name, "value": value, "ok": True, "skipped": True}
+                            {"name": member_name, "value": value, "skipped": True}
                         )
                         skipped_count += 1
                         continue
@@ -172,24 +172,24 @@ def enum_upsert(
                     )
                     conflict_count += 1
                     continue
-                member_results.append({"name": member_name, "value": value, "ok": True, "created": True})
+                member_results.append({"name": member_name, "value": value, "created": True})
                 created_count += 1
 
-            results.append(
-                {
-                    "name": enum_name,
-                    "enum_id": hex(enum_id),
-                    "ok": conflict_count == 0,
-                    "created": created,
-                    "bitfield": bitfield,
-                    "members": member_results,
-                    "summary": {
-                        "created": created_count,
-                        "skipped": skipped_count,
-                        "conflicts": conflict_count,
-                    },
-                }
-            )
+            result_dict: dict = {
+                "name": enum_name,
+                "enum_id": hex(enum_id),
+                "created": created,
+                "bitfield": bitfield,
+                "members": member_results,
+                "summary": {
+                    "created": created_count,
+                    "skipped": skipped_count,
+                    "conflicts": conflict_count,
+                },
+            }
+            if conflict_count > 0:
+                result_dict["error"] = f"{conflict_count} member conflict(s)"
+            results.append(result_dict)
         except Exception as exc:
             results.append({"name": enum_name, "error": str(exc)})
 
@@ -607,7 +607,6 @@ def type_query(
                 "data": page["data"],
                 "next_offset": page["next_offset"],
                 "total": len(output_rows),
-                "error": None,
             }
         )
 
@@ -667,7 +666,6 @@ def type_inspect(
                 "is_udt": tif.is_udt(),
                 "members": None,
                 "member_count": 0,
-                "error": None,
             }
 
             if include_members and tif.is_udt():
@@ -829,12 +827,10 @@ def _apply_type_edit(edit: dict) -> dict:
             signature = str(edit.get("signature") or type_text).strip()
             tif = _parse_function_tinfo(signature)
             ok = ida_typeinf.apply_tinfo(func.start_ea, tif, ida_typeinf.PT_SIL)
-            return {
-                "edit": edit,
-                "kind": kind,
-                "ok": ok,
-                "error": None if ok else "Failed to apply function type",
-            }
+            result = {"edit": edit, "kind": kind, "ok": ok}
+            if not ok:
+                result["error"] = "Failed to apply function type"
+            return result
 
         if kind == "global":
             ea = idaapi.BADADDR
@@ -853,12 +849,10 @@ def _apply_type_edit(edit: dict) -> dict:
 
             tif = _parse_type_tinfo(type_text)
             ok = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL)
-            return {
-                "edit": edit,
-                "kind": kind,
-                "ok": ok,
-                "error": None if ok else "Failed to apply global type",
-            }
+            result = {"edit": edit, "kind": kind, "ok": ok}
+            if not ok:
+                result["error"] = "Failed to apply global type"
+            return result
 
         if kind == "local":
             addr_text = str(edit.get("addr", "")).strip()
@@ -875,12 +869,10 @@ def _apply_type_edit(edit: dict) -> dict:
             new_tif = _parse_type_tinfo(type_text)
             modifier = my_modifier_t(var_name, new_tif)
             ok = ida_hexrays.modify_user_lvars(func.start_ea, modifier)
-            return {
-                "edit": edit,
-                "kind": kind,
-                "ok": ok,
-                "error": None if ok else "Failed to apply local variable type",
-            }
+            result = {"edit": edit, "kind": kind, "ok": ok}
+            if not ok:
+                result["error"] = "Failed to apply local variable type"
+            return result
 
         if kind == "stack":
             addr_text = str(edit.get("addr", "")).strip()
@@ -913,12 +905,10 @@ def _apply_type_edit(edit: dict) -> dict:
 
             tif = _parse_type_tinfo(type_text)
             ok = ida_frame.set_frame_member_type(func, offset, tif)
-            return {
-                "edit": edit,
-                "kind": kind,
-                "ok": ok,
-                "error": None if ok else "Failed to set stack member type",
-            }
+            result = {"edit": edit, "kind": kind, "ok": ok}
+            if not ok:
+                result["error"] = "Failed to set stack member type"
+            return result
 
         return {"edit": edit, "kind": kind, "error": f"Unknown kind: {kind}"}
     except Exception as e:

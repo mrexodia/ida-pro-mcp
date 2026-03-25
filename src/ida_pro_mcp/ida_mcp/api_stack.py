@@ -83,7 +83,7 @@ def declare_stack(
                 )
                 continue
 
-            results.append({"addr": fn_addr, "name": var_name, "ok": True})
+            results.append({"addr": fn_addr, "name": var_name})
         except Exception as e:
             results.append({"addr": fn_addr, "name": var_name, "error": str(e)})
 
@@ -160,7 +160,7 @@ def delete_stack(
                 )
                 continue
 
-            results.append({"addr": fn_addr, "name": var_name, "ok": True})
+            results.append({"addr": fn_addr, "name": var_name})
         except Exception as e:
             results.append({"addr": fn_addr, "name": var_name, "error": str(e)})
 

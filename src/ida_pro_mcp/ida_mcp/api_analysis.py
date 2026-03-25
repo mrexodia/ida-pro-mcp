@@ -333,7 +333,6 @@ def _profile_function(
         "constant_count": len(constants),
         "has_type": has_type,
         "prototype": None,
-        "error": None,
     }
 
     if include_prototype:
@@ -651,7 +650,6 @@ def func_profile(
                 "query": q,
                 "data": profiled,
                 "next_offset": page["next_offset"],
-                "error": None,
             }
         )
 
@@ -846,7 +844,6 @@ def analyze_batch(
                     "addr": hex(fn.start_ea),
                     "name": fn_name,
                     "analysis": analysis,
-                    "error": None,
                 }
             )
         except Exception as e:
@@ -1017,7 +1014,6 @@ def xref_query(
                     "data": page["data"],
                     "next_offset": page["next_offset"],
                     "total": len(rows),
-                    "error": None,
                 }
             )
         except Exception as e:
@@ -1360,7 +1356,6 @@ def basic_blocks(
                     "cursor": (
                         {"next": offset + max_blocks} if more else {"done": True}
                     ),
-                    "error": None,
                 }
             )
         except Exception as e:
@@ -1449,7 +1444,6 @@ def find(
                     "matches": matches,
                     "count": len(matches),
                     "cursor": {"next": offset + limit} if more else {"done": True},
-                    "error": None,
                 }
             )
 
@@ -1521,7 +1515,6 @@ def find(
                     "matches": matches,
                     "count": len(matches),
                     "cursor": {"next": offset + limit} if more else {"done": True},
-                    "error": None,
                 }
             )
 
@@ -1545,7 +1538,6 @@ def find(
                         "cursor": (
                             {"next": offset + limit} if more else {"done": True}
                         ),
-                        "error": None,
                     }
                 )
             except Exception as e:
@@ -1579,7 +1571,6 @@ def find(
                         "cursor": (
                             {"next": offset + limit} if more else {"done": True}
                         ),
-                        "error": None,
                     }
                 )
             except Exception as e:
@@ -1863,7 +1854,6 @@ def insn_query(
                     "scanned": scanned,
                     "truncated": truncated,
                     "next_start": hex(next_start) if next_start is not None else None,
-                    "error": None,
                 }
             )
         except Exception as e:
@@ -2073,7 +2063,6 @@ def callgraph(
                     "max_edges": max_edges,
                     "max_edges_per_func": max_edges_per_func,
                     "per_func_capped": per_func_capped,
-                    "error": None,
                 }
             )
 
