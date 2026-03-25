@@ -174,17 +174,31 @@ class MCP(idaapi.plugin_t):
 
         return idaapi.PLUGIN_KEEP
 
+    def _unregister_instance(self):
+        port = getattr(self, "_registered_port", None)
+        if port is not None:
+            try:
+                if TYPE_CHECKING:
+                    from .ida_mcp.discovery import unregister_instance
+                else:
+                    from ida_mcp.discovery import unregister_instance
+                unregister_instance(port)
+            except Exception as e:
+                print(f"[MCP] Instance unregistration failed: {e}")
+            self._registered_port = None
+
     def run(self, arg):
         if self.mcp:
+            self._unregister_instance()
             self.mcp.stop()
             self.mcp = None
 
         # HACK: ensure fresh load of ida_mcp package
         unload_package("ida_mcp")
         if TYPE_CHECKING:
-            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches
+            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_local_instance
         else:
-            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches
+            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_local_instance
 
         try:
             init_caches()
@@ -200,6 +214,8 @@ class MCP(idaapi.plugin_t):
                 )
                 print(f"  Config: http://{self.host}:{port}/config.html")
                 self.mcp = MCP_SERVER
+                set_local_instance(self.host, port)
+                self._register_instance(port)
                 return
             except OSError as e:
                 if e.errno in (48, 98, 10048):  # Address already in use
@@ -208,10 +224,37 @@ class MCP(idaapi.plugin_t):
                     raise
         print(f"[MCP] Error: No available port in range {self.port}-{max_port - 1}")
 
+    def _register_instance(self, port: int):
+        try:
+            if TYPE_CHECKING:
+                from .ida_mcp.discovery import register_instance
+            else:
+                from ida_mcp.discovery import register_instance
+            import os
+            import idc
+            import ida_nalt
+            binary = ida_nalt.get_root_filename() or ""
+            idb_path = idc.get_idb_path() or ""
+            file_path = register_instance(
+                host=self.host,
+                port=port,
+                pid=os.getpid(),
+                binary=binary,
+                idb_path=idb_path,
+            )
+            self._registered_port = port
+            print(f"[MCP] Registered instance: {binary} (pid={os.getpid()}, port={port})")
+            print(f"  Discovery file: {file_path}")
+        except Exception as e:
+            import traceback
+            print(f"[MCP] Instance registration failed: {e}")
+            traceback.print_exc()
+
     def term(self):
         if hasattr(self, "_ui_hooks"):
             self._ui_hooks.unhook()
         ida_kernwin.unregister_action(CONFIG_ACTION_ID)
+        self._unregister_instance()
         if self.mcp:
             self.mcp.stop()
 

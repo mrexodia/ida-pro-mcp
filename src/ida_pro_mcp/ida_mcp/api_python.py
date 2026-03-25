@@ -1,6 +1,7 @@
 from typing import Annotated
 import ast
 import io
+import os
 import sys
 import idaapi
 import idc
@@ -184,6 +185,64 @@ def py_eval(
         return {
             "result": "",
             "stdout": "",
+            "stderr": traceback.format_exc(),
+        }
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+
+
+@tool
+@idasync
+@unsafe
+def py_exec_file(
+    file_path: Annotated[str, "Absolute path to a Python script to execute"],
+) -> dict:
+    """Execute a Python script file in IDA context and return stdout/stderr.
+
+    Unlike py_eval, this runs the entire file with exec() using a single shared
+    globals dict (no locals split), so top-level definitions are visible to all
+    code in the script. Handles large scripts that would be unwieldy as inline code.
+    """
+    if not os.path.isfile(file_path):
+        return {"result": "", "stdout": "", "stderr": f"File not found: {file_path}"}
+
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+
+    try:
+        sys.stdout = stdout_capture
+        sys.stderr = stderr_capture
+
+        exec_globals = _make_exec_globals()
+        exec_globals["__file__"] = file_path
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        exec(compile(code, file_path, "exec"), exec_globals)
+
+        stdout_text = stdout_capture.getvalue()
+        stderr_text = stderr_capture.getvalue()
+
+        result_value = ""
+        if "result" in exec_globals and exec_globals["result"] is not None:
+            result_value = str(exec_globals["result"])
+
+        return {
+            "result": result_value,
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+        }
+
+    except Exception:
+        import traceback
+
+        return {
+            "result": "",
+            "stdout": stdout_capture.getvalue(),
             "stderr": traceback.format_exc(),
         }
     finally:

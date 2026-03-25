@@ -4,7 +4,7 @@ import json
 import os
 import sys
 import traceback
-from typing import TYPE_CHECKING
+from typing import Annotated, TYPE_CHECKING
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -22,11 +22,24 @@ try:
 except ImportError:
     from installer import list_available_clients, print_mcp_config, run_install_command, set_ida_rpc
 
+try:
+    from .ida_mcp.discovery import discover_instances, probe_instance
+except ImportError:
+    try:
+        from ida_mcp.discovery import discover_instances, probe_instance
+    except ImportError:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ida_mcp"))
+        from discovery import discover_instances, probe_instance
+
+        sys.path.pop(0)
+
 IDA_HOST = "127.0.0.1"
 IDA_PORT = 13337
 
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
+
+LOCAL_TOOLS = {"select_instance"}
 
 
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
@@ -92,6 +105,35 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
 
 
 mcp.registry.dispatch = dispatch_proxy
+
+
+# ============================================================================
+# Local tools (handled by the proxy, not forwarded to IDA)
+# ============================================================================
+
+
+@mcp.tool
+def select_instance(
+    port: Annotated[int, "Port number of the IDA instance to connect to"],
+    host: Annotated[str, "Host address of the IDA instance"] = "127.0.0.1",
+) -> dict:
+    """Switch this MCP server to proxy requests to a different IDA Pro instance.
+
+    Use list_instances first to see available instances, then select one by port.
+    All subsequent tool calls will be routed to the selected instance.
+    """
+    global IDA_HOST, IDA_PORT
+    if not probe_instance(host, port):
+        return {"success": False, "error": f"Instance at {host}:{port} is not reachable"}
+    IDA_HOST = host
+    IDA_PORT = port
+    set_ida_rpc(IDA_HOST, IDA_PORT)
+    return {"success": True, "host": host, "port": port}
+
+
+# ============================================================================
+
+DEFAULT_IDA_RPC = f"http://{IDA_HOST}:{IDA_PORT}"
 
 
 def main():
