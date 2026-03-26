@@ -110,6 +110,10 @@ def _install_context_activation_hooks() -> None:
 def idalib_open(
     input_path: Annotated[str, "Path to the binary file to analyze"],
     run_auto_analysis: Annotated[bool, "Run automatic analysis on the binary"] = True,
+    args: Annotated[
+        Optional[str],
+        "Optional IDA command-line style loader arguments (for example '-parm')",
+    ] = None,
     session_id: Annotated[
         Optional[str], "Custom session ID (auto-generated if not provided)"
     ] = None,
@@ -120,7 +124,10 @@ def idalib_open(
         manager = get_session_manager()
         context_id = _resolve_effective_context_id()
         opened_session_id = manager.open_binary(
-            Path(input_path), run_auto_analysis=run_auto_analysis, session_id=session_id
+            Path(input_path),
+            run_auto_analysis=run_auto_analysis,
+            loader_args=args,
+            session_id=session_id,
         )
         session = manager.bind_context(context_id, opened_session_id, activate=True)
         return {
