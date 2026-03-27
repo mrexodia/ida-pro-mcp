@@ -36,6 +36,37 @@ def _parse_kernel_version(v: str) -> tuple[int, int, int]:
     return (major, minor, patch)
 
 
+def _check_required_apis() -> None:
+    """
+    Check that required Python APIs are available.
+
+    IDA 9.0 initial release (build 240925) is missing several Python API methods
+    that were added in 8.5 and later reinstated in 9.0 SP1 (build 241217).
+    Rather than adding compatibility hacks, we explicitly reject this version.
+    """
+    missing = []
+
+    # Check func_t methods (added in 8.5, missing in 9.0 SP0)
+    func = ida_funcs.func_t()
+    if not hasattr(func, "get_name"):
+        missing.append("func_t.get_name")
+    if not hasattr(func, "get_prototype"):
+        missing.append("func_t.get_prototype")
+
+    # Check tinfo_t methods (added in 8.5, missing in 9.0 SP0)
+    tif = ida_typeinf.tinfo_t()
+    if not hasattr(tif, "get_udm"):
+        missing.append("tinfo_t.get_udm")
+
+    if missing:
+        version = idaapi.get_kernel_version()
+        raise RuntimeError(
+            f"IDA Pro {version} is missing required Python API methods: "
+            f"{', '.join(missing)}. "
+            f"If using IDA 9.0, please upgrade to IDA 9.0 SP1 or later."
+        )
+
+
 if TYPE_CHECKING:
     import ida_entry
     import ida_ida
@@ -44,6 +75,7 @@ if TYPE_CHECKING:
     IDA_VERSION: tuple[int, int, int] = cast(tuple[int, int, int], (9, 2, 0))
 else:
     IDA_VERSION = _parse_kernel_version(idaapi.get_kernel_version())
+    _check_required_apis()
 
 IDA_GE_90 = IDA_VERSION >= (9, 0, 0)
 IDA_GE_85 = IDA_VERSION >= (8, 5, 0)
