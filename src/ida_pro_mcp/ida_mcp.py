@@ -12,6 +12,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from . import ida_mcp
 
+# Import config helpers (same netnode system you already use for "unrestricted")
+from ida_mcp.http import config_json_get, config_json_set
+
 
 def unload_package(package_name: str):
     """Remove every module that belongs to the package from sys.modules."""
@@ -75,11 +78,15 @@ class MCPConfigHandler(idaapi.action_handler_t):
             print(f"[MCP] Configuration unchanged: {host}:{port}")
             return 1
 
+        # Persist the new bind IP/port (same mechanism as unrestricted)
+        config_json_set("bind_host", host)
+        config_json_set("bind_port", port)
+
         self.plugin.host = host
         self.plugin.port = port
         print(f"[MCP] Configuration updated: {host}:{port}")
 
-        # Apply new endpoint immediately if the server is running.
+        # Apply immediately if server is already running
         if self.plugin.mcp is not None:
             print("[MCP] Applying configuration change without manual restart...")
             self.plugin.run(0)
@@ -106,7 +113,8 @@ class MCP(idaapi.plugin_t):
     wanted_name = "MCP"
     wanted_hotkey = "Ctrl-Alt-M"
 
-    DEFAULT_HOST = "127.0.0.1"
+    DEFAULT_HOST = "0.0.0.0"   # \u2190 CHANGED: LAN by default
+                            
     DEFAULT_PORT = 13337
 
     def init(self):
@@ -118,10 +126,14 @@ class MCP(idaapi.plugin_t):
             f"[MCP] Plugin loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server"
         )
         self.mcp: "ida_mcp.rpc.McpServer | None" = None
-        self.host = self.DEFAULT_HOST
-        self.port = self.DEFAULT_PORT
+                                     
+                                     
 
-        # Register a separate menu item for host/port configuration
+        # Load persisted bind IP/port (or default to 0.0.0.0)
+        self.host = config_json_get("bind_host", self.DEFAULT_HOST)
+        self.port = config_json_get("bind_port", self.DEFAULT_PORT)
+
+        # Register menu item for host/port config
         ida_kernwin.register_action(
             ida_kernwin.action_desc_t(
                 CONFIG_ACTION_ID,
@@ -132,6 +144,8 @@ class MCP(idaapi.plugin_t):
         # Defer menu attachment until the UI is fully initialized
         self._ui_hooks = MCPUIHooks()
         self._ui_hooks.hook()
+
+        print(f"[MCP] Binding to: {self.host}:{self.port} (change via MCP Configuration menu)")
 
         return idaapi.PLUGIN_KEEP
 
@@ -179,5 +193,3 @@ class MCP(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return MCP()
-
-

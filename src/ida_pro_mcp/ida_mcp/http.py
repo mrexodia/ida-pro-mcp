@@ -15,9 +15,7 @@ from .rpc import (
     get_cached_output,
 )
 
-
 T = TypeVar("T")
-
 
 @idasync
 def config_json_get(key: str, default: T) -> T:
@@ -33,13 +31,11 @@ def config_json_get(key: str, default: T) -> T:
         )
         return default
 
-
 @idasync
 def config_json_set(key: str, value):
     node = ida_netnode.netnode(f"$ ida_mcp.{key}", 0, True)
     json_blob = json.dumps(value).encode("utf-8")
     node.setblob(json_blob, 0, "C")
-
 
 def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
     """Changed to registry to enable configured tools, returns original tools."""
@@ -161,9 +157,13 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
 
     def _check_origin(self) -> bool:
         """
-        Prevents CSRF and DNS rebinding attacks by ensuring POST requests
-        originate from pages served by this server, not external websites.
+        Prevents CSRF and DNS rebinding attacks...
+        NOW SKIPPED WHEN "unrestricted" \u2192 allows LAN IPs.
         """
+        cors_policy = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
+        if cors_policy == "unrestricted":
+            return True
+
         origin = self.headers.get("Origin")
         port = self.server_port
         if origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
@@ -173,9 +173,13 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
 
     def _check_host(self) -> bool:
         """
-        Prevents DNS rebinding attacks where an attacker's domain (e.g., evil.com)
-        resolves to 127.0.0.1, allowing their page to read localhost resources.
+        Prevents DNS rebinding attacks...
+        NOW SKIPPED WHEN "unrestricted" \u2192 allows LAN IPs.
         """
+        cors_policy = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
+        if cors_policy == "unrestricted":
+            return True
+
         host = self.headers.get("Host")
         port = self.server_port
         if host not in (f"127.0.0.1:{port}", f"localhost:{port}"):
