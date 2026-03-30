@@ -81,8 +81,11 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         return {e.strip() for e in ext_param.split(",") if e.strip()}
 
     def log_message(self, format, *args):
-        """Override to suppress default logging or customize"""
-        pass
+        """Log MCP requests with method and path."""
+        # Controlled by IDA_MCP_LOG_REQUESTS env var
+        import os
+        if os.environ.get("IDA_MCP_LOG_REQUESTS", "").lower() in ("1", "true", "yes"):
+            print(f"[MCP] {self.client_address[0]} {format % args}")
 
     def send_cors_headers(self, *, preflight = False):
         origin = self.headers.get("Origin", "")
