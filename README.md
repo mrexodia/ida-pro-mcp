@@ -39,18 +39,20 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 
 ## Installation
 
-Install the latest version of the IDA Pro MCP package:
+**One-liner** (install + configure Claude Code + IDA plugin, no prompts):
 
 ```sh
-pip uninstall ida-pro-mcp
+pip install https://github.com/JordanRO2/MCP-IDA-PRO/archive/refs/heads/main.zip && ida-pro-mcp --install claude-code --transport streamable-http --scope global
+```
+
+Or step by step:
+
+```sh
 pip install https://github.com/JordanRO2/MCP-IDA-PRO/archive/refs/heads/main.zip
+ida-pro-mcp --install          # interactive: pick clients and transport
 ```
 
-Configure the MCP servers and install the IDA Plugin:
-
-```
-ida-pro-mcp --install
-```
+Available targets: `claude-code`, `claude`, `cursor`, `vscode`, `windsurf`, `cline`, `roo-code`
 
 **Important**: Make sure you completely restart IDA and your MCP client for the installation to take effect. Some clients (like Claude) run in the background and need to be quit from the tray icon.
 
