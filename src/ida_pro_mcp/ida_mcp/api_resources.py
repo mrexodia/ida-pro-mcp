@@ -22,8 +22,12 @@ from .utils import (
     StructureMember,
     get_image_size,
     parse_address,
+    get_function,
+    get_prototype,
 )
 from . import compat
+import ida_funcs
+import ida_bytes
 
 
 # ============================================================================
@@ -145,6 +149,73 @@ def selection_resource() -> dict:
     if start:
         return {"start": hex(start[0]), "end": hex(start[1]) if start[1] else None}
     return {"selection": None}
+
+
+# ============================================================================
+# Function / Global Lookup
+# ============================================================================
+
+
+@resource("ida://function/{addr}")
+@idasync
+def function_resource(addr: Annotated[str, "Function address or name"]) -> dict:
+    """Get function details: name, address, size, prototype, flags"""
+    ea = parse_address(addr)
+    func = ida_funcs.get_func(ea)
+    if not func:
+        return {"error": f"No function at {addr}"}
+
+    name = idc.get_name(func.start_ea, 0) or ""
+    proto = get_prototype(func)
+    flags = func.flags
+    size = func.end_ea - func.start_ea
+
+    flag_names = []
+    for fname, fval in [
+        ("FUNC_LIB", idaapi.FUNC_LIB),
+        ("FUNC_THUNK", idaapi.FUNC_THUNK),
+        ("FUNC_FRAME", idaapi.FUNC_FRAME),
+    ]:
+        if flags & fval:
+            flag_names.append(fname)
+
+    return {
+        "name": name,
+        "addr": hex(func.start_ea),
+        "end": hex(func.end_ea),
+        "size": size,
+        "prototype": proto,
+        "flags": flag_names,
+    }
+
+
+@resource("ida://global/{addr}")
+@idasync
+def global_resource(addr: Annotated[str, "Global address or name"]) -> dict:
+    """Get global variable details: name, address, size, type"""
+    ea = parse_address(addr)
+    name = idc.get_name(ea, 0) or ""
+    flags = ida_bytes.get_flags(ea)
+    size = ida_bytes.get_item_size(ea)
+
+    tif = ida_typeinf.tinfo_t()
+    type_str = None
+    if ida_nalt.get_tinfo(tif, ea):
+        type_str = str(tif)
+
+    kind = "unknown"
+    if ida_bytes.is_code(flags):
+        kind = "code"
+    elif ida_bytes.is_data(flags):
+        kind = "data"
+
+    return {
+        "name": name,
+        "addr": hex(ea),
+        "size": size,
+        "type": type_str,
+        "kind": kind,
+    }
 
 
 # ============================================================================

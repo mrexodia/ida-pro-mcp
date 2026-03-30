@@ -374,8 +374,10 @@ class McpServer:
         self._running = False
         self._sse_connections: dict[str, _McpSseConnection] = {}
         self._sse_connections_lock = threading.Lock()
-        self._http_sessions: set[str] = set()
+        self._http_sessions: dict[str, float] = {}  # session_id -> last_seen timestamp
         self._http_sessions_lock = threading.Lock()
+        self._http_session_max_age = 3600  # 1 hour expiry
+        self._http_session_max_count = 1000  # max concurrent sessions
         self._protocol_version = threading.local()
         self._transport_session_id = threading.local()
         self._enabled_extensions = threading.local()  # set[str] per request
@@ -515,12 +517,33 @@ class McpServer:
         return getattr(self._transport_session_id, "data", None)
 
     def register_http_session(self, session_id: str) -> None:
+        now = time.time()
         with self._http_sessions_lock:
-            self._http_sessions.add(session_id)
+            # Evict expired sessions
+            expired = [
+                sid for sid, ts in self._http_sessions.items()
+                if now - ts > self._http_session_max_age
+            ]
+            for sid in expired:
+                del self._http_sessions[sid]
+            # Enforce max count - evict oldest if at limit
+            if len(self._http_sessions) >= self._http_session_max_count:
+                oldest = min(self._http_sessions, key=self._http_sessions.get)
+                del self._http_sessions[oldest]
+            self._http_sessions[session_id] = now
 
     def has_http_session(self, session_id: str) -> bool:
+        now = time.time()
         with self._http_sessions_lock:
-            return session_id in self._http_sessions
+            ts = self._http_sessions.get(session_id)
+            if ts is None:
+                return False
+            if now - ts > self._http_session_max_age:
+                del self._http_sessions[session_id]
+                return False
+            # Touch session on access
+            self._http_sessions[session_id] = now
+            return True
 
     def cors_localhost(self, origin: str) -> bool:
         """Allow CORS requests from localhost on ANY port."""

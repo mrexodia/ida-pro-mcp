@@ -14,7 +14,6 @@ from typing import Annotated
 import ida_dbg
 import ida_entry
 import ida_idd
-import ida_idaapi
 import ida_name
 import idaapi
 
@@ -87,7 +86,7 @@ def _get_registers_for_thread(dbg: "ida_idd.debugger_t", tid: int) -> ThreadRegi
         try:
             reg_value = rv.pyval(reg_info.dtype)
         except ValueError:
-            reg_value = ida_idaapi.BADADDR
+            reg_value = idaapi.BADADDR
 
         if isinstance(reg_value, int):
             reg_value = hex(reg_value)
@@ -167,7 +166,7 @@ def dbg_start():
         for i in range(ida_entry.get_entry_qty()):
             ordinal = ida_entry.get_entry_ordinal(i)
             addr = ida_entry.get_entry(ordinal)
-            if addr != ida_idaapi.BADADDR:
+            if addr != idaapi.BADADDR:
                 ida_dbg.add_bpt(addr, 0, idaapi.BPT_SOFT)
 
     if idaapi.start_process("", "", "") == 1:

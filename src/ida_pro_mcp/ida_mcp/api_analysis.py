@@ -8,8 +8,6 @@ import idautils
 import ida_typeinf
 import ida_nalt
 import ida_bytes
-import ida_ida
-import ida_idaapi
 import ida_xref
 import ida_ua
 import ida_name
@@ -1093,7 +1091,7 @@ def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[d
                 continue
 
             tid = tif.get_udm_tid(idx)
-            if tid == ida_idaapi.BADADDR:
+            if tid == idaapi.BADADDR:
                 results.append(
                     {
                         "struct": struct_name,
@@ -1261,8 +1259,8 @@ def find_bytes(
                 continue
 
             # Search with early exit
-            ea = ida_ida.inf_get_min_ea()
-            max_ea = ida_ida.inf_get_max_ea()
+            ea = compat.inf_get_min_ea()
+            max_ea = compat.inf_get_max_ea()
             while ea != idaapi.BADADDR:
                 ea = searcher(ea, max_ea)
                 if ea == idaapi.BADADDR:
@@ -1431,8 +1429,8 @@ def find(
             skipped = 0
             more = False
             try:
-                ea = ida_ida.inf_get_min_ea()
-                max_ea = ida_ida.inf_get_max_ea()
+                ea = compat.inf_get_min_ea()
+                max_ea = compat.inf_get_max_ea()
                 mask = b"\xff" * len(pattern_bytes)
                 while ea != idaapi.BADADDR:
                     ea = _raw_bin_search(ea, max_ea, pattern_bytes, mask)
