@@ -23,6 +23,9 @@ from .rpc import tool, unsafe
 from .sync import idasync, tool_timeout
 from .utils import parse_address, get_function
 
+# Track which modules failed to import so we only warn once (not per py_eval call)
+_lazy_import_warned: set[str] = set()
+
 # ============================================================================
 # Python Evaluation
 # ============================================================================
@@ -51,8 +54,9 @@ def py_eval(
         def lazy_import(module_name):
             try:
                 return __import__(module_name)
-            except Exception as e:
-                print(f"[WARNING] Failed to import {module_name}: {e}")
+            except Exception:
+                if module_name not in _lazy_import_warned:
+                    _lazy_import_warned.add(module_name)
                 return None
 
         exec_globals = {
