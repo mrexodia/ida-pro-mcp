@@ -237,6 +237,7 @@ def detect_vulns(
     ] = None,
     offset: Annotated[int, "Skip first N findings (default 0)"] = 0,
     count: Annotated[int, "Max findings to return (default 100, 0=all)"] = 100,
+    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> dict:
     """Scan functions for dangerous API calls and common vulnerability patterns.
 
@@ -370,6 +371,7 @@ def find_crypto(
     scan_tables: Annotated[bool, "Scan binary for known S-box/lookup tables"] = True,
     offset: Annotated[int, "Skip first N findings (default 0)"] = 0,
     count: Annotated[int, "Max findings per algorithm (default 50, 0=all)"] = 50,
+    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> dict:
     """Detect cryptographic algorithms by finding known constants, S-boxes, and lookup tables.
 
@@ -482,6 +484,7 @@ def find_dangerous_callers(
     max_depth: Annotated[int, "How many call levels up to trace (default 3)"] = 3,
     offset: Annotated[int, "Skip first N edges (default 0)"] = 0,
     count: Annotated[int, "Max edges to return (default 200, 0=all)"] = 200,
+    timeout: Annotated[float | None, "Override timeout in seconds (default: 60)"] = None,
 ) -> dict:
     """Trace all call paths leading to a dangerous sink function.
 
@@ -597,6 +600,7 @@ def detect_stack_strings(
     min_length: Annotated[int, "Minimum string length to report (default 4)"] = 4,
     offset: Annotated[int, "Skip first N results (default 0)"] = 0,
     count: Annotated[int, "Max results to return (default 200, 0=all)"] = 200,
+    timeout: Annotated[float | None, "Override timeout in seconds (default: 60)"] = None,
 ) -> dict:
     """Detect strings constructed on the stack (anti-analysis / obfuscation technique).
 
@@ -721,6 +725,7 @@ def trace_source_to_sink(
     max_depth: Annotated[int, "Max call chain depth (default 5)"] = 5,
     offset: Annotated[int, "Skip first N paths (default 0)"] = 0,
     count: Annotated[int, "Max paths to return (default 100, 0=all)"] = 100,
+    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> dict:
     """Find call chains connecting input sources to dangerous sinks.
 

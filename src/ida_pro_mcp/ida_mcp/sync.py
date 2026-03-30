@@ -136,15 +136,24 @@ def idasync(f):
     Previously there were separate @idaread and @idawrite decorators,
     but since read-only operations in IDA might actually require write
     access (e.g., decompilation), we now use a single decorator.
+
+    If the wrapped function receives a ``timeout`` keyword argument,
+    it takes priority over the ``@tool_timeout`` decorator value and
+    the global ``IDA_MCP_TOOL_TIMEOUT_SEC`` environment variable.
     """
 
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
+        # Allow per-call timeout override via kwarg
+        runtime_timeout = kwargs.pop("timeout", None)
         ff = functools.partial(f, *args, **kwargs)
         ff.__name__ = f.__name__
-        timeout_override = _normalize_timeout(
-            getattr(f, "__ida_mcp_timeout_sec__", None)
-        )
+        if runtime_timeout is not None:
+            timeout_override = _normalize_timeout(runtime_timeout)
+        else:
+            timeout_override = _normalize_timeout(
+                getattr(f, "__ida_mcp_timeout_sec__", None)
+            )
         return sync_wrapper(ff, timeout_override)
 
     return wrapper

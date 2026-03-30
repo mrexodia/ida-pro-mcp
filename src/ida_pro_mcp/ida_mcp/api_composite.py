@@ -179,6 +179,7 @@ def _analyze_function_internal(ea: int, *, include_asm: bool = False) -> dict:
 def analyze_function(
     addr: Annotated[str, "Function address or name"],
     include_asm: Annotated[bool, "Include full disassembly (default: false, saves tokens)"] = False,
+    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> dict:
     """Get a compact analysis of a single function: decompiled pseudocode (capped
     at 100 lines), top 10 strings as values, top 10 non-trivial constants, caller
@@ -206,6 +207,7 @@ def analyze_function(
 @tool_timeout(180.0)
 def analyze_component(
     addrs: Annotated[list[str] | str, "Function addresses (comma-separated or list)"],
+    timeout: Annotated[float | None, "Override timeout in seconds (default: 180)"] = None,
 ) -> dict:
     """Analyze a group of related functions as one logical unit. Returns a COMPACT
     summary of each function (name, prototype, size, callee names, top 5 strings,
@@ -367,6 +369,7 @@ def diff_before_after(
     addr: Annotated[str, "Function address"],
     action: Annotated[str, "Action: 'rename_func', 'set_type', 'set_comment'"],
     action_args: Annotated[dict, "Arguments for the action"],
+    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> dict:
     """Rename a function, set its type, or add a comment, and immediately see the
     before/after decompilation side by side. Use this instead of calling rename
@@ -459,6 +462,7 @@ def trace_data_flow(
     addr: Annotated[str, "Starting address"],
     direction: Annotated[str, "'forward' (xrefs from) or 'backward' (xrefs to)"] = "forward",
     max_depth: Annotated[int, "Maximum traversal depth"] = 5,
+    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> dict:
     """Follow cross-references from or to an address, automatically traversing
     multiple hops. Use 'forward' to see where data flows TO (xrefs-from), or
