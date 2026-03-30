@@ -34,7 +34,7 @@ from .utils import parse_address, get_function
 @unsafe
 def py_eval(
     code: Annotated[str, "Python code"],
-    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
+    timeout: Annotated[int | float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> dict:
     """Execute Python in IDA context and return result/stdout/stderr."""
     # Capture stdout/stderr

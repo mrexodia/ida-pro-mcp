@@ -315,7 +315,7 @@ def _build_call_graph_summary(func_eas: list[int]) -> dict:
 @tool_timeout(120.0)
 def survey_binary(
     detail_level: Annotated[str, "Detail level: 'standard' or 'minimal'"] = "standard",
-    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
+    timeout: Annotated[int | float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> dict:
     """Get a compact overview of the binary in one call. Returns file metadata,
     segment layout, entry points, statistics, top 15 strings and functions ranked

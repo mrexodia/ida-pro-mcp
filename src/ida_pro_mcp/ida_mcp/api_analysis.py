@@ -365,7 +365,7 @@ def _profile_function(
 @tool_timeout(90.0)
 def decompile(
     addr: Annotated[str, "Function address or name to decompile"],
-    timeout: Annotated[float | None, "Override timeout in seconds (default: 90)"] = None,
+    timeout: Annotated[int | float | None, "Override timeout in seconds (default: 90)"] = None,
 ) -> dict:
     """Decompile function(s) at address(es); returns pseudocode and per-item errors."""
     try:
@@ -400,7 +400,7 @@ def disasm(
     include_total: Annotated[
         bool, "Compute total instruction count (default: false)"
     ] = False,
-    timeout: Annotated[float | None, "Override timeout in seconds (default: 90)"] = None,
+    timeout: Annotated[int | float | None, "Override timeout in seconds (default: 90)"] = None,
 ) -> dict:
     """Disassemble function with offset/max_instructions pagination and optional total count."""
 
@@ -553,7 +553,7 @@ def func_profile(
         list[FuncProfileQuery] | FuncProfileQuery | str,
         "Function profiling query (supports name/address filters + pagination)",
     ],
-    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
+    timeout: Annotated[int | float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> list[dict]:
     """Profile functions with summary metrics and optional sampled details."""
     queries = normalize_dict_list(
@@ -667,7 +667,7 @@ def analyze_batch(
         list[AnalyzeBatchQuery] | AnalyzeBatchQuery | str,
         "Comprehensive per-function analysis with selectable sections",
     ],
-    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
+    timeout: Annotated[int | float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> list[dict]:
     """Run comprehensive analysis over one or more target functions."""
     queries = normalize_dict_list(
@@ -1222,7 +1222,7 @@ def find_bytes(
     ],
     limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
-    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
+    timeout: Annotated[int | float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> list[dict]:
     """Search byte patterns (supports ??) with offset/limit pagination."""
     patterns = normalize_list_input(patterns)
@@ -1396,7 +1396,7 @@ def find(
     ],
     limit: Annotated[int, "Max matches per target (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
-    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
+    timeout: Annotated[int | float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> list[dict]:
     """Search strings/immediates/refs for targets with offset/limit pagination."""
     if not isinstance(targets, list):
@@ -1773,7 +1773,7 @@ def insn_query(
         list[InsnPattern] | InsnPattern | str,
         "Instruction query with mnemonic/operand filters and scoped scan",
     ],
-    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
+    timeout: Annotated[int | float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> list[dict]:
     """Query instructions with mnemonic/operand filters and scoped scans."""
     queries = normalize_dict_list(
