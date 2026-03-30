@@ -106,7 +106,7 @@ class MCP(idaapi.plugin_t):
     wanted_name = "MCP"
     wanted_hotkey = "Ctrl-Alt-M"
 
-    DEFAULT_HOST = "127.0.0.1"
+    DEFAULT_HOST = "0.0.0.0"
     DEFAULT_PORT = 13337
 
     def init(self):
