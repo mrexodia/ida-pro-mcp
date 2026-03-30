@@ -77,7 +77,7 @@ def get_cors_policy(port: int) -> str:
         case "direct":
             return f"http://127.0.0.1:{port} http://localhost:{port}"
         case _:
-            return "*"
+            return "127.0.0.1 localhost"
 
 
 ORIGINAL_TOOLS = handle_enabled_tools(MCP_SERVER.tools, "enabled_tools")

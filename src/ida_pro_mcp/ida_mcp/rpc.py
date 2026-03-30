@@ -94,11 +94,18 @@ def get_cached_output(output_id: str) -> Optional[Any]:
     return _output_cache.get(output_id)
 
 
+import threading
+
+_output_cache_lock = threading.Lock()
+
+
 def _cache_output(output_id: str, data: Any) -> None:
-    if len(_output_cache) >= OUTPUT_CACHE_MAX_SIZE:
-        oldest_key = next(iter(_output_cache))
-        del _output_cache[oldest_key]
-    _output_cache[output_id] = data
+    with _output_cache_lock:
+        if len(_output_cache) >= OUTPUT_CACHE_MAX_SIZE:
+            oldest_key = next(iter(_output_cache), None)
+            if oldest_key is not None:
+                del _output_cache[oldest_key]
+        _output_cache[output_id] = data
 
 
 def _install_tools_call_patch() -> None:

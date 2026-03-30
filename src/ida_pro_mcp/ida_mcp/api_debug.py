@@ -555,7 +555,7 @@ def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
     for region in regions:
         try:
             addr = parse_address(region["addr"])
-            size = region["size"]
+            size = min(region["size"], 1024 * 1024)  # Cap at 1MB per read
 
             data = idaapi.dbg_read_memory(addr, size)
             if data:

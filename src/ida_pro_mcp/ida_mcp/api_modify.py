@@ -83,6 +83,11 @@ def set_comments(items: list[CommentOp] | CommentOp):
                     }
                 )
                 continue
+            if not eamap[ea]:
+                results.append(
+                    {"addr": addr_str, "ok": True, "error": f"Empty eamap entry at {hex(ea)}"}
+                )
+                continue
             nearest_ea = eamap[ea][0].ea
 
             if cfunc.has_orphan_cmts():
