@@ -68,9 +68,50 @@ def _parse_bool_env(name: str, default: bool) -> bool:
 _LOG_REQUESTS = _parse_bool_env("IDA_MCP_LOG_REQUESTS", True)
 _LOG_SKIP_METHODS = {
     m.strip()
-    for m in os.getenv("IDA_MCP_LOG_SKIP_METHODS", "tools/call").split(",")
+    for m in os.getenv("IDA_MCP_LOG_SKIP_METHODS", "").split(",")
     if m.strip()
 }
+
+# File-based logging: writes all tool calls to a persistent log file.
+# Survives IDA freezes/crashes unlike IDA Output window.
+# Controlled by IDA_MCP_LOG_FILE env var (path) or defaults to mcp_calls.log
+# next to the IDB. Set to empty string or "off" to disable.
+_LOG_FILE_PATH = os.getenv("IDA_MCP_LOG_FILE", "")
+_log_file_handle = None
+
+
+def _get_log_file():
+    global _log_file_handle, _LOG_FILE_PATH
+    if _log_file_handle is not None:
+        return _log_file_handle
+    if _LOG_FILE_PATH.lower() in ("", "off", "false", "0", "no"):
+        # Auto-detect: log next to IDB if available
+        try:
+            import ida_nalt
+            idb_path = ida_nalt.get_input_file_path()
+            if idb_path:
+                _LOG_FILE_PATH = os.path.join(os.path.dirname(idb_path), "mcp_calls.log")
+        except Exception:
+            _LOG_FILE_PATH = "mcp_calls.log"
+    if _LOG_FILE_PATH.lower() in ("off", "false", "no"):
+        return None
+    try:
+        _log_file_handle = open(_LOG_FILE_PATH, "a", encoding="utf-8", buffering=1)  # line-buffered
+        return _log_file_handle
+    except Exception:
+        return None
+
+
+def _log_to_file(msg: str):
+    import datetime
+    f = _get_log_file()
+    if f is None:
+        return
+    try:
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        f.write(f"{ts} {msg}\n")
+    except Exception:
+        pass
 JsonRpcParams: TypeAlias = dict[str, Any] | list[Any] | None
 
 class JsonRpcRequest(TypedDict):
@@ -134,11 +175,15 @@ class JsonRpcRegistry:
         params: JsonRpcParams = request.get("params")
 
         log_method = _LOG_REQUESTS and method not in _LOG_SKIP_METHODS
+
+        # Build compact params string for logging
+        params_str = json.dumps(params, default=str)
+        if len(params_str) > 300:
+            params_str = params_str[:300] + "..."
+
         if log_method:
-            params_str = json.dumps(params, default=str)
-            if len(params_str) > 200:
-                params_str = params_str[:200] + "..."
             print(f"[MCP] >> {method}({params_str})")
+        _log_to_file(f">> [{request_id}] {method}({params_str})")
 
         # Set current request ID in thread-local for cancellation tracking
         _current_request.id = request_id
@@ -146,11 +191,12 @@ class JsonRpcRegistry:
         try:
             result = self._call(method, params)
             elapsed_ms = (time.perf_counter() - start_time) * 1000
+            result_str = json.dumps(result, default=str)
+            if len(result_str) > 300:
+                result_str = result_str[:300] + "..."
             if log_method:
-                result_str = json.dumps(result, default=str)
-                if len(result_str) > 200:
-                    result_str = result_str[:200] + "..."
                 print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) {result_str}")
+            _log_to_file(f"<< [{request_id}] {method} ({elapsed_ms:.1f}ms) {result_str}")
             if is_notification:
                 return None
             return {
@@ -162,6 +208,7 @@ class JsonRpcRegistry:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             if log_method:
                 print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) ERROR: {e.message}")
+            _log_to_file(f"<< [{request_id}] {method} ({elapsed_ms:.1f}ms) ERROR: {e.message}")
             if is_notification:
                 return None
             return self._error(request_id, e.code, e.message, e.data)
@@ -170,6 +217,7 @@ class JsonRpcRegistry:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             if log_method:
                 print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) CANCELLED")
+            _log_to_file(f"<< [{request_id}] {method} ({elapsed_ms:.1f}ms) CANCELLED")
             if is_notification:
                 return None
             return self._error(request_id, -32800, str(e) or "Request cancelled")
@@ -177,6 +225,7 @@ class JsonRpcRegistry:
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             if log_method:
                 print(f"[MCP] << {method} ({elapsed_ms:.1f}ms) EXCEPTION: {e}")
+            _log_to_file(f"<< [{request_id}] {method} ({elapsed_ms:.1f}ms) EXCEPTION: {e}")
             if is_notification:
                 return None
             error = self.map_exception(e)
