@@ -235,6 +235,8 @@ def detect_vulns(
         str | None,
         "Minimum severity: critical, high, medium, low"
     ] = None,
+    offset: Annotated[int, "Skip first N findings (default 0)"] = 0,
+    count: Annotated[int, "Max findings to return (default 100, 0=all)"] = 100,
 ) -> dict:
     """Scan functions for dangerous API calls and common vulnerability patterns.
 
@@ -341,13 +343,22 @@ def detect_vulns(
         by_type[f["vuln"]] += 1
         by_severity[f["severity"]] += 1
 
+    total = len(findings)
+    if count == 0:
+        page = findings[offset:]
+    else:
+        page = findings[offset:offset + count]
+    has_more = offset + len(page) < total
+
     return {
         "scanned": scanned,
-        "total_findings": len(findings),
+        "total_findings": total,
         "by_type": dict(by_type),
         "by_severity": dict(by_severity),
-        "findings": findings[:100],  # Cap output for token efficiency
-        "truncated": len(findings) > 100,
+        "findings": page,
+        "offset": offset,
+        "count": len(page),
+        "next_offset": offset + len(page) if has_more else None,
     }
 
 
@@ -357,6 +368,8 @@ def detect_vulns(
 def find_crypto(
     scan_constants: Annotated[bool, "Scan for magic constants in code"] = True,
     scan_tables: Annotated[bool, "Scan binary for known S-box/lookup tables"] = True,
+    offset: Annotated[int, "Skip first N findings (default 0)"] = 0,
+    count: Annotated[int, "Max findings per algorithm (default 50, 0=all)"] = 50,
 ) -> dict:
     """Detect cryptographic algorithms by finding known constants, S-boxes, and lookup tables.
 
@@ -450,10 +463,14 @@ def find_crypto(
     for r in results:
         by_algo[r["algo"]].append(r)
 
+    cap = count if count > 0 else None
     return {
         "total_findings": len(results),
         "algorithms_found": list(by_algo.keys()),
-        "by_algorithm": {algo: hits[:20] for algo, hits in by_algo.items()},
+        "by_algorithm": {
+            algo: hits[offset:offset + cap] if cap else hits[offset:]
+            for algo, hits in by_algo.items()
+        },
     }
 
 
@@ -463,6 +480,8 @@ def find_crypto(
 def find_dangerous_callers(
     sink: Annotated[str, "Dangerous function name or address (e.g. 'strcpy', '0x401000')"],
     max_depth: Annotated[int, "How many call levels up to trace (default 3)"] = 3,
+    offset: Annotated[int, "Skip first N edges (default 0)"] = 0,
+    count: Annotated[int, "Max edges to return (default 200, 0=all)"] = 200,
 ) -> dict:
     """Trace all call paths leading to a dangerous sink function.
 
@@ -546,13 +565,24 @@ def find_dangerous_callers(
     root_callers = [e for e in edges if e["depth"] == max_depth or
                     e["caller_addr"] not in {e2["target_addr"] for e2 in edges}]
 
+    total_edges = len(edges)
+    if count == 0:
+        page = edges[offset:]
+    else:
+        page = edges[offset:offset + count]
+    has_more = offset + len(page) < total_edges
+
     return {
         "sink": sink_name,
         "sink_addr": hex(sink_ea),
         "total_callers": len(visited) - 1,
+        "total_edges": total_edges,
         "max_depth": max_depth,
-        "edges": edges[:200],
-        "root_entry_points": [e["caller"] for e in root_callers][:20],
+        "edges": page,
+        "offset": offset,
+        "count": len(page),
+        "next_offset": offset + len(page) if has_more else None,
+        "root_entry_points": [e["caller"] for e in root_callers],
     }
 
 
@@ -565,7 +595,9 @@ def detect_stack_strings(
         "Function addresses/names to scan. Omit to scan all."
     ] = None,
     min_length: Annotated[int, "Minimum string length to report (default 4)"] = 4,
-) -> list[dict]:
+    offset: Annotated[int, "Skip first N results (default 0)"] = 0,
+    count: Annotated[int, "Max results to return (default 200, 0=all)"] = 200,
+) -> dict:
     """Detect strings constructed on the stack (anti-analysis / obfuscation technique).
 
     Finds byte-by-byte or word-by-word string construction patterns where individual
@@ -658,7 +690,20 @@ def detect_stack_strings(
                 "first_insn": hex(current_addrs[0]),
             })
 
-    return results[:100]
+    total = len(results)
+    if count == 0:
+        page = results[offset:]
+    else:
+        page = results[offset:offset + count]
+    has_more = offset + len(page) < total
+
+    return {
+        "total": total,
+        "results": page,
+        "offset": offset,
+        "count": len(page),
+        "next_offset": offset + len(page) if has_more else None,
+    }
 
 
 @tool
@@ -674,6 +719,8 @@ def trace_source_to_sink(
         "Sink function names/addrs (e.g. 'strcpy,system,sprintf')"
     ],
     max_depth: Annotated[int, "Max call chain depth (default 5)"] = 5,
+    offset: Annotated[int, "Skip first N paths (default 0)"] = 0,
+    count: Annotated[int, "Max paths to return (default 100, 0=all)"] = 100,
 ) -> dict:
     """Find call chains connecting input sources to dangerous sinks.
 
@@ -802,11 +849,21 @@ def trace_source_to_sink(
 
     paths.sort(key=lambda p: p["total_distance"])
 
+    total = len(paths)
+    if count == 0:
+        page = paths[offset:]
+    else:
+        page = paths[offset:offset + count]
+    has_more = offset + len(page) < total
+
     return {
         "sources": {hex(ea): name for ea, name in source_eas.items()},
         "sinks": {hex(ea): name for ea, name in sink_eas.items()},
         "forward_reachable_count": len(forward_reachable),
         "backward_reachable_count": len(backward_reachable),
-        "intersection_count": len(intersection),
-        "paths": paths[:50],
+        "intersection_count": total,
+        "paths": page,
+        "offset": offset,
+        "count": len(page),
+        "next_offset": offset + len(page) if has_more else None,
     }
