@@ -171,7 +171,12 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         limit = self.mcp_server.post_body_limit
         while True:
             line = self.rfile.readline().split(b";")[0].strip()
-            chunk_size = int(line, 16)
+            try:
+                chunk_size = int(line, 16)
+            except (ValueError, OverflowError):
+                raise ValueError(f"Invalid chunk size: {line!r}")
+            if chunk_size > limit:
+                chunk_size = limit
             if chunk_size == 0:
                 # Consume trailer fields until blank line
                 while self.rfile.readline().strip():
@@ -197,7 +202,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
     def _handle_sse_get(self):
         # Create SSE connection wrapper
         conn = _McpSseConnection(self.wfile)
-        self.mcp_server._sse_connections[conn.session_id] = conn
+        with self.mcp_server._sse_connections_lock:
+            self.mcp_server._sse_connections[conn.session_id] = conn
 
         try:
             # Send SSE headers
@@ -245,8 +251,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
 
         finally:
             conn.alive = False
-            if conn.session_id in self.mcp_server._sse_connections:
-                del self.mcp_server._sse_connections[conn.session_id]
+            with self.mcp_server._sse_connections_lock:
+                self.mcp_server._sse_connections.pop(conn.session_id, None)
 
     def _handle_sse_post(self, body: bytes):
         query_params = parse_qs(urlparse(self.path).query)
@@ -255,7 +261,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_error(400, "Missing ?session for SSE POST")
             return
 
-        sse_conn = self.mcp_server._sse_connections.get(session_id)
+        with self.mcp_server._sse_connections_lock:
+            sse_conn = self.mcp_server._sse_connections.get(session_id)
         if sse_conn is None or not sse_conn.alive:
             self.send_error(400, f"No active SSE connection found for session {session_id}")
             return
@@ -366,6 +373,7 @@ class McpServer:
         self._server_thread: threading.Thread | None = None
         self._running = False
         self._sse_connections: dict[str, _McpSseConnection] = {}
+        self._sse_connections_lock = threading.Lock()
         self._http_sessions: set[str] = set()
         self._http_sessions_lock = threading.Lock()
         self._protocol_version = threading.local()
@@ -459,9 +467,10 @@ class McpServer:
         self._running = False
 
         # Close all SSE connections
-        for conn in self._sse_connections.values():
-            conn.alive = False
-        self._sse_connections.clear()
+        with self._sse_connections_lock:
+            for conn in self._sse_connections.values():
+                conn.alive = False
+            self._sse_connections.clear()
 
         # Shutdown the HTTP server
         if self._http_server:

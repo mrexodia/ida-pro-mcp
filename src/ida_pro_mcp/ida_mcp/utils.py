@@ -1076,7 +1076,7 @@ def decompile_function_safe(ea: int) -> Optional[str]:
             else:
                 lines.append(text)
         return "\n".join(lines)
-    except Exception:
+    except (RuntimeError, ValueError, AttributeError, IDAError):
         return None
 
 
@@ -1177,7 +1177,7 @@ def get_callees(addr: str) -> list[dict]:
         unique_callee_tuples = {tuple(callee.items()) for callee in callees}
         unique_callees = [dict(callee) for callee in unique_callee_tuples]
         return unique_callees
-    except Exception:
+    except (RuntimeError, ValueError, AttributeError, IDAError):
         return []
 
 

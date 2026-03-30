@@ -1213,6 +1213,7 @@ def callees(
 
 @tool
 @idasync
+@tool_timeout(120)
 def find_bytes(
     patterns: Annotated[
         list[str] | str, "Byte patterns to search for (e.g. '48 8B ?? ??')"
@@ -1382,6 +1383,7 @@ def basic_blocks(
 
 @tool
 @idasync
+@tool_timeout(120)
 def find(
     type: Annotated[
         str, "Search type: 'string', 'immediate', 'data_ref', or 'code_ref'"
@@ -1761,6 +1763,7 @@ def _scan_insn_ranges(
 
 @tool
 @idasync
+@tool_timeout(120)
 def insn_query(
     queries: Annotated[
         list[InsnPattern] | InsnPattern | str,
