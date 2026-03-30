@@ -369,8 +369,10 @@ def search_structs(
     filter: Annotated[
         str, "Case-insensitive substring to search for in structure names"
     ],
-) -> list[dict]:
-    """Search local structs/unions by name pattern."""
+    offset: Annotated[int, "Skip first N results (default 0)"] = 0,
+    count: Annotated[int, "Max results to return (default 100, 0=all)"] = 100,
+) -> dict:
+    """Search local structs/unions by name pattern with pagination."""
     results = []
     limit = compat.get_ordinal_limit()
 
@@ -399,7 +401,20 @@ def search_structs(
                         }
                     )
 
-    return results
+    total = len(results)
+    if count == 0:
+        page = results[offset:]
+    else:
+        page = results[offset:offset + count]
+    has_more = offset + len(page) < total
+
+    return {
+        "total": total,
+        "results": page,
+        "offset": offset,
+        "count": len(page),
+        "next_offset": offset + len(page) if has_more else None,
+    }
 
 
 def _type_kind(tif: ida_typeinf.tinfo_t) -> str:

@@ -20,7 +20,7 @@ import ida_typeinf
 import ida_xref
 
 from .rpc import tool, unsafe
-from .sync import idasync
+from .sync import idasync, tool_timeout
 from .utils import parse_address, get_function
 
 # ============================================================================
@@ -30,9 +30,11 @@ from .utils import parse_address, get_function
 
 @tool
 @idasync
+@tool_timeout(120)
 @unsafe
 def py_eval(
     code: Annotated[str, "Python code"],
+    timeout: Annotated[float | None, "Override timeout in seconds (default: 120)"] = None,
 ) -> dict:
     """Execute Python in IDA context and return result/stdout/stderr."""
     # Capture stdout/stderr
@@ -49,7 +51,8 @@ def py_eval(
         def lazy_import(module_name):
             try:
                 return __import__(module_name)
-            except Exception:
+            except Exception as e:
+                print(f"[WARNING] Failed to import {module_name}: {e}")
                 return None
 
         exec_globals = {
@@ -159,15 +162,28 @@ def py_eval(
                     last_key = list(exec_locals.keys())[-1]
                     result_value = str(exec_locals[last_key])
 
-        # Collect output
+        # Collect output (cap at 100KB per field to prevent token waste)
+        _MAX_OUTPUT = 100_000
         stdout_text = stdout_capture.getvalue()
         stderr_text = stderr_capture.getvalue()
+        result_str = result_value or ""
 
-        return {
-            "result": result_value or "",
+        truncated = False
+        if len(result_str) > _MAX_OUTPUT:
+            result_str = result_str[:_MAX_OUTPUT] + f"\n... [{len(result_str)} chars total, truncated]"
+            truncated = True
+        if len(stdout_text) > _MAX_OUTPUT:
+            stdout_text = stdout_text[:_MAX_OUTPUT] + f"\n... [{len(stdout_text)} chars total, truncated]"
+            truncated = True
+
+        response = {
+            "result": result_str,
             "stdout": stdout_text,
             "stderr": stderr_text,
         }
+        if truncated:
+            response["truncated"] = True
+        return response
 
     except Exception:
         import traceback

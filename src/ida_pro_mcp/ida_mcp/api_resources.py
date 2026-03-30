@@ -272,6 +272,48 @@ def export_name_resource(name: Annotated[str, "Export name"]) -> dict:
 
 
 # ============================================================================
+# Type Lookup by Name
+# ============================================================================
+
+
+@resource("ida://type/{name}")
+@idasync
+def type_name_resource(name: Annotated[str, "Type name"]) -> dict:
+    """Get type definition by name (structs, enums, typedefs)"""
+    tif = ida_typeinf.tinfo_t()
+    if not tif.get_named_type(None, name):
+        return {"error": f"Type not found: {name}"}
+
+    result = {
+        "name": name,
+        "size": tif.get_size(),
+        "declaration": str(tif),
+    }
+
+    if tif.is_udt():
+        udt_data = ida_typeinf.udt_type_data_t()
+        if tif.get_udt_details(udt_data):
+            result["kind"] = "union" if udt_data.is_union else "struct"
+            result["members"] = [
+                {
+                    "name": member.name,
+                    "offset": hex(member.offset // 8),
+                    "size": hex(member.size // 8),
+                    "type": str(member.type),
+                }
+                for member in udt_data
+            ]
+    elif tif.is_enum():
+        result["kind"] = "enum"
+    elif tif.is_ptr():
+        result["kind"] = "pointer"
+    else:
+        result["kind"] = "typedef"
+
+    return result
+
+
+# ============================================================================
 # Cross-references
 # ============================================================================
 
