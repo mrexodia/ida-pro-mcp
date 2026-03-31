@@ -24,6 +24,7 @@ class _SavedState:
         self._lhost = api_discovery._LOCAL_HOST
         self._lport = api_discovery._LOCAL_PORT
         self._proxied = api_discovery.is_request_proxied()
+        self._session = getattr(api_discovery.MCP_SERVER._transport_session_id, "data", None)
         return self
     def __exit__(self, *exc):
         api_discovery._redirect_host = self._host
@@ -31,6 +32,7 @@ class _SavedState:
         api_discovery._LOCAL_HOST = self._lhost
         api_discovery._LOCAL_PORT = self._lport
         api_discovery.set_request_proxied(self._proxied)
+        api_discovery.MCP_SERVER._transport_session_id.data = self._session
 
 
 def _make_jsonrpc(method, params=None, id=1):
@@ -132,6 +134,30 @@ def test_select_instance_unreachable_returns_error():
         assert result["success"] is False
         assert "not reachable" in result.get("error", "")
         assert api_discovery.get_redirect_target() is None
+
+
+@test()
+def test_select_instance_redirect_is_scoped_to_transport_session():
+    """Each MCP transport session should keep its own selected redirect target."""
+    with _SavedState():
+        original_probe = api_discovery.probe_instance
+        api_discovery.probe_instance = lambda host, port: True
+        try:
+            api_discovery.MCP_SERVER._transport_session_id.data = "http:session-a"
+            result_a = api_discovery.select_instance(port=11111, host="127.0.0.1")
+            assert result_a["success"] is True
+
+            api_discovery.MCP_SERVER._transport_session_id.data = "http:session-b"
+            result_b = api_discovery.select_instance(port=22222, host="127.0.0.1")
+            assert result_b["success"] is True
+
+            api_discovery.MCP_SERVER._transport_session_id.data = "http:session-a"
+            assert api_discovery.get_redirect_target() == ("127.0.0.1", 11111)
+
+            api_discovery.MCP_SERVER._transport_session_id.data = "http:session-b"
+            assert api_discovery.get_redirect_target() == ("127.0.0.1", 22222)
+        finally:
+            api_discovery.probe_instance = original_probe
 
 
 # ---------------------------------------------------------------------------

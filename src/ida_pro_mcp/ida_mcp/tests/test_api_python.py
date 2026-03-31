@@ -109,6 +109,16 @@ def test_py_exec_file_sets_dunder_file():
 
 
 @test()
+def test_py_exec_file_sets_dunder_name_main():
+    """py_exec_file should execute scripts as __main__ so __name__ guards run."""
+    script = 'if __name__ == "__main__":\n    result = "ran"\nelse:\n    result = __name__\n'
+    with _tmp_script(script) as path:
+        out = py_exec_file(path)
+        assert out["result"] == "ran"
+        assert out["stderr"] == ""
+
+
+@test()
 def test_py_exec_file_captures_exception_in_stderr():
     """py_exec_file captures script exceptions in stderr."""
     with _tmp_script('raise ValueError("script error")\n') as path:
