@@ -1028,9 +1028,11 @@ def decompile_function_safe(ea: int) -> Optional[str]:
         lines = []
         for sl in sv:
             sl: ida_kernwin.simpleline_t
+            _head = ida_hexrays.ctree_item_t()
             item = ida_hexrays.ctree_item_t()
+            _tail = ida_hexrays.ctree_item_t()
             line_ea = None
-            if cfunc.get_line_item(sl.line, 0, False, None, item, None):
+            if cfunc.get_line_item(sl.line, 0, False, _head, item, _tail):
                 dstr: str | None = item.dstr()
                 if dstr:
                     ds = dstr.split(": ")
