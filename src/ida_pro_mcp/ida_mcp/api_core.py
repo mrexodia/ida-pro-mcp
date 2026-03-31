@@ -2,7 +2,7 @@
 
 import re
 import time
-from typing import Annotated
+from typing import Annotated, Any, NotRequired, TypedDict
 
 import ida_auto
 import idaapi
@@ -34,6 +34,81 @@ from .utils import (
     paginate,
     pattern_filter,
 )
+
+
+class ServerHealthResult(TypedDict):
+    status: str
+    uptime_sec: float
+    idb_path: str | None
+    module: str
+    input_path: str
+    imagebase: str
+    auto_analysis_ready: bool | None
+    hexrays_ready: bool
+    strings_cache_ready: bool
+    strings_cache_size: int
+
+
+class ServerWarmupStep(TypedDict, total=False):
+    step: str
+    ok: bool
+    ms: float
+    error: str
+
+
+class ServerWarmupResult(TypedDict):
+    ok: bool
+    steps: list[ServerWarmupStep]
+    health: ServerHealthResult
+
+
+class LookupFuncResult(TypedDict):
+    query: str
+    fn: Function | None
+    error: str | None
+
+
+class IntConvertResult(TypedDict):
+    input: str
+    result: ConvertedNumber | None
+    error: str | None
+
+
+class FunctionQueryRow(Function, total=False):
+    has_type: bool
+    size_int: int
+
+
+class FunctionQueryPage(TypedDict, total=False):
+    data: list[FunctionQueryRow]
+    next_offset: int | None
+    error: str | None
+
+
+class EntityQueryPage(TypedDict, total=False):
+    kind: str
+    data: list[dict[str, Any]]
+    next_offset: int | None
+    total: int
+    error: str | None
+
+
+class ImportsQueryPage(TypedDict):
+    data: list[Import]
+    next_offset: int | None
+
+
+class IdbSaveResult(TypedDict):
+    ok: bool
+    path: str | None
+    error: NotRequired[str]
+
+
+class FindRegexResult(TypedDict, total=False):
+    matches: list[dict[str, Any]]
+    cursor: dict[str, Any]
+    error: str | None
+
 
 # Cached strings list: [(ea, text), ...]
 _strings_cache: list[tuple[int, str]] | None = None
@@ -271,7 +346,7 @@ def _build_health_payload() -> dict:
 
 @tool
 @idasync
-def server_health() -> dict:
+def server_health() -> ServerHealthResult:
     """Health/ready probe for MCP server and current IDB state."""
     return _build_health_payload()
 
@@ -282,31 +357,43 @@ def server_warmup(
     wait_auto_analysis: Annotated[bool, "Wait for auto analysis queue"] = True,
     build_caches: Annotated[bool, "Build core caches (currently strings)"] = True,
     init_hexrays: Annotated[bool, "Initialize Hex-Rays decompiler plugin"] = True,
-) -> dict:
+) -> ServerWarmupResult:
     """Warm up IDA subsystems to reduce first-call latency and transient failures."""
     steps = []
 
     if wait_auto_analysis:
         t0 = time.perf_counter()
         ida_auto.auto_wait()
-        steps.append({"step": "auto_wait", "ok": True, "ms": round((time.perf_counter() - t0) * 1000, 2)})
+        steps.append(
+            {
+                "step": "auto_wait",
+                "ok": True,
+                "ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+        )
 
     if build_caches:
         t0 = time.perf_counter()
         init_caches()
-        steps.append({"step": "init_caches", "ok": True, "ms": round((time.perf_counter() - t0) * 1000, 2)})
+        steps.append(
+            {
+                "step": "init_caches",
+                "ok": True,
+                "ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+        )
 
     if init_hexrays:
         t0 = time.perf_counter()
         ok = bool(ida_hexrays.init_hexrays_plugin())
-        steps.append(
-            {
-                "step": "init_hexrays",
-                "ok": ok,
-                "ms": round((time.perf_counter() - t0) * 1000, 2),
-                "error": None if ok else "Hex-Rays unavailable",
-            }
-        )
+        step = {
+            "step": "init_hexrays",
+            "ok": ok,
+            "ms": round((time.perf_counter() - t0) * 1000, 2),
+        }
+        if not ok:
+            step["error"] = "Hex-Rays unavailable"
+        steps.append(step)
 
     return {
         "ok": all(bool(step.get("ok")) for step in steps),
@@ -319,7 +406,7 @@ def server_warmup(
 @idasync
 def lookup_funcs(
     queries: Annotated[list[str] | str, "Address(es) or name(s)"],
-) -> list[dict]:
+) -> list[LookupFuncResult]:
     """Get functions by address or name (auto-detects)"""
     queries = normalize_list_input(queries)
 
@@ -364,7 +451,7 @@ def int_convert(
         list[NumberConversion] | NumberConversion,
         "Convert numbers to various formats (hex, decimal, binary, ascii)",
     ],
-) -> list[dict]:
+) -> list[IntConvertResult]:
     """Convert numbers to different formats"""
     inputs = normalize_dict_list(inputs, lambda s: {"text": s, "size": 64})
 
@@ -420,7 +507,6 @@ def int_convert(
                     ascii=ascii_str,
                     binary=bin(value),
                 ),
-                "error": None,
             }
         )
 
@@ -464,7 +550,7 @@ def func_query(
         list[FunctionQuery] | FunctionQuery | str,
         "Richer function query (size/type/name filters + pagination)",
     ],
-) -> list[dict]:
+) -> list[FunctionQueryPage]:
     """Query functions with richer filtering than list_funcs."""
     queries = normalize_dict_list(
         queries,
@@ -588,7 +674,7 @@ def entity_query(
         list[EntityQuery] | EntityQuery | str,
         "Generic entity query with filtering, projection, and pagination",
     ],
-) -> list[dict]:
+) -> list[EntityQueryPage]:
     """Query IDB entities with typed filters, projection, and pagination."""
     queries = normalize_dict_list(
         queries,
@@ -706,7 +792,7 @@ def imports_query(
         list[ImportQuery] | ImportQuery | str,
         "Import query with import/module filters and pagination",
     ],
-) -> list[dict]:
+) -> list[ImportsQueryPage]:
     """Query imports with richer filtering than imports(offset,count)."""
     queries = normalize_dict_list(
         queries, lambda s: {"filter": s, "offset": 0, "count": 100}
@@ -735,7 +821,7 @@ def imports_query(
 @idasync
 def idb_save(
     path: Annotated[str, "Optional destination path (default: current IDB path)"] = "",
-) -> dict:
+) -> IdbSaveResult:
     """Save active IDB to disk, optionally to a provided path."""
     try:
         save_path = path.strip() if path else ""
@@ -745,11 +831,10 @@ def idb_save(
             return {"ok": False, "path": None, "error": "Could not resolve IDB path"}
 
         ok = bool(ida_loader.save_database(save_path, 0))
-        return {
-            "ok": ok,
-            "path": save_path,
-            "error": None if ok else "save_database returned false",
-        }
+        result: dict = {"ok": ok, "path": save_path}
+        if not ok:
+            result["error"] = "save_database returned false"
+        return result
     except Exception as e:
         return {"ok": False, "path": path or None, "error": str(e)}
 
@@ -760,7 +845,7 @@ def find_regex(
     pattern: Annotated[str, "Regex pattern to search for in strings"],
     limit: Annotated[int, "Max matches (default: 30, max: 500)"] = 30,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
-) -> dict:
+) -> FindRegexResult:
     """Search strings by case-insensitive regex with offset/limit pagination."""
     if limit <= 0:
         limit = 30

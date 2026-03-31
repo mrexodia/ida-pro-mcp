@@ -54,7 +54,7 @@ def test_set_comment_roundtrip():
     try:
         result = set_comments({"addr": fn_addr, "comment": "__TEST_COMMENT__"})
         assert_is_list(result, min_length=1)
-        assert result[0].get("ok") is True
+        assert "error" not in result[0]
         assert idaapi.get_cmt(int(fn_addr, 16), False) == "__TEST_COMMENT__"
     finally:
         set_comments({"addr": fn_addr, "comment": original})
@@ -73,7 +73,7 @@ def test_set_comment_interior_address_roundtrip():
     try:
         result = set_comments({"addr": hex(addr), "comment": "__INNER_COMMENT__"})
         assert_is_list(result, min_length=1)
-        assert result[0].get("ok") is True
+        assert "error" not in result[0]
         assert idaapi.get_cmt(addr, False) == "__INNER_COMMENT__"
     finally:
         set_comments({"addr": hex(addr), "comment": original})
@@ -97,10 +97,10 @@ def test_append_comment_function_dedupes():
         first = append_comments({"addr": fn_addr, "comment": "__APPEND_COMMENT__", "scope": "func"})
         second = append_comments({"addr": fn_addr, "comment": "__APPEND_COMMENT__", "scope": "func"})
         assert_is_list(first, min_length=1)
-        assert first[0].get("ok") is True
+        assert "error" not in first[0]
         assert first[0].get("appended") is True
         assert_is_list(second, min_length=1)
-        assert second[0].get("ok") is True
+        assert "error" not in second[0]
         assert second[0].get("skipped") is True
         updated = idc.get_func_cmt(addr, False) or ""
         assert updated.count("__APPEND_COMMENT__") == 1
@@ -123,7 +123,7 @@ def test_append_comment_function_dedupe_does_not_skip_substrings():
         idc.set_func_cmt(addr, "foobar", False)
         result = append_comments({"addr": fn_addr, "comment": "foo", "scope": "func"})
         assert_is_list(result, min_length=1)
-        assert result[0].get("ok") is True
+        assert "error" not in result[0]
         assert result[0].get("appended") is True
         updated = idc.get_func_cmt(addr, False) or ""
         assert updated == "foobar\nfoo"
@@ -141,7 +141,7 @@ def test_append_comment_interior_address_roundtrip():
     try:
         result = append_comments({"addr": hex(addr), "comment": "__LINE_APPEND__", "scope": "line"})
         assert_is_list(result, min_length=1)
-        assert result[0].get("ok") is True
+        assert "error" not in result[0]
         assert "__LINE_APPEND__" in (idaapi.get_cmt(addr, False) or "")
     finally:
         idaapi.set_cmt(addr, original, False)
@@ -165,7 +165,7 @@ def test_patch_asm_roundtrip():
     try:
         result = patch_asm({"addr": CRACKME_PATCH_ASM_ADDR, "asm": "sub eax, eax"})
         assert_is_list(result, min_length=1)
-        assert result[0].get("ok") is True
+        assert "error" not in result[0]
         changed = get_bytes({"addr": CRACKME_PATCH_ASM_ADDR, "size": 2})[0]
         assert _plain_hex_bytes(changed["data"]) == "29c0"
         assert _plain_hex_bytes(changed["data"]) != original_plain
@@ -198,7 +198,7 @@ def test_rename_function_roundtrip():
 
     try:
         result = rename({"func": [{"addr": fn_addr, "name": new_name}]})
-        assert result["func"][0]["ok"] is True
+        assert "error" not in result["func"][0]
         renamed = lookup_funcs(fn_addr)[0]
         assert renamed["fn"]["name"] == new_name
     finally:
@@ -222,7 +222,7 @@ def test_rename_data_roundtrip():
 
     try:
         result = rename({"data": [{"old": original_name, "new": new_name}]})
-        assert result["data"][0]["ok"] is True
+        assert "error" not in result["data"][0]
         assert idaapi.get_name_ea(idaapi.BADADDR, new_name) == int(addr, 16)
     finally:
         rename({"data": [{"old": new_name, "new": original_name}]})
@@ -280,7 +280,7 @@ def test_rename_local_error_handling():
         }
     )
     assert "local" in result
-    assert result["local"][0]["ok"] is False
+    assert "error" in result["local"][0]
     assert_error(result["local"][0])
 
 
@@ -296,7 +296,7 @@ def test_rename_local_roundtrip():
             }
         )
         assert (
-            result["local"][0].get("ok") is True
+            "error" not in result["local"][0]
             or result["local"][0].get("error") == "Rename failed"
         )
     finally:
@@ -322,7 +322,7 @@ def test_rename_stack_roundtrip():
                 ]
             }
         )
-        assert result["stack"][0]["ok"] is True
+        assert "error" not in result["stack"][0]
         names = {var["name"] for var in stack_frame(TYPED_FIXTURE_USE_WRAPPER)[0]["vars"]}
         assert "rhs_stack" in names
     finally:
@@ -339,7 +339,7 @@ def test_rename_stack_roundtrip():
 def test_rename_stack_missing_member_error():
     """rename(stack=...) reports missing frame members explicitly."""
     result = rename({"stack": [{"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "nope", "new": "x"}]})
-    assert result["stack"][0]["ok"] is False
+    assert "error" in result["stack"][0]
     assert_error(result["stack"][0], contains="not found")
 
 
@@ -349,7 +349,7 @@ def test_rename_stack_special_member_error():
     result = rename(
         {"stack": [{"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "__return_address", "new": "x"}]}
     )
-    assert result["stack"][0]["ok"] is False
+    assert "error" in result["stack"][0]
     assert_error(result["stack"][0], contains="Special frame member")
 
 
@@ -357,7 +357,7 @@ def test_rename_stack_special_member_error():
 def test_rename_local_missing_function_error():
     """rename(local=...) reports missing functions cleanly."""
     result = rename({"local": [{"func_addr": "0xdeadbeef", "old": "a", "new": "b"}]})
-    assert result["local"][0]["ok"] is False
+    assert "error" in result["local"][0]
     assert_error(result["local"][0], contains="No function found")
 
 
@@ -375,14 +375,14 @@ def test_define_undefine_func_roundtrip():
 
     try:
         undef_result = undefine({"addr": hex(start_ea), "end": hex(end_ea)})[0]
-        assert undef_result.get("ok") is True
+        assert "error" not in undef_result
         assert idaapi.get_func(start_ea) is None
 
         define_result = define_func({"addr": hex(start_ea), "end": hex(end_ea)})[0]
-        if define_result.get("ok") is not True:
+        if "error" in define_result:
             define_code({"addr": hex(start_ea)})
             define_result = define_func({"addr": hex(start_ea), "end": hex(end_ea)})[0]
-        assert define_result.get("ok") is True
+        assert "error" not in define_result
         recreated = idaapi.get_func(start_ea)
         assert recreated is not None
         assert recreated.start_ea == start_ea
@@ -425,7 +425,7 @@ def test_define_code_on_existing_code():
     result = define_code({"addr": fn_addr})[0]
     assert result["addr"] == fn_addr
     assert (
-        result.get("ok") is True
+        "error" not in result
         or result.get("length") is not None
         or result.get("error") is not None
     )
@@ -435,7 +435,7 @@ def test_define_code_on_existing_code():
 def test_rename_global_missing_symbol():
     """rename(data=...) reports a clean error when the global symbol is absent."""
     result = rename({"data": [{"old": "nope", "new": "x"}]})
-    assert result["data"][0]["ok"] is False
+    assert "error" in result["data"][0]
     assert_error(result["data"][0], contains="not found")
 
 
@@ -444,7 +444,7 @@ def test_rename_function_same_name_is_stable():
     """rename(func=...) with the same current name succeeds or stays stable without crashing."""
     result = rename({"func": [{"addr": "0x1013ef0", "name": "main"}]})
     entry = result["func"][0]
-    assert entry.get("ok") is True or entry.get("error") is None
+    assert "error" not in entry
 
 
 @test(binary="typed_fixture.elf")
@@ -460,7 +460,7 @@ def test_undefine_single_byte_and_restore():
 
     try:
         result = undefine({"addr": hex(addr), "size": 1})[0]
-        assert result.get("ok") is True
+        assert "error" not in result
     finally:
         define_code({"addr": hex(addr)})
         if idaapi.get_func(addr) is None:
@@ -481,7 +481,7 @@ def test_undefine_batch():
     try:
         result = undefine([{"addr": hex(start_ea), "end": hex(end_ea)}])
         assert_is_list(result, min_length=1)
-        assert result[0].get("ok") is True
+        assert "error" not in result[0]
     finally:
         if idaapi.get_func(start_ea) is None:
             define_code({"addr": hex(start_ea)})

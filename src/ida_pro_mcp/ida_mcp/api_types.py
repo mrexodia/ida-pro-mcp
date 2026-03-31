@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Any, TypedDict
 
 import idc
 import ida_typeinf
@@ -29,6 +29,123 @@ from .utils import (
 from . import compat
 
 
+class DeclareTypeResult(TypedDict, total=False):
+    decl: str
+    error: str
+
+
+class EnumMemberUpsertResult(TypedDict, total=False):
+    name: str
+    value: int
+    created: bool
+    skipped: bool
+    error: str
+
+
+class EnumUpsertSummaryResult(TypedDict):
+    created: int
+    skipped: int
+    conflicts: int
+
+
+class EnumUpsertResult(TypedDict, total=False):
+    name: str
+    enum_id: str
+    created: bool
+    bitfield: bool
+    members: list[EnumMemberUpsertResult]
+    summary: EnumUpsertSummaryResult
+    error: str
+
+
+class StructMemberValueResult(TypedDict):
+    offset: str
+    type: str
+    name: str
+    size: int
+    value: str
+
+
+class ReadStructResult(TypedDict, total=False):
+    addr: str | None
+    struct: str | None
+    members: list[StructMemberValueResult] | None
+    error: str
+
+
+class SearchStructResult(TypedDict):
+    name: str
+    size: int
+    cardinality: int
+    is_union: bool
+    ordinal: int
+
+
+class TypeCatalogMemberResult(TypedDict):
+    name: str
+    offset: str
+    size: int
+    type: str
+
+
+class TypeCatalogRow(TypedDict, total=False):
+    ordinal: int
+    name: str
+    size: int
+    kind: str
+    declaration: str
+    member_count: int
+    members: list[TypeCatalogMemberResult]
+    members_truncated: bool
+    related_count: int
+    related_types: list[str]
+    related_truncated: bool
+
+
+class TypeQueryResult(TypedDict):
+    kind: str
+    data: list[TypeCatalogRow]
+    next_offset: int | None
+    total: int
+
+
+class TypeInspectResult(TypedDict, total=False):
+    name: str
+    exists: bool
+    declaration: str
+    size: int
+    is_func: bool
+    is_ptr: bool
+    is_enum: bool
+    is_udt: bool
+    members: list[TypeCatalogMemberResult] | None
+    member_count: int
+    error: str
+
+
+class SetTypeResult(TypedDict, total=False):
+    edit: dict[str, Any]
+    kind: str
+    ok: bool
+    error: str
+
+
+class TypeApplyBatchResult(TypedDict):
+    ok: bool
+    applied: int
+    failed: int
+    stopped: bool
+    results: list[SetTypeResult]
+
+
+class InferTypeResult(TypedDict, total=False):
+    addr: str
+    inferred_type: str | None
+    method: str | None
+    confidence: str
+    error: str
+
+
 # ============================================================================
 # Type Declaration
 # ============================================================================
@@ -38,7 +155,7 @@ from . import compat
 @idasync
 def declare_type(
     decls: Annotated[list[str] | str, "C type declarations"],
-) -> list[dict]:
+) -> list[DeclareTypeResult]:
     """Declare C type definitions in local type library."""
     decls = normalize_list_input(decls)
     results = []
@@ -54,7 +171,7 @@ def declare_type(
                     {"decl": decl, "error": f"Failed to parse:\n{pretty_messages}"}
                 )
             else:
-                results.append({"decl": decl, "ok": True})
+                results.append({"decl": decl})
         except Exception as e:
             results.append({"decl": decl, "error": str(e)})
 
@@ -68,7 +185,7 @@ def enum_upsert(
         list[EnumUpsert] | EnumUpsert,
         "Create enums if missing and upsert enum members without destructive replacement",
     ],
-) -> list[dict]:
+) -> list[EnumUpsertResult]:
     """Create or extend local enums in an idempotent way."""
     queries = normalize_dict_list(queries)
     results = []
@@ -129,7 +246,7 @@ def enum_upsert(
                     existing_value = idc.get_enum_member_value(existing_member_id)
                     if existing_enum == enum_id and existing_value == value:
                         member_results.append(
-                            {"name": member_name, "value": value, "ok": True, "skipped": True}
+                            {"name": member_name, "value": value, "skipped": True}
                         )
                         skipped_count += 1
                         continue
@@ -151,7 +268,7 @@ def enum_upsert(
                     existing_name = idc.get_enum_member_name(existing_const) or ""
                     if existing_name == member_name:
                         member_results.append(
-                            {"name": member_name, "value": value, "ok": True, "skipped": True}
+                            {"name": member_name, "value": value, "skipped": True}
                         )
                         skipped_count += 1
                         continue
@@ -172,24 +289,24 @@ def enum_upsert(
                     )
                     conflict_count += 1
                     continue
-                member_results.append({"name": member_name, "value": value, "ok": True, "created": True})
+                member_results.append({"name": member_name, "value": value, "created": True})
                 created_count += 1
 
-            results.append(
-                {
-                    "name": enum_name,
-                    "enum_id": hex(enum_id),
-                    "ok": conflict_count == 0,
-                    "created": created,
-                    "bitfield": bitfield,
-                    "members": member_results,
-                    "summary": {
-                        "created": created_count,
-                        "skipped": skipped_count,
-                        "conflicts": conflict_count,
-                    },
-                }
-            )
+            result_dict: dict = {
+                "name": enum_name,
+                "enum_id": hex(enum_id),
+                "created": created,
+                "bitfield": bitfield,
+                "members": member_results,
+                "summary": {
+                    "created": created_count,
+                    "skipped": skipped_count,
+                    "conflicts": conflict_count,
+                },
+            }
+            if conflict_count > 0:
+                result_dict["error"] = f"{conflict_count} member conflict(s)"
+            results.append(result_dict)
         except Exception as exc:
             results.append({"name": enum_name, "error": str(exc)})
 
@@ -214,7 +331,9 @@ def _parse_enum_value(value: int | str | None) -> int:
 
 @tool
 @idasync
-def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
+def read_struct(
+    queries: list[StructRead] | StructRead,
+) -> list[ReadStructResult]:
     """Read struct fields from memory at address; auto-detect type when possible."""
 
     queries = normalize_dict_list(queries)
@@ -369,7 +488,7 @@ def search_structs(
     filter: Annotated[
         str, "Case-insensitive substring to search for in structure names"
     ],
-) -> list[dict]:
+) -> list[SearchStructResult]:
     """Search local structs/unions by name pattern."""
     results = []
     limit = compat.get_ordinal_limit()
@@ -459,7 +578,7 @@ def type_query(
         list[TypeQuery] | TypeQuery | str,
         "Type catalog query with filtering, pagination, and optional relationships",
     ],
-) -> list[dict]:
+) -> list[TypeQueryResult]:
     """Query local types with structured filters/projection-friendly output."""
     queries = normalize_dict_list(
         queries,
@@ -607,7 +726,6 @@ def type_query(
                 "data": page["data"],
                 "next_offset": page["next_offset"],
                 "total": len(output_rows),
-                "error": None,
             }
         )
 
@@ -621,7 +739,7 @@ def type_inspect(
         list[TypeInspectQuery] | TypeInspectQuery | str,
         "Inspect named types and optionally include member layout",
     ],
-) -> list[dict]:
+) -> list[TypeInspectResult]:
     """Inspect named types (size/kind/declaration/members)."""
     queries = normalize_dict_list(
         queries,
@@ -667,7 +785,6 @@ def type_inspect(
                 "is_udt": tif.is_udt(),
                 "members": None,
                 "member_count": 0,
-                "error": None,
             }
 
             if include_members and tif.is_udt():
@@ -813,7 +930,7 @@ def _infer_type_edit_kind(edit: dict) -> str:
     return "global"
 
 
-def _apply_type_edit(edit: dict) -> dict:
+def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
     try:
         kind = _infer_type_edit_kind(edit)
         type_text = _resolve_type_text(edit)
@@ -829,12 +946,10 @@ def _apply_type_edit(edit: dict) -> dict:
             signature = str(edit.get("signature") or type_text).strip()
             tif = _parse_function_tinfo(signature)
             ok = ida_typeinf.apply_tinfo(func.start_ea, tif, ida_typeinf.PT_SIL)
-            return {
-                "edit": edit,
-                "kind": kind,
-                "ok": ok,
-                "error": None if ok else "Failed to apply function type",
-            }
+            result = {"edit": edit, "kind": kind, "ok": ok}
+            if not ok:
+                result["error"] = "Failed to apply function type"
+            return result
 
         if kind == "global":
             ea = idaapi.BADADDR
@@ -853,12 +968,10 @@ def _apply_type_edit(edit: dict) -> dict:
 
             tif = _parse_type_tinfo(type_text)
             ok = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL)
-            return {
-                "edit": edit,
-                "kind": kind,
-                "ok": ok,
-                "error": None if ok else "Failed to apply global type",
-            }
+            result = {"edit": edit, "kind": kind, "ok": ok}
+            if not ok:
+                result["error"] = "Failed to apply global type"
+            return result
 
         if kind == "local":
             addr_text = str(edit.get("addr", "")).strip()
@@ -875,12 +988,10 @@ def _apply_type_edit(edit: dict) -> dict:
             new_tif = _parse_type_tinfo(type_text)
             modifier = my_modifier_t(var_name, new_tif)
             ok = ida_hexrays.modify_user_lvars(func.start_ea, modifier)
-            return {
-                "edit": edit,
-                "kind": kind,
-                "ok": ok,
-                "error": None if ok else "Failed to apply local variable type",
-            }
+            result = {"edit": edit, "kind": kind, "ok": ok}
+            if not ok:
+                result["error"] = "Failed to apply local variable type"
+            return result
 
         if kind == "stack":
             addr_text = str(edit.get("addr", "")).strip()
@@ -913,12 +1024,10 @@ def _apply_type_edit(edit: dict) -> dict:
 
             tif = _parse_type_tinfo(type_text)
             ok = ida_frame.set_frame_member_type(func, offset, tif)
-            return {
-                "edit": edit,
-                "kind": kind,
-                "ok": ok,
-                "error": None if ok else "Failed to set stack member type",
-            }
+            result = {"edit": edit, "kind": kind, "ok": ok}
+            if not ok:
+                result["error"] = "Failed to set stack member type"
+            return result
 
         return {"edit": edit, "kind": kind, "error": f"Unknown kind: {kind}"}
     except Exception as e:
@@ -927,7 +1036,7 @@ def _apply_type_edit(edit: dict) -> dict:
 
 @tool
 @idasync
-def set_type(edits: list[TypeEdit] | TypeEdit) -> list[dict]:
+def set_type(edits: list[TypeEdit] | TypeEdit) -> list[SetTypeResult]:
     """Apply types (function/global/local/stack)"""
     normalized_edits = normalize_dict_list(edits, _parse_addr_type_shorthand)
     return [_apply_type_edit(edit) for edit in normalized_edits]
@@ -940,7 +1049,7 @@ def type_apply_batch(
         TypeApplyBatch | list[TypeEdit] | TypeEdit,
         "Batch type edits with optional stop_on_error behavior",
     ],
-) -> dict:
+) -> TypeApplyBatchResult:
     """Apply multiple type edits and return aggregate status."""
     if isinstance(batch, dict) and "edits" in batch:
         normalized_edits = normalize_dict_list(
@@ -973,7 +1082,7 @@ def type_apply_batch(
 @idasync
 def infer_types(
     addrs: Annotated[list[str] | str, "Addresses to infer types for"],
-) -> list[dict]:
+) -> list[InferTypeResult]:
     """Infer and apply likely types at target addresses."""
     addrs = normalize_list_input(addrs)
     results = []
