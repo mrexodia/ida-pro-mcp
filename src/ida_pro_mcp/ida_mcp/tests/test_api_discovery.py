@@ -21,6 +21,7 @@ class _SavedState:
     def __enter__(self):
         self._host = api_discovery._redirect_host
         self._port = api_discovery._redirect_port
+        self._targets = api_discovery._redirect_targets.copy()
         self._lhost = api_discovery._LOCAL_HOST
         self._lport = api_discovery._LOCAL_PORT
         self._proxied = api_discovery.is_request_proxied()
@@ -29,6 +30,8 @@ class _SavedState:
     def __exit__(self, *exc):
         api_discovery._redirect_host = self._host
         api_discovery._redirect_port = self._port
+        api_discovery._redirect_targets.clear()
+        api_discovery._redirect_targets.update(self._targets)
         api_discovery._LOCAL_HOST = self._lhost
         api_discovery._LOCAL_PORT = self._lport
         api_discovery.set_request_proxied(self._proxied)
@@ -64,6 +67,45 @@ def _is_proxy_error(result):
     if result is None:
         return False
     return result.get("error", {}).get("code") == -32000
+
+
+class _FakeHttpResponse:
+    status = 200
+    reason = "OK"
+
+    def __init__(self, body=b'{"jsonrpc":"2.0","result":{}}'):
+        self._body = body
+
+    def read(self):
+        return self._body
+
+
+class _RecordingConnection:
+    calls = []
+
+    def __init__(self, host, port, timeout=None):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+
+    def request(self, method, path, body=None, headers=None):
+        self.__class__.calls.append(
+            {
+                "host": self.host,
+                "port": self.port,
+                "timeout": self.timeout,
+                "method": method,
+                "path": path,
+                "body": body,
+                "headers": headers or {},
+            }
+        )
+
+    def getresponse(self):
+        return _FakeHttpResponse()
+
+    def close(self):
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +311,27 @@ def test_dispatch_proxy_error_preserves_request_id():
         result = api_discovery._redirecting_dispatch(req)
         assert result["id"] == 42
         assert _is_proxy_error(result)
+
+
+@test()
+def test_api_discovery_proxy_to_instance_forwards_session_and_extensions():
+    """Forwarded proxy requests should preserve MCP session and enabled extensions."""
+    with _SavedState():
+        original_conn = api_discovery.http.client.HTTPConnection
+        _RecordingConnection.calls = []
+        api_discovery.http.client.HTTPConnection = _RecordingConnection
+        api_discovery.MCP_SERVER._transport_session_id.data = "http:session-123"
+        api_discovery.MCP_SERVER._enabled_extensions.data = {"dbg"}
+        try:
+            api_discovery.proxy_to_instance("127.0.0.1", 13337, b"{}")
+            assert len(_RecordingConnection.calls) == 1
+            call = _RecordingConnection.calls[0]
+            assert call["path"] == "/mcp?ext=dbg"
+            assert call["headers"].get(api_discovery.PROXY_HEADER) == "1"
+            assert call["headers"].get("Mcp-Session-Id") == "session-123"
+        finally:
+            api_discovery.http.client.HTTPConnection = original_conn
+            api_discovery.MCP_SERVER._enabled_extensions.data = set()
 
 
 @test()

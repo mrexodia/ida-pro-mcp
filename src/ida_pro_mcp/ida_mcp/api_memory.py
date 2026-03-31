@@ -6,7 +6,7 @@ granularities (bytes, integers, strings) and patching binary data.
 
 import re
 
-from typing import Annotated
+from typing import Annotated, NotRequired, TypedDict
 import ida_bytes
 import idaapi
 
@@ -22,6 +22,44 @@ from .utils import (
 )
 
 
+class BytesReadResult(TypedDict):
+    addr: str | None
+    data: str | None
+    error: NotRequired[str]
+
+
+class IntReadResult(TypedDict):
+    addr: str
+    ty: str
+    value: int | None
+    error: NotRequired[str]
+
+
+class StringReadResult(TypedDict):
+    addr: str
+    value: str | None
+    error: NotRequired[str]
+
+
+class GlobalValueResult(TypedDict):
+    query: str
+    value: str | None
+    error: NotRequired[str]
+
+
+class PatchResult(TypedDict):
+    addr: str | None
+    size: int
+    error: NotRequired[str]
+
+
+class IntWriteResult(TypedDict):
+    addr: str
+    ty: str
+    value: str | None
+    error: NotRequired[str]
+
+
 # ============================================================================
 # Memory Reading Operations
 # ============================================================================
@@ -29,7 +67,7 @@ from .utils import (
 
 @tool
 @idasync
-def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
+def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[BytesReadResult]:
     """Read bytes from memory addresses"""
     if isinstance(regions, dict):
         regions = [regions]
@@ -92,7 +130,7 @@ def get_int(
         list[IntRead] | IntRead,
         "Integer read requests (ty, addr). ty: i8/u64/i16le/i16be/etc",
     ],
-) -> list[dict]:
+) -> list[IntReadResult]:
     """Read integer values from memory addresses"""
     if isinstance(queries, dict):
         queries = [queries]
@@ -124,7 +162,7 @@ def get_int(
 @idasync
 def get_string(
     addrs: Annotated[list[str] | str, "Addresses to read strings from"],
-) -> list[dict]:
+) -> list[StringReadResult]:
     """Read strings from memory addresses"""
     addrs = normalize_list_input(addrs)
     results = []
@@ -187,7 +225,7 @@ def get_global_value(
     queries: Annotated[
         list[str] | str, "Global variable addresses or names to read values from"
     ],
-) -> list[dict]:
+) -> list[GlobalValueResult]:
     """Read global variable values by address or symbol name."""
     from .utils import looks_like_address
 
@@ -228,7 +266,7 @@ def get_global_value(
 
 @tool
 @idasync
-def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[dict]:
+def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[PatchResult]:
     """Patch bytes at memory addresses with hex data"""
     if isinstance(patches, dict):
         patches = [patches]
@@ -261,7 +299,7 @@ def put_int(
         list[IntWrite] | IntWrite,
         "Integer write requests (ty, addr, value). value is a string; supports 0x.. and negatives",
     ],
-) -> list[dict]:
+) -> list[IntWriteResult]:
     """Write integer values to memory addresses"""
     if isinstance(items, dict):
         items = [items]

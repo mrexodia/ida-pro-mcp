@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, TypedDict
 import ast
 import io
 import sys
@@ -96,6 +96,12 @@ def _make_exec_globals() -> dict:
     }
 
 
+class PythonExecResult(TypedDict):
+    result: str
+    stdout: str
+    stderr: str
+
+
 # ============================================================================
 # Python Evaluation
 # ============================================================================
@@ -106,7 +112,7 @@ def _make_exec_globals() -> dict:
 @unsafe
 def py_eval(
     code: Annotated[str, "Python code"],
-) -> dict:
+) -> PythonExecResult:
     """Execute Python in IDA context and return result/stdout/stderr."""
     # Capture stdout/stderr
     stdout_capture = io.StringIO()
@@ -198,7 +204,7 @@ def py_eval(
 @unsafe
 def py_exec_file(
     file_path: Annotated[str, "Absolute path to a Python script to execute"],
-) -> dict:
+) -> PythonExecResult:
     """Execute a Python script file in IDA context and return stdout/stderr.
 
     Unlike py_eval, this runs the entire file with exec() using a single shared
@@ -219,6 +225,8 @@ def py_exec_file(
 
         exec_globals = _make_exec_globals()
         exec_globals["__file__"] = file_path
+        exec_globals["__name__"] = "__main__"
+        exec_globals["__package__"] = None
 
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()

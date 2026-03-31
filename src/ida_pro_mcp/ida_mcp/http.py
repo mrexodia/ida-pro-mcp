@@ -47,6 +47,7 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
     enabled_tools = config_json_get(
         config_key, {name: True for name in original_tools.keys()}
     )
+    original_enabled_tools = enabled_tools.copy()
     new_tools = [name for name in original_tools if name not in enabled_tools]
 
     removed_tools = [name for name in enabled_tools if name not in original_tools]
@@ -56,6 +57,17 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
 
     if new_tools:
         enabled_tools.update({name: True for name in new_tools})
+
+    try:
+        from .api_discovery import _LOCAL_TOOL_NAMES as PROTECTED_TOOLS
+    except Exception:
+        PROTECTED_TOOLS = set()
+
+    for name in PROTECTED_TOOLS:
+        if name in original_tools:
+            enabled_tools[name] = True
+
+    if enabled_tools != original_enabled_tools:
         config_json_set(config_key, enabled_tools)
 
     registry.methods = {

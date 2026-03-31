@@ -12,10 +12,40 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Annotated
+from typing import Annotated, NotRequired, TypedDict
 
 from .rpc import tool, MCP_SERVER
 from .discovery import discover_instances, probe_instance
+
+
+class InstanceSelectionResult(TypedDict, total=False):
+    success: bool
+    host: str
+    port: int
+    message: str
+    error: str
+
+
+class InstanceListItem(TypedDict, total=False):
+    host: str
+    port: int
+    pid: int
+    binary: str
+    idb_path: str
+    started_at: str
+    reachable: bool
+    active: bool
+
+
+class OpenFileResult(TypedDict, total=False):
+    success: bool
+    host: str
+    port: int
+    binary: str
+    pid: int
+    switched: bool
+    message: str
+    error: str
 
 
 # Track which instance this server is (filled in by the plugin loader)
@@ -28,6 +58,8 @@ _request_context = threading.local()
 # Redirect target: when set, tool calls are proxied to this instance
 _redirect_host: str | None = None
 _redirect_port: int | None = None
+_redirect_targets: dict[str, tuple[str, int]] = {}
+_redirect_lock = threading.Lock()
 
 # Tools that are always handled locally, never proxied
 _LOCAL_TOOL_NAMES = {"list_instances", "select_instance", "open_file"}
@@ -40,11 +72,44 @@ def set_local_instance(host: str, port: int):
     _LOCAL_PORT = port
 
 
+def _get_redirect_session_key() -> str | None:
+    """Return the current MCP transport session id, if any."""
+    return MCP_SERVER.get_current_transport_session_id()
+
+
 def get_redirect_target() -> tuple[str, int] | None:
     """Returns (host, port) if requests should be proxied, else None."""
+    session_key = _get_redirect_session_key()
+    if session_key is not None:
+        with _redirect_lock:
+            return _redirect_targets.get(session_key)
     if _redirect_host is not None and _redirect_port is not None:
         return (_redirect_host, _redirect_port)
     return None
+
+
+def _set_redirect_target(host: str, port: int):
+    """Set the redirect target for the current MCP transport session."""
+    global _redirect_host, _redirect_port
+    session_key = _get_redirect_session_key()
+    if session_key is not None:
+        with _redirect_lock:
+            _redirect_targets[session_key] = (host, port)
+        return
+    _redirect_host = host
+    _redirect_port = port
+
+
+def _clear_redirect_target():
+    """Clear the redirect target for the current MCP transport session."""
+    global _redirect_host, _redirect_port
+    session_key = _get_redirect_session_key()
+    if session_key is not None:
+        with _redirect_lock:
+            _redirect_targets.pop(session_key, None)
+        return
+    _redirect_host = None
+    _redirect_port = None
 
 
 def set_request_proxied(proxied: bool):
@@ -65,19 +130,42 @@ def is_local_tool(name: str) -> bool:
 PROXY_HEADER = "X-MCP-Proxied"
 
 
+def _get_proxy_request_path() -> str:
+    """Build the proxied MCP path, preserving enabled extensions."""
+    enabled = sorted(getattr(MCP_SERVER._enabled_extensions, "data", set()))
+    if enabled:
+        return f"/mcp?ext={','.join(enabled)}"
+    return "/mcp"
+
+
+def _get_proxy_request_headers() -> dict[str, str]:
+    """Build proxy request headers, preserving MCP session identity."""
+    headers = {
+        "Content-Type": "application/json",
+        PROXY_HEADER: "1",
+    }
+    transport_session_id = MCP_SERVER.get_current_transport_session_id()
+    if transport_session_id and transport_session_id.startswith("http:"):
+        session_id = transport_session_id.split(":", 1)[1]
+        if session_id and session_id != "anonymous":
+            headers["Mcp-Session-Id"] = session_id
+    return headers
+
+
 def proxy_to_instance(host: str, port: int, payload: bytes) -> dict:
     """Forward a JSON-RPC request to another IDA instance.
 
     Sets X-MCP-Proxied header so the target knows this is a forwarded request
     and won't follow its own redirect (preventing A→B→A loops).
     """
-    headers = {
-        "Content-Type": "application/json",
-        PROXY_HEADER: "1",
-    }
     conn = http.client.HTTPConnection(host, port, timeout=30)
     try:
-        conn.request("POST", "/mcp", payload, headers)
+        conn.request(
+            "POST",
+            _get_proxy_request_path(),
+            payload,
+            _get_proxy_request_headers(),
+        )
         response = conn.getresponse()
         raw_data = response.read().decode()
         if response.status >= 400:
@@ -121,7 +209,11 @@ def _redirecting_dispatch(request):
             return _original_dispatch(request)
         # Proxy to redirect target (with loop detection)
         try:
-            payload = json.dumps(request_obj).encode("utf-8") if isinstance(request, dict) else request
+            payload = (
+                json.dumps(request_obj).encode("utf-8")
+                if isinstance(request, dict)
+                else request
+            )
             if isinstance(payload, str):
                 payload = payload.encode("utf-8")
             return proxy_to_instance(redirect[0], redirect[1], payload)
@@ -142,14 +234,20 @@ def _redirecting_dispatch(request):
     if method == "tools/list":
         local_result = _original_dispatch(request)
         try:
-            payload = json.dumps(request_obj).encode("utf-8") if isinstance(request, dict) else request
+            payload = (
+                json.dumps(request_obj).encode("utf-8")
+                if isinstance(request, dict)
+                else request
+            )
             if isinstance(payload, str):
                 payload = payload.encode("utf-8")
             remote_result = proxy_to_instance(redirect[0], redirect[1], payload)
             if remote_result and "result" in remote_result:
                 remote_tools = remote_result["result"].get("tools", [])
                 # Filter out remote list_instances/select_instance to avoid duplicates
-                remote_tools = [t for t in remote_tools if t.get("name") not in _LOCAL_TOOL_NAMES]
+                remote_tools = [
+                    t for t in remote_tools if t.get("name") not in _LOCAL_TOOL_NAMES
+                ]
                 if local_result and "result" in local_result:
                     local_tools = local_result["result"].get("tools", [])
                     local_result["result"]["tools"] = remote_tools + local_tools
@@ -159,7 +257,11 @@ def _redirecting_dispatch(request):
 
     # Everything else (resources/list, etc.): proxy
     try:
-        payload = json.dumps(request_obj).encode("utf-8") if isinstance(request, dict) else request
+        payload = (
+            json.dumps(request_obj).encode("utf-8")
+            if isinstance(request, dict)
+            else request
+        )
         if isinstance(payload, str):
             payload = payload.encode("utf-8")
         return proxy_to_instance(redirect[0], redirect[1], payload)
@@ -176,7 +278,7 @@ MCP_SERVER.registry.dispatch = _redirecting_dispatch
 
 
 @tool
-def list_instances() -> list[dict]:
+def list_instances() -> list[InstanceListItem]:
     """List all discovered IDA Pro instances with their binary name, port, and reachability status.
 
     Use this to see which IDA databases are currently open and available for analysis.
@@ -203,19 +305,16 @@ def list_instances() -> list[dict]:
 def select_instance(
     port: Annotated[int, "Port number of the IDA instance to connect to"],
     host: Annotated[str, "Host address of the IDA instance"] = "127.0.0.1",
-) -> dict:
+) -> InstanceSelectionResult:
     """Switch to a different IDA Pro instance. All subsequent tool calls will be
     routed to the selected instance. Use list_instances to see available instances.
 
     To switch back to this instance, call select_instance with this instance's port,
     or call select_instance with port=0 to reset.
     """
-    global _redirect_host, _redirect_port
-
     # Reset redirect
     if port == 0:
-        _redirect_host = None
-        _redirect_port = None
+        _clear_redirect_target()
         return {
             "success": True,
             "message": f"Reset to local instance at {_LOCAL_HOST}:{_LOCAL_PORT}",
@@ -223,15 +322,13 @@ def select_instance(
 
     # Selecting the local instance clears redirect
     if host == _LOCAL_HOST and port == _LOCAL_PORT:
-        _redirect_host = None
-        _redirect_port = None
+        _clear_redirect_target()
         return {"success": True, "host": host, "port": port, "message": "Selected local instance"}
 
     if not probe_instance(host, port):
         return {"success": False, "error": f"Instance at {host}:{port} is not reachable"}
 
-    _redirect_host = host
-    _redirect_port = port
+    _set_redirect_target(host, port)
     return {"success": True, "host": host, "port": port}
 
 
@@ -252,12 +349,22 @@ def _find_existing_idb(file_path: str) -> str | None:
 
 @tool
 def open_file(
-    file_path: Annotated[str, "Absolute path to the binary file to open in a new IDA instance"],
-    switch: Annotated[bool, "Automatically switch to the new instance once it starts"] = True,
-    autonomous: Annotated[bool, "Run in autonomous mode (-A flag), suppressing all dialogs"] = False,
-    new_database: Annotated[bool, "Force creating a new database even if one exists"] = False,
-    timeout: Annotated[int, "Seconds to wait for the new instance to register (0 = don't wait)"] = 30,
-) -> dict:
+    file_path: Annotated[
+        str, "Absolute path to the binary file to open in a new IDA instance"
+    ],
+    switch: Annotated[
+        bool, "Automatically switch to the new instance once it starts"
+    ] = True,
+    autonomous: Annotated[
+        bool, "Run in autonomous mode (-A flag), suppressing all dialogs"
+    ] = False,
+    new_database: Annotated[
+        bool, "Force creating a new database even if one exists"
+    ] = False,
+    timeout: Annotated[
+        int, "Seconds to wait for the new instance to register (0 = don't wait)"
+    ] = 30,
+) -> OpenFileResult:
     """Open a file in a new IDA Pro instance.
 
     Launches a new IDA process for the given binary. If an existing IDB/i64 database
@@ -266,8 +373,6 @@ def open_file(
 
     If switch=True (default), automatically routes subsequent tool calls to the new instance.
     """
-    global _redirect_host, _redirect_port
-
     if not os.path.isfile(file_path):
         return {"success": False, "error": f"File not found: {file_path}"}
 
@@ -322,7 +427,10 @@ def open_file(
     if not new_instance:
         return {
             "success": True,
-            "message": f"IDA launched but did not register within {timeout}s. Use list_instances to check later.",
+            "message": (
+                f"IDA launched but did not register within {timeout}s. "
+                "Use list_instances to check later."
+            ),
         }
 
     result = {
@@ -334,8 +442,7 @@ def open_file(
     }
 
     if switch:
-        _redirect_host = new_instance["host"]
-        _redirect_port = new_instance["port"]
+        _set_redirect_target(new_instance["host"], new_instance["port"])
         result["switched"] = True
 
     return result

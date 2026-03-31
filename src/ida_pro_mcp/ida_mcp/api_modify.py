@@ -1,3 +1,5 @@
+from typing import Any, NotRequired, TypedDict
+
 import idaapi
 import idautils
 import idc
@@ -28,6 +30,66 @@ from .utils import (
 )
 
 
+class CommentResult(TypedDict):
+    addr: str
+    error: NotRequired[str]
+
+
+class AppendCommentResult(TypedDict):
+    addr: str
+    scope: NotRequired[str]
+    appended: NotRequired[bool]
+    skipped: NotRequired[bool]
+    error: NotRequired[str]
+
+
+class PatchAsmResult(TypedDict):
+    addr: str
+    error: NotRequired[str]
+
+
+class RenameItemResult(TypedDict, total=False):
+    addr: str
+    func_addr: str
+    old: str
+    new: str | None
+    name: str
+    dir: str
+    dir_error: str
+    dry_run: bool
+    error: str
+
+
+class RenameSummaryResult(TypedDict, total=False):
+    total: int
+    ok: int
+    failed: int
+    stopped: bool
+    dry_run: bool
+    allow_overwrite: bool
+    stop_on_error: bool
+    stopped_at: str
+
+
+class RenameResult(TypedDict, total=False):
+    func: list[RenameItemResult]
+    data: list[RenameItemResult]
+    global_alias: list[RenameItemResult]
+    local: list[RenameItemResult]
+    stack: list[RenameItemResult]
+    summary: RenameSummaryResult
+
+
+class DefineResult(TypedDict, total=False):
+    addr: str
+    ea: str
+    start: str
+    end: str
+    size: int
+    length: int
+    error: str
+
+
 # ============================================================================
 # Modification Operations
 # ============================================================================
@@ -35,7 +97,7 @@ from .utils import (
 
 @tool
 @idasync
-def set_comments(items: list[CommentOp] | CommentOp):
+def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
     """Set comments at addresses (both disassembly and decompiler views)"""
     if isinstance(items, dict):
         items = [items]
@@ -115,7 +177,9 @@ def set_comments(items: list[CommentOp] | CommentOp):
 
 @tool
 @idasync
-def append_comments(items: list[CommentAppendOp] | CommentAppendOp):
+def append_comments(
+    items: list[CommentAppendOp] | CommentAppendOp,
+) -> list[AppendCommentResult]:
     """Append comments at addresses, deduping exact text by default."""
     if isinstance(items, dict):
         items = [items]
@@ -134,7 +198,9 @@ def append_comments(items: list[CommentAppendOp] | CommentAppendOp):
                 continue
 
             fn = idaapi.get_func(ea)
-            use_func_comment = scope == "func" or (scope == "auto" and fn is not None and fn.start_ea == ea)
+            use_func_comment = scope == "func" or (
+                scope == "auto" and fn is not None and fn.start_ea == ea
+            )
 
             if use_func_comment:
                 if fn is None:
@@ -148,7 +214,10 @@ def append_comments(items: list[CommentAppendOp] | CommentAppendOp):
                     continue
                 if not idc.set_func_cmt(target_ea, new_comment, False):
                     results.append(
-                        {"addr": addr_str, "error": f"Failed to set function comment at {hex(target_ea)}"}
+                        {
+                            "addr": addr_str,
+                            "error": f"Failed to set function comment at {hex(target_ea)}",
+                        }
                     )
                     continue
                 results.append({"addr": addr_str, "scope": "func", "appended": True})
@@ -160,7 +229,12 @@ def append_comments(items: list[CommentAppendOp] | CommentAppendOp):
                 results.append({"addr": addr_str, "scope": "line", "skipped": True})
                 continue
             if not idaapi.set_cmt(ea, new_comment, False):
-                results.append({"addr": addr_str, "error": f"Failed to set disassembly comment at {hex(ea)}"})
+                results.append(
+                    {
+                        "addr": addr_str,
+                        "error": f"Failed to set disassembly comment at {hex(ea)}",
+                    }
+                )
                 continue
             results.append({"addr": addr_str, "scope": "line", "appended": True})
         except Exception as e:
@@ -185,7 +259,7 @@ def _append_comment_text(current: str, new_text: str, *, dedupe: bool) -> tuple[
 
 @tool
 @idasync
-def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
+def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[PatchAsmResult]:
     """Patch assembly instructions at addresses"""
     if isinstance(items, dict):
         items = [items]
@@ -227,7 +301,7 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
 
 @tool
 @idasync
-def rename(batch: RenameBatch | dict) -> dict:
+def rename(batch: RenameBatch | dict) -> RenameResult:
     """Batch-rename funcs/globals/locals/stack vars with dry-run options."""
 
     if not isinstance(batch, dict):
@@ -686,7 +760,12 @@ def rename(batch: RenameBatch | dict) -> dict:
             else:
                 failed += 1
 
-    summary: dict = {"total": total, "ok": ok, "failed": failed}
+    summary: dict = {
+        "total": total,
+        "ok": ok,
+        "failed": failed,
+        "stopped": stopped,
+    }
     if dry_run:
         summary["dry_run"] = True
     if allow_overwrite:
@@ -701,7 +780,7 @@ def rename(batch: RenameBatch | dict) -> dict:
 
 @tool
 @idasync
-def define_func(items: list[DefineOp] | DefineOp) -> list[dict]:
+def define_func(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
     """Define functions; IDA infers bounds unless end is provided."""
     if isinstance(items, dict):
         items = [items]
@@ -753,7 +832,7 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[dict]:
 
 @tool
 @idasync
-def define_code(items: list[DefineOp] | DefineOp) -> list[dict]:
+def define_code(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
     """Convert bytes to code instruction(s) at address(es)."""
     if isinstance(items, dict):
         items = [items]
@@ -785,7 +864,7 @@ def define_code(items: list[DefineOp] | DefineOp) -> list[dict]:
 
 @tool
 @idasync
-def undefine(items: list[UndefineOp] | UndefineOp) -> list[dict]:
+def undefine(items: list[UndefineOp] | UndefineOp) -> list[DefineResult]:
     """Undefine item(s) at address(es), converting back to raw bytes."""
     if isinstance(items, dict):
         items = [items]
