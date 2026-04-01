@@ -468,6 +468,7 @@ class StackFrameVariable(TypedDict):
 class DisassemblyFunction(TypedDict):
     name: str
     start_ea: str
+    segment: NotRequired[str]
     return_type: NotRequired[str]
     arguments: NotRequired[list[Argument]]
     stack_frame: NotRequired[list[StackFrameVariable]]
