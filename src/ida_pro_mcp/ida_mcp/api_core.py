@@ -105,6 +105,7 @@ class IdbSaveResult(TypedDict):
 
 
 class FindRegexResult(TypedDict, total=False):
+    n: int
     matches: list[dict[str, Any]]
     cursor: dict[str, Any]
     error: str | None

@@ -470,7 +470,7 @@ class DisassemblyFunction(TypedDict):
     start_ea: str
     return_type: NotRequired[str]
     arguments: NotRequired[list[Argument]]
-    stack_frame: list[StackFrameVariable]
+    stack_frame: NotRequired[list[StackFrameVariable]]
     lines: list[DisassemblyLine]
 
 
