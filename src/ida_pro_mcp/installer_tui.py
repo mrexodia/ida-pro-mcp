@@ -29,30 +29,30 @@ def _make_read_key():
         else:
             import termios
             import tty
+            import os
 
             def read_key():
                 fd = sys.stdin.fileno()
                 old = termios.tcgetattr(fd)
                 try:
                     tty.setraw(fd)
-                    ch = sys.stdin.read(1)
-                    if ch == "\x1b":
-                        ch2 = sys.stdin.read(1)
-                        if ch2 == "[":
-                            ch3 = sys.stdin.read(1)
-                            if ch3 == "A":
-                                return "up"
-                            if ch3 == "B":
-                                return "down"
+                    b = os.read(fd, 3)
+
+                    if b in (b'\x1b[A', b'\x1bOA'):
+                        return "up"
+                    if b in (b'\x1b[B', b'\x1bOB'):
+                        return "down"
+                    if b == b'\x1b':
                         return "esc"
-                    if ch == " ":
+                    if b == b' ':
                         return "space"
-                    if ch in ("\r", "\n"):
+                    if b in (b'\r', b'\n', b'\x0d', b'\x0a'):
                         return "enter"
-                    if ch == "a":
+                    if b == b'a':
                         return "a"
-                    if ch == "\x03":
+                    if b == b'\x03':
                         return "esc"
+
                     return None
                 finally:
                     termios.tcsetattr(fd, termios.TCSADRAIN, old)
