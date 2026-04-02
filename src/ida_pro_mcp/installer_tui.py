@@ -17,6 +17,10 @@ def _make_read_key():
                     if ch2 == "P":
                         return "down"
                     return None
+                if ch in ("k", "K"):
+                    return "up"
+                if ch in ("j", "J"):
+                    return "down"
                 if ch == " ":
                     return "space"
                 if ch == "\r":
@@ -38,9 +42,9 @@ def _make_read_key():
                     tty.setraw(fd)
                     b = os.read(fd, 3)
 
-                    if b in (b'\x1b[A', b'\x1bOA'):
+                    if b in (b'\x1b[A', b'\x1bOA', b'k', b'K'):
                         return "up"
-                    if b in (b'\x1b[B', b'\x1bOB'):
+                    if b in (b'\x1b[B', b'\x1bOB', b'j', b'J'):
                         return "down"
                     if b == b'\x1b':
                         return "esc"
@@ -105,7 +109,7 @@ def interactive_choose(items: list[str], title: str, default: int = 0) -> str | 
 
     def render():
         lines = [f"\033[1m{title}\033[0m"]
-        lines.append("  (up/down: move, enter: confirm, esc: cancel)")
+        lines.append("  (up/down/j/k: move, enter: confirm, esc: cancel)")
         lines.append("")
         for i, name in enumerate(items):
             pointer = "\033[36m>\033[0m" if i == cursor else " "
@@ -143,7 +147,7 @@ def interactive_select(items: list[tuple[str, bool]], title: str) -> list[str] |
 
     def render():
         lines = [f"\033[1m{title}\033[0m"]
-        lines.append("  (space: toggle, a: toggle all, enter: confirm, esc: cancel)")
+        lines.append("  (up/down/j/k: move, space: toggle, a: toggle all, enter: confirm, esc: cancel)")
         lines.append("")
         for i, (name, _) in enumerate(items):
             check = "\033[32m[x]\033[0m" if selected[i] else "[ ]"
