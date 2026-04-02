@@ -120,7 +120,7 @@ def test_disasm_valid_function():
                 {
                     "name": str,
                     "start_ea": is_hex_address,
-                    "lines": str,
+                    "lines": list,
                 }
             ),
             "instruction_count": int,
@@ -141,8 +141,9 @@ def test_disasm_main_contains_expected_calls():
     asm = result["asm"]
     assert asm["name"] == "main"
     assert asm["start_ea"] == CRACKME_MAIN
-    assert "check_pw" in asm["lines"]
-    assert "_puts" in asm["lines"]
+    lines_text = " ".join(item["instruction"] for item in asm["lines"])
+    assert "check_pw" in lines_text
+    assert "_puts" in lines_text
     assert result["instruction_count"] > 0
 
 
