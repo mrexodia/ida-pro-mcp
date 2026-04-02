@@ -722,7 +722,7 @@ def disasm(
             func_name = "<no function>"
             header_addr = start
 
-        lines = []
+        lines: list[dict] = []
         seen = 0
         total_count = 0
         more = False
@@ -737,7 +737,7 @@ def disasm(
             if len(lines) < max_instructions:
                 line = ida_lines.generate_disasm_line(ea, 0)
                 instruction = ida_lines.tag_remove(line) if line else ""
-                lines.append(f"{ea:x}  {instruction}")
+                lines.append({"addr": f"{ea:x}", "instruction": instruction})
                 seen += 1
                 return True
             more = True
@@ -768,10 +768,6 @@ def disasm(
         if include_total and not more:
             more = total_count > offset + max_instructions
 
-        lines_str = f"{func_name} ({segment_name} @ {hex(header_addr)}):"
-        if lines:
-            lines_str += "\n" + "\n".join(lines)
-
         rettype = None
         args: Optional[list[Argument]] = None
         stack_frame = None
@@ -791,7 +787,8 @@ def disasm(
         out: DisassemblyFunction = {
             "name": func_name,
             "start_ea": hex(header_addr),
-            "lines": lines_str,
+            "segment": segment_name,
+            "lines": lines,
         }
         if stack_frame:
             out["stack_frame"] = stack_frame
