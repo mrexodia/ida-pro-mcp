@@ -5,7 +5,7 @@ import os
 import sys
 import traceback
 from typing import Annotated, Any, TYPE_CHECKING, TypedDict
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 if TYPE_CHECKING:
     from ida_pro_mcp.ida_mcp.zeromcp import McpServer
@@ -366,6 +366,12 @@ def _resolve_ida_rpc(args) -> None:
             raise Exception(f"Invalid IDA RPC server: {args.ida_rpc}")
         IDA_HOST = ida_rpc.hostname
         IDA_PORT = ida_rpc.port
+
+        # Preserve ?ext= query param so proxy requests include the extensions
+        ext_value = parse_qs(ida_rpc.query).get("ext", [""])[0]
+        if ext_value:
+            mcp._enabled_extensions.data = set(ext_value.split(","))
+
         set_ida_rpc(IDA_HOST, IDA_PORT)
         return
 

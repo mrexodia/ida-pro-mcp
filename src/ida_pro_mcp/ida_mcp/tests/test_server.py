@@ -1,5 +1,6 @@
 """Tests for the top-level stdio proxy server (server.py) and unsafe tool gating."""
 
+import argparse
 import contextlib
 import os
 import sys
@@ -103,6 +104,57 @@ def test_server_proxy_to_instance_forwards_session_and_extensions():
             call = _RecordingConnection.calls[0]
             assert call["path"] == "/mcp?ext=dbg"
             assert call["headers"].get("Mcp-Session-Id") == "session-456"
+        finally:
+            server.http.client.HTTPConnection = original_conn
+
+
+@test()
+def test_resolve_ida_rpc_preserves_ext_query_param():
+    """--ida-rpc http://host:port/mcp?ext=dbg should seed enabled extensions."""
+    with _saved_target():
+        args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999/mcp?ext=dbg")
+        server._resolve_ida_rpc(args)
+        assert server.IDA_HOST == "10.0.0.1"
+        assert server.IDA_PORT == 9999
+        exts = getattr(server.mcp._enabled_extensions, "data", set())
+        assert "dbg" in exts, f"Expected 'dbg' in enabled extensions, got: {exts}"
+
+
+@test()
+def test_resolve_ida_rpc_preserves_multiple_ext_query_params():
+    """--ida-rpc with ext=dbg,extra should seed both extensions."""
+    with _saved_target():
+        args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999/mcp?ext=dbg,extra")
+        server._resolve_ida_rpc(args)
+        exts = getattr(server.mcp._enabled_extensions, "data", set())
+        assert "dbg" in exts, f"Expected 'dbg' in extensions, got: {exts}"
+        assert "extra" in exts, f"Expected 'extra' in extensions, got: {exts}"
+
+
+@test()
+def test_resolve_ida_rpc_no_ext_leaves_extensions_empty():
+    """--ida-rpc without ext param should not add spurious extensions."""
+    with _saved_target():
+        server.mcp._enabled_extensions.data = set()
+        args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999")
+        server._resolve_ida_rpc(args)
+        exts = getattr(server.mcp._enabled_extensions, "data", set())
+        assert len(exts) == 0, f"Expected no extensions, got: {exts}"
+
+
+@test()
+def test_ida_rpc_ext_flows_through_to_proxy_path():
+    """Extensions from --ida-rpc should appear in proxied request path."""
+    with _saved_target():
+        original_conn = server.http.client.HTTPConnection
+        _RecordingConnection.calls = []
+        server.http.client.HTTPConnection = _RecordingConnection
+        try:
+            args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999/mcp?ext=dbg")
+            server._resolve_ida_rpc(args)
+            server._proxy_to_instance("10.0.0.1", 9999, b"{}")
+            assert len(_RecordingConnection.calls) == 1
+            assert _RecordingConnection.calls[0]["path"] == "/mcp?ext=dbg"
         finally:
             server.http.client.HTTPConnection = original_conn
 
