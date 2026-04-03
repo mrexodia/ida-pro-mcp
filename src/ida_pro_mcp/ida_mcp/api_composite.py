@@ -461,6 +461,7 @@ def diff_before_after(
     during batch renaming to confirm each change had the intended effect."""
 
     import idaapi
+    import ida_hexrays
     import ida_typeinf
 
     if action not in _VALID_ACTIONS:
@@ -494,10 +495,10 @@ def diff_before_after(
             type_str = action_args.get("type")
             if not type_str:
                 return {"error": "action_args must contain 'type'"}
-            tif = ida_typeinf.tinfo_t()
-            til = ida_typeinf.get_idati()
-            parsed = ida_typeinf.parse_decl(tif, til, type_str, ida_typeinf.PT_SIL)
-            if parsed is None:
+            from .api_types import _parse_function_tinfo
+            try:
+                tif = _parse_function_tinfo(type_str)
+            except ValueError:
                 return {"error": f"Failed to parse type: {type_str!r}"}
             ok = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE)
             if not ok:
@@ -516,7 +517,8 @@ def diff_before_after(
     except Exception as exc:
         return {"error": f"Action {action!r} failed: {exc}"}
 
-    # --- After ---
+    # --- After (invalidate Hex-Rays cache so we see the change) ---
+    ida_hexrays.mark_cfunc_dirty(ea)
     after = decompile_function_safe(ea)
 
     return {

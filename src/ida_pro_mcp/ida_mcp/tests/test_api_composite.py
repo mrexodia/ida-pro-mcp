@@ -20,6 +20,7 @@ from ..framework import (
 from ..api_composite import (
     analyze_function,
     analyze_component,
+    diff_before_after,
     trace_data_flow,
 )
 
@@ -437,3 +438,103 @@ def test_trace_data_flow_crackme_format_string():
     assert result["start"] == "0x201f"
     # Should find at least the starting node
     assert len(result["nodes"]) >= 1
+
+
+# ============================================================================
+# diff_before_after tests
+# ============================================================================
+
+
+@test(binary="crackme03.elf")
+def test_diff_rename_func_round_trip():
+    """diff_before_after rename_func changes decompilation and reverts cleanly."""
+    tmp_name = "dba_test_renamed_pw"
+    try:
+        result = diff_before_after("check_pw", "rename_func", {"name": tmp_name})
+        assert "error" not in result, f"unexpected error: {result.get('error')}"
+        assert_has_keys(result, "before", "after", "action_applied", "changes_detected")
+        assert result["changes_detected"], "Rename should change decompilation output"
+        assert tmp_name in result["after"], (
+            f"Expected {tmp_name!r} in after decompilation, got: {result['after'][:200]!r}"
+        )
+        assert "check_pw" in result["before"], (
+            f"Expected 'check_pw' in before decompilation, got: {result['before'][:200]!r}"
+        )
+    finally:
+        diff_before_after(tmp_name, "rename_func", {"name": "check_pw"})
+
+
+@test(binary="crackme03.elf")
+def test_diff_set_comment():
+    """diff_before_after set_comment adds a comment to the decompilation."""
+    import idaapi
+
+    comment_text = "dba_tmp_comment_for_test"
+    try:
+        result = diff_before_after("check_pw", "set_comment", {"comment": comment_text})
+        assert "error" not in result, f"unexpected error: {result.get('error')}"
+        assert_has_keys(result, "before", "after", "action_applied")
+        assert comment_text in result["action_applied"]
+    finally:
+        ea = idaapi.get_name_ea(idaapi.BADADDR, "check_pw")
+        if ea != idaapi.BADADDR:
+            idaapi.set_cmt(ea, "", False)
+
+
+@test(binary="crackme03.elf")
+def test_diff_set_type():
+    """diff_before_after set_type applies a function prototype."""
+    result = diff_before_after(
+        "check_pw", "set_type",
+        {"type": "__int64 __fastcall check_pw(__int64 a1, __int64 a2, __int64 a3)"},
+    )
+    assert "error" not in result, f"unexpected error: {result.get('error')}"
+    assert_has_keys(result, "before", "after", "action_applied", "changes_detected")
+
+
+@test()
+def test_diff_invalid_action():
+    """diff_before_after rejects unknown actions."""
+    fn = get_any_function()
+    if not fn:
+        skip_test("binary has no functions")
+    result = diff_before_after(fn, "bogus_action", {})
+    assert "error" in result, "Expected error for invalid action"
+    assert "bogus_action" in result["error"]
+
+
+@test()
+def test_diff_rename_missing_name():
+    """diff_before_after rename_func requires a 'name' argument."""
+    fn = get_any_function()
+    if not fn:
+        skip_test("binary has no functions")
+    result = diff_before_after(fn, "rename_func", {})
+    assert "error" in result, "Expected error when 'name' is missing"
+
+
+@test()
+def test_diff_set_type_missing_type():
+    """diff_before_after set_type requires a 'type' argument."""
+    fn = get_any_function()
+    if not fn:
+        skip_test("binary has no functions")
+    result = diff_before_after(fn, "set_type", {})
+    assert "error" in result, "Expected error when 'type' is missing"
+
+
+@test()
+def test_diff_set_comment_missing_comment():
+    """diff_before_after set_comment requires a 'comment' argument."""
+    fn = get_any_function()
+    if not fn:
+        skip_test("binary has no functions")
+    result = diff_before_after(fn, "set_comment", {})
+    assert "error" in result, "Expected error when 'comment' is missing"
+
+
+@test()
+def test_diff_invalid_address():
+    """diff_before_after reports error for unmapped address."""
+    result = diff_before_after(get_unmapped_address(), "rename_func", {"name": "x"})
+    assert "error" in result
