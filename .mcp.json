@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ida-pro-mcp": {
+      "command": "python",
+      "args": [
+        "-m",
+        "ida_pro_mcp"
+      ]
+    }
+  }
+}

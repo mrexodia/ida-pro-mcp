@@ -1,0 +1,24 @@
+{
+  "name": "ida-pro-mcp",
+  "version": "0.1.0",
+  "description": "AI-powered reverse engineering with IDA Pro from Codex via MCP",
+  "author": {
+    "name": "mrexodia",
+    "url": "https://github.com/mrexodia/ida-pro-mcp"
+  },
+  "homepage": "https://github.com/mrexodia/ida-pro-mcp",
+  "repository": "https://github.com/mrexodia/ida-pro-mcp",
+  "keywords": [
+    "mcp",
+    "codex"
+  ],
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "IDA Pro MCP",
+    "shortDescription": "AI-powered reverse engineering with IDA Pro from Codex via MCP",
+    "longDescription": "AI-powered reverse engineering assistant that bridges IDA Pro with language models through MCP.",
+    "category": "Security",
+    "websiteURL": "https://github.com/mrexodia/ida-pro-mcp"
+  }
+}
