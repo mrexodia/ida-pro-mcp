@@ -10,7 +10,7 @@ from typing import Annotated, Any, Optional, TypedDict
 import idapro
 import ida_loader
 
-from ida_pro_mcp.ida_mcp import MCP_SERVER
+from ida_pro_mcp.ida_mcp import MCP_SERVER, MCP_UNSAFE
 from ida_pro_mcp.ida_mcp.api_core import (
     ServerHealthResult,
     ServerWarmupResult,
@@ -556,6 +556,14 @@ def main():
 
     # In isolated mode we require Streamable HTTP session semantics.
     MCP_SERVER.require_streamable_http_session = _ISOLATED_CONTEXTS_ENABLED
+
+    # Gate unsafe tools: remove them from the registry unless --unsafe is set.
+    if not args.unsafe:
+        for name in MCP_UNSAFE:
+            MCP_SERVER.tools.methods.pop(name, None)
+        if MCP_UNSAFE:
+            logger.info("Unsafe tools disabled (start with --unsafe to enable)")
+
     _install_context_activation_hooks()
 
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
