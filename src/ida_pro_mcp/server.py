@@ -18,9 +18,19 @@ else:
     sys.path.pop(0)
 
 try:
-    from .installer import list_available_clients, print_mcp_config, run_install_command, set_ida_rpc
+    from .installer import (
+        list_available_clients,
+        print_mcp_config,
+        run_install_command,
+        set_ida_rpc,
+    )
 except ImportError:
-    from installer import list_available_clients, print_mcp_config, run_install_command, set_ida_rpc
+    from installer import (
+        list_available_clients,
+        print_mcp_config,
+        run_install_command,
+        set_ida_rpc,
+    )
 
 IDA_HOST = "127.0.0.1"
 IDA_PORT = 13337

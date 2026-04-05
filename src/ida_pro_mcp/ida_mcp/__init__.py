@@ -8,7 +8,7 @@ Architecture:
 - mcp.py: MCP protocol server (HTTP/SSE)
 - sync.py: IDA synchronization decorator (@idasync)
 - utils.py: Shared helpers and TypedDict definitions
-- api_*.py: Modular API implementations (71 tools + 24 resources)
+- api_*.py: Modular API implementations
 """
 
 # Ignore SIGPIPE to prevent IDA from being killed when an MCP client
@@ -36,6 +36,27 @@ from . import api_python
 from . import api_resources
 from . import api_survey
 from . import api_composite
+from . import api_segments
+from . import api_entries
+from . import api_bookmarks
+from . import api_operands
+from . import api_data
+from . import api_search
+from . import api_auto
+from . import api_fixups
+from . import api_patches
+from . import api_names
+from . import api_segregs
+from . import api_tils
+from . import api_signatures
+from . import api_problems
+from . import api_tryblks
+from . import api_graphs
+from . import api_hexrays_ext
+from . import api_processor
+from . import api_loader
+from . import api_xrefs_manage
+from . import api_database
 
 # Re-export key components for external use
 from .sync import idasync, IDAError, IDASyncError, CancelledError
@@ -60,6 +81,27 @@ __all__ = [
     "api_resources",
     "api_survey",
     "api_composite",
+    "api_segments",
+    "api_entries",
+    "api_bookmarks",
+    "api_operands",
+    "api_data",
+    "api_search",
+    "api_auto",
+    "api_fixups",
+    "api_patches",
+    "api_names",
+    "api_segregs",
+    "api_tils",
+    "api_signatures",
+    "api_problems",
+    "api_tryblks",
+    "api_graphs",
+    "api_hexrays_ext",
+    "api_processor",
+    "api_loader",
+    "api_xrefs_manage",
+    "api_database",
     # Re-exported components
     "idasync",
     "IDAError",

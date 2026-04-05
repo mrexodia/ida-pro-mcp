@@ -82,7 +82,9 @@ def enum_upsert(
             results.append({"name": enum_name, "error": "Enum name is required"})
             continue
         if not members or members == [{}]:
-            results.append({"name": enum_name, "error": "At least one enum member is required"})
+            results.append(
+                {"name": enum_name, "error": "At least one enum member is required"}
+            )
             continue
 
         try:
@@ -91,7 +93,12 @@ def enum_upsert(
             if created:
                 enum_id = idc.add_enum(idc.BADADDR, enum_name, 0)
                 if enum_id == idc.BADADDR:
-                    results.append({"name": enum_name, "error": f"Failed to create enum: {enum_name}"})
+                    results.append(
+                        {
+                            "name": enum_name,
+                            "error": f"Failed to create enum: {enum_name}",
+                        }
+                    )
                     continue
 
             if bool(idc.is_bf(enum_id)) != bitfield and not created:
@@ -113,7 +120,9 @@ def enum_upsert(
                 member_name = str(member.get("name", "") or "").strip()
                 raw_value = member.get("value")
                 if not member_name:
-                    member_results.append({"name": member_name, "error": "Member name is required"})
+                    member_results.append(
+                        {"name": member_name, "error": "Member name is required"}
+                    )
                     conflict_count += 1
                     continue
                 try:
@@ -129,7 +138,12 @@ def enum_upsert(
                     existing_value = idc.get_enum_member_value(existing_member_id)
                     if existing_enum == enum_id and existing_value == value:
                         member_results.append(
-                            {"name": member_name, "value": value, "ok": True, "skipped": True}
+                            {
+                                "name": member_name,
+                                "value": value,
+                                "ok": True,
+                                "skipped": True,
+                            }
                         )
                         skipped_count += 1
                         continue
@@ -151,7 +165,12 @@ def enum_upsert(
                     existing_name = idc.get_enum_member_name(existing_const) or ""
                     if existing_name == member_name:
                         member_results.append(
-                            {"name": member_name, "value": value, "ok": True, "skipped": True}
+                            {
+                                "name": member_name,
+                                "value": value,
+                                "ok": True,
+                                "skipped": True,
+                            }
                         )
                         skipped_count += 1
                         continue
@@ -168,11 +187,17 @@ def enum_upsert(
                 rc = idc.add_enum_member(enum_id, member_name, value, -1)
                 if rc != 0:
                     member_results.append(
-                        {"name": member_name, "value": value, "error": f"Failed to add enum member: rc={rc}"}
+                        {
+                            "name": member_name,
+                            "value": value,
+                            "error": f"Failed to add enum member: rc={rc}",
+                        }
                     )
                     conflict_count += 1
                     continue
-                member_results.append({"name": member_name, "value": value, "ok": True, "created": True})
+                member_results.append(
+                    {"name": member_name, "value": value, "ok": True, "created": True}
+                )
                 created_count += 1
 
             results.append(
@@ -501,7 +526,16 @@ def type_query(
     for query in queries:
         filter_pattern = str(query.get("filter", "") or "")
         kind = str(query.get("kind", "any") or "any").lower()
-        if kind not in {"any", "struct", "union", "enum", "typedef", "func", "ptr", "udt"}:
+        if kind not in {
+            "any",
+            "struct",
+            "union",
+            "enum",
+            "typedef",
+            "func",
+            "ptr",
+            "udt",
+        }:
             kind = "any"
 
         offset = int(query.get("offset", 0) or 0)
@@ -533,9 +567,13 @@ def type_query(
         if sort_by == "size":
             filtered.sort(key=lambda r: int(r.get("size", 0) or 0), reverse=descending)
         elif sort_by == "ordinal":
-            filtered.sort(key=lambda r: int(r.get("ordinal", 0) or 0), reverse=descending)
+            filtered.sort(
+                key=lambda r: int(r.get("ordinal", 0) or 0), reverse=descending
+            )
         else:
-            filtered.sort(key=lambda r: str(r.get("name", "")).lower(), reverse=descending)
+            filtered.sort(
+                key=lambda r: str(r.get("name", "")).lower(), reverse=descending
+            )
 
         output_rows: list[dict] = []
         for row in filtered:
@@ -821,7 +859,11 @@ def _apply_type_edit(edit: dict) -> dict:
         if kind == "function":
             addr_text = str(edit.get("addr", "")).strip()
             if not addr_text:
-                return {"edit": edit, "kind": kind, "error": "Function address is required"}
+                return {
+                    "edit": edit,
+                    "kind": kind,
+                    "error": "Function address is required",
+                }
             func = idaapi.get_func(parse_address(addr_text))
             if not func:
                 return {"edit": edit, "kind": kind, "error": "Function not found"}
@@ -864,9 +906,17 @@ def _apply_type_edit(edit: dict) -> dict:
             addr_text = str(edit.get("addr", "")).strip()
             var_name = str(edit.get("variable", "")).strip()
             if not addr_text:
-                return {"edit": edit, "kind": kind, "error": "Function address is required"}
+                return {
+                    "edit": edit,
+                    "kind": kind,
+                    "error": "Function address is required",
+                }
             if not var_name:
-                return {"edit": edit, "kind": kind, "error": "Local variable name is required"}
+                return {
+                    "edit": edit,
+                    "kind": kind,
+                    "error": "Local variable name is required",
+                }
 
             func = idaapi.get_func(parse_address(addr_text))
             if not func:
@@ -886,9 +936,17 @@ def _apply_type_edit(edit: dict) -> dict:
             addr_text = str(edit.get("addr", "")).strip()
             stack_name = str(edit.get("name", "")).strip()
             if not addr_text:
-                return {"edit": edit, "kind": kind, "error": "Function address is required"}
+                return {
+                    "edit": edit,
+                    "kind": kind,
+                    "error": "Function address is required",
+                }
             if not stack_name:
-                return {"edit": edit, "kind": kind, "error": "Stack variable name is required"}
+                return {
+                    "edit": edit,
+                    "kind": kind,
+                    "error": "Stack variable name is required",
+                }
 
             func = idaapi.get_func(parse_address(addr_text))
             if not func:

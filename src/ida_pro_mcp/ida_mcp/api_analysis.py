@@ -225,7 +225,9 @@ def _limit_items(items: list, limit: int) -> tuple[list, bool]:
     return items[:limit], True
 
 
-def _disasm_lines_limited(func: ida_funcs.func_t, max_insns: int) -> tuple[list[str], bool]:
+def _disasm_lines_limited(
+    func: ida_funcs.func_t, max_insns: int
+) -> tuple[list[str], bool]:
     lines: list[str] = []
     truncated = False
     for item_ea in idautils.FuncItems(func.start_ea):
@@ -742,9 +744,7 @@ def analyze_batch(
             max_callers = _clamp_int(query.get("max_callers", 100), 100, 0, 5000)
             max_callees = _clamp_int(query.get("max_callees", 100), 100, 0, 5000)
             max_strings = _clamp_int(query.get("max_strings", 100), 100, 0, 5000)
-            max_constants = _clamp_int(
-                query.get("max_constants", 200), 200, 0, 10000
-            )
+            max_constants = _clamp_int(query.get("max_constants", 200), 200, 0, 10000)
             max_blocks = _clamp_int(query.get("max_blocks", 500), 500, 0, 10000)
 
             analysis: dict = {
@@ -813,14 +813,18 @@ def analyze_batch(
 
             if include_callees:
                 all_callees = get_callees(hex(fn.start_ea))
-                limited_callees, callees_truncated = _limit_items(all_callees, max_callees)
+                limited_callees, callees_truncated = _limit_items(
+                    all_callees, max_callees
+                )
                 analysis["callee_count"] = len(all_callees)
                 analysis["callees"] = limited_callees
                 analysis["callees_truncated"] = callees_truncated
 
             if include_strings:
                 all_strings = extract_function_strings(fn.start_ea)
-                limited_strings, strings_truncated = _limit_items(all_strings, max_strings)
+                limited_strings, strings_truncated = _limit_items(
+                    all_strings, max_strings
+                )
                 analysis["string_ref_count"] = len(all_strings)
                 analysis["strings"] = limited_strings
                 analysis["strings_truncated"] = strings_truncated

@@ -156,7 +156,9 @@ def _collect_entities(kind: str) -> list[dict]:
                     "size": hex(size_int),
                     "size_int": size_int,
                     "segment": _segment_name_for_ea(fn.start_ea),
-                    "has_type": bool(ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), fn.start_ea)),
+                    "has_type": bool(
+                        ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), fn.start_ea)
+                    ),
                 }
             )
         return rows
@@ -289,12 +291,24 @@ def server_warmup(
     if wait_auto_analysis:
         t0 = time.perf_counter()
         ida_auto.auto_wait()
-        steps.append({"step": "auto_wait", "ok": True, "ms": round((time.perf_counter() - t0) * 1000, 2)})
+        steps.append(
+            {
+                "step": "auto_wait",
+                "ok": True,
+                "ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+        )
 
     if build_caches:
         t0 = time.perf_counter()
         init_caches()
-        steps.append({"step": "init_caches", "ok": True, "ms": round((time.perf_counter() - t0) * 1000, 2)})
+        steps.append(
+            {
+                "step": "init_caches",
+                "ok": True,
+                "ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+        )
 
     if init_hexrays:
         t0 = time.perf_counter()
@@ -542,7 +556,9 @@ def func_query(
             filtered.sort(key=lambda f: int(f["addr"], 16), reverse=descending)
 
         page = paginate(filtered, offset, count)
-        page["data"] = [{k: v for k, v in item.items() if k != "size_int"} for item in page["data"]]
+        page["data"] = [
+            {k: v for k, v in item.items() if k != "size_int"} for item in page["data"]
+        ]
         results.append(page)
 
     return results
@@ -620,7 +636,11 @@ def entity_query(
         if regex:
             try:
                 compiled = re.compile(regex)
-                rows = [row for row in rows if compiled.search(str(row.get(primary_key, "")))]
+                rows = [
+                    row
+                    for row in rows
+                    if compiled.search(str(row.get(primary_key, "")))
+                ]
             except re.error:
                 rows = []
 
@@ -651,19 +671,27 @@ def entity_query(
         sort_by = str(query.get("sort_by", "addr") or "addr")
         descending = bool(query.get("descending", False))
         if sort_by == "addr":
-            rows.sort(key=lambda row: int(str(row.get("addr", "0x0")), 16), reverse=descending)
+            rows.sort(
+                key=lambda row: int(str(row.get("addr", "0x0")), 16), reverse=descending
+            )
         elif sort_by in {"size", "length"}:
             rows.sort(
-                key=lambda row: row.get("size_int", _coerce_sort_number(row.get(sort_by, 0))),
+                key=lambda row: row.get(
+                    "size_int", _coerce_sort_number(row.get(sort_by, 0))
+                ),
                 reverse=descending,
             )
         else:
-            rows.sort(key=lambda row: str(row.get(sort_by, "")).lower(), reverse=descending)
+            rows.sort(
+                key=lambda row: str(row.get(sort_by, "")).lower(), reverse=descending
+            )
 
         offset = int(query.get("offset", 0) or 0)
         count = int(query.get("count", 100) or 100)
         page = paginate(rows, offset, count)
-        data = [{k: v for k, v in item.items() if k != "size_int"} for item in page["data"]]
+        data = [
+            {k: v for k, v in item.items() if k != "size_int"} for item in page["data"]
+        ]
 
         fields_raw = query.get("fields")
         fields = None

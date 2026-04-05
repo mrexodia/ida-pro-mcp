@@ -268,7 +268,9 @@ def test_xref_query():
     )
     assert_is_list(result, min_length=1)
     page = result[0]
-    assert_has_keys(page, "query", "resolved_addr", "data", "next_offset", "total", "error")
+    assert_has_keys(
+        page, "query", "resolved_addr", "data", "next_offset", "total", "error"
+    )
     if page["data"]:
         assert_has_keys(page["data"][0], "direction", "addr", "from", "to", "type")
 
@@ -497,7 +499,10 @@ def test_callgraph_main_contains_expected_nodes():
     assert_is_list(entry["edges"], min_length=1)
     names = {node["name"] for node in entry["nodes"]}
     assert {"main", "check_pw"}.issubset(names)
-    assert any(edge["from"] == CRACKME_MAIN and edge["to"] == CRACKME_CHECK_PW for edge in entry["edges"])
+    assert any(
+        edge["from"] == CRACKME_MAIN and edge["to"] == CRACKME_CHECK_PW
+        for edge in entry["edges"]
+    )
     for node in entry["nodes"]:
         assert_valid_address(node["addr"])
         assert node["depth"] >= 0

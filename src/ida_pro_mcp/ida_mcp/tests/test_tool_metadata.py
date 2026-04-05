@@ -53,7 +53,9 @@ def _iter_annotated_descriptions(node: ast.FunctionDef):
             continue
         if isinstance(ann.slice, ast.Tuple) and len(ann.slice.elts) >= 2:
             maybe_desc = ann.slice.elts[1]
-            if isinstance(maybe_desc, ast.Constant) and isinstance(maybe_desc.value, str):
+            if isinstance(maybe_desc, ast.Constant) and isinstance(
+                maybe_desc.value, str
+            ):
                 yield arg.arg, maybe_desc.value
 
 
@@ -64,7 +66,9 @@ def test_tool_docstrings_present_and_high_signal():
     for path, node in _iter_tool_functions():
         doc = ast.get_docstring(node) or ""
         if not doc.strip():
-            failures.append(f"{path.name}:{node.lineno} {node.name} has empty docstring")
+            failures.append(
+                f"{path.name}:{node.lineno} {node.name} has empty docstring"
+            )
             continue
         words = _word_count(doc)
         if words > MAX_DOCSTRING_WORDS:

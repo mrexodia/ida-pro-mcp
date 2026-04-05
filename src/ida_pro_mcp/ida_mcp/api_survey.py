@@ -25,11 +25,32 @@ _MAX_XREFS_PER_STRING = 200
 # Import category rules: keyword -> category name.
 # Order matters: first match wins.
 _IMPORT_CATEGORIES: list[tuple[str, re.Pattern[str]]] = [
-    ("crypto", re.compile(r"crypt|aes|sha[^r]|md5|hash|rsa|\bssl\b|\btls\b|\bcert", re.IGNORECASE)),
-    ("network", re.compile(r"socket|connect|send|recv|http|url|internet|ws2|winsock", re.IGNORECASE)),
-    ("process", re.compile(r"process|thread|terminate|execute|shell|pipe|virtual", re.IGNORECASE)),
+    (
+        "crypto",
+        re.compile(
+            r"crypt|aes|sha[^r]|md5|hash|rsa|\bssl\b|\btls\b|\bcert", re.IGNORECASE
+        ),
+    ),
+    (
+        "network",
+        re.compile(
+            r"socket|connect|send|recv|http|url|internet|ws2|winsock", re.IGNORECASE
+        ),
+    ),
+    (
+        "process",
+        re.compile(
+            r"process|thread|terminate|execute|shell|pipe|virtual", re.IGNORECASE
+        ),
+    ),
     ("registry", re.compile(r"reg|registry|hkey", re.IGNORECASE)),
-    ("file_io", re.compile(r"file|path|directory|fopen|fclose|fread|fwrite|readfile|writefile|deletefile|createfile", re.IGNORECASE)),
+    (
+        "file_io",
+        re.compile(
+            r"file|path|directory|fopen|fclose|fread|fwrite|readfile|writefile|deletefile|createfile",
+            re.IGNORECASE,
+        ),
+    ),
 ]
 
 
@@ -88,13 +109,15 @@ def _build_segments() -> list[dict]:
             perms.append("w")
         if seg.perm & idaapi.SEGPERM_EXEC:
             perms.append("x")
-        segments.append({
-            "name": ida_segment.get_segm_name(seg),
-            "start": hex(seg.start_ea),
-            "end": hex(seg.end_ea),
-            "size": hex(seg.size()),
-            "permissions": "".join(perms) or "---",
-        })
+        segments.append(
+            {
+                "name": ida_segment.get_segm_name(seg),
+                "start": hex(seg.start_ea),
+                "end": hex(seg.end_ea),
+                "size": hex(seg.size()),
+                "permissions": "".join(perms) or "---",
+            }
+        )
     return segments
 
 
@@ -109,7 +132,9 @@ def _build_entrypoints() -> list[dict]:
     return entrypoints
 
 
-def _build_statistics(func_eas: list[int], string_count: int, segment_count: int) -> dict:
+def _build_statistics(
+    func_eas: list[int], string_count: int, segment_count: int
+) -> dict:
     import idaapi
     import idc
 
@@ -223,14 +248,16 @@ def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[d
                     callee_count += 1
 
         classification = _classify_func(ea, func, name, callee_count)
-        result.append({
-            "addr": hex(ea),
-            "name": name,
-            "size": size,
-            "xref_count": xref_count,
-            "callee_count": callee_count,
-            "type": classification,
-        })
+        result.append(
+            {
+                "addr": hex(ea),
+                "name": name,
+                "size": size,
+                "xref_count": xref_count,
+                "callee_count": callee_count,
+                "type": classification,
+            }
+        )
     return result
 
 
@@ -261,11 +288,13 @@ def _build_imports_by_category() -> dict[str, list[dict]]:
 
         for ea, name in collected:
             cat = _classify_import(name)
-            categories[cat].append({
-                "addr": hex(ea),
-                "name": name,
-                "module": module_name,
-            })
+            categories[cat].append(
+                {
+                    "addr": hex(ea),
+                    "name": name,
+                    "module": module_name,
+                }
+            )
 
     return categories
 
@@ -309,7 +338,6 @@ def _build_call_graph_summary(func_eas: list[int]) -> dict:
     }
 
 
-
 @tool
 @idasync
 @tool_timeout(120.0)
@@ -340,16 +368,16 @@ def survey_binary(
 
     result: dict = {
         "metadata": _build_metadata(),
-        "statistics": _build_statistics(
-            all_func_eas, len(strings), len(segments)
-        ),
+        "statistics": _build_statistics(all_func_eas, len(strings), len(segments)),
         "segments": segments,
         "entrypoints": _build_entrypoints(),
     }
 
     if not minimal:
         result["interesting_strings"] = _build_interesting_strings()
-        result["interesting_functions"] = _build_interesting_functions(func_eas, truncated)
+        result["interesting_functions"] = _build_interesting_functions(
+            func_eas, truncated
+        )
         result["imports_by_category"] = _build_imports_by_category()
         result["call_graph_summary"] = _build_call_graph_summary(func_eas)
 

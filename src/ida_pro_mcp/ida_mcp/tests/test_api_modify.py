@@ -94,8 +94,12 @@ def test_append_comment_function_dedupes():
     addr = int(fn_addr, 16)
     original = idc.get_func_cmt(addr, False) or ""
     try:
-        first = append_comments({"addr": fn_addr, "comment": "__APPEND_COMMENT__", "scope": "func"})
-        second = append_comments({"addr": fn_addr, "comment": "__APPEND_COMMENT__", "scope": "func"})
+        first = append_comments(
+            {"addr": fn_addr, "comment": "__APPEND_COMMENT__", "scope": "func"}
+        )
+        second = append_comments(
+            {"addr": fn_addr, "comment": "__APPEND_COMMENT__", "scope": "func"}
+        )
         assert_is_list(first, min_length=1)
         assert first[0].get("ok") is True
         assert first[0].get("appended") is True
@@ -139,7 +143,9 @@ def test_append_comment_interior_address_roundtrip():
     addr = int(TYPED_FIXTURE_IMMEDIATE_1234, 16)
     original = idaapi.get_cmt(addr, False) or ""
     try:
-        result = append_comments({"addr": hex(addr), "comment": "__LINE_APPEND__", "scope": "line"})
+        result = append_comments(
+            {"addr": hex(addr), "comment": "__LINE_APPEND__", "scope": "line"}
+        )
         assert_is_list(result, min_length=1)
         assert result[0].get("ok") is True
         assert "__LINE_APPEND__" in (idaapi.get_cmt(addr, False) or "")
@@ -179,7 +185,9 @@ def test_patch_asm_roundtrip():
 @test(binary="typed_fixture.elf")
 def test_patch_asm_invalid_instruction_reports_error():
     """patch_asm reports assembly failures without crashing or partially succeeding."""
-    result = patch_asm({"addr": TYPED_FIXTURE_IMMEDIATE_1234, "asm": "not an instruction"})
+    result = patch_asm(
+        {"addr": TYPED_FIXTURE_IMMEDIATE_1234, "asm": "not an instruction"}
+    )
     assert_is_list(result, min_length=1)
     assert_error(result[0], contains="Failed to assemble")
 
@@ -233,7 +241,12 @@ def test_rename_data_roundtrip():
 @test()
 def test_rename_dry_run_summary():
     """rename supports dry_run and returns summary counters"""
-    result = rename({"func": [{"addr": _require_any_function(), "name": "__test_dry_run__"}], "dry_run": True})
+    result = rename(
+        {
+            "func": [{"addr": _require_any_function(), "name": "__test_dry_run__"}],
+            "dry_run": True,
+        }
+    )
     assert isinstance(result, dict)
     assert "func" in result
     assert "summary" in result
@@ -291,7 +304,11 @@ def test_rename_local_roundtrip():
         result = rename(
             {
                 "local": [
-                    {"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": TYPED_FIXTURE_LOCAL_NAME, "new": "rhs_value"}
+                    {
+                        "func_addr": TYPED_FIXTURE_USE_WRAPPER,
+                        "old": TYPED_FIXTURE_LOCAL_NAME,
+                        "new": "rhs_value",
+                    }
                 ]
             }
         )
@@ -303,7 +320,11 @@ def test_rename_local_roundtrip():
         rename(
             {
                 "local": [
-                    {"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "rhs_value", "new": TYPED_FIXTURE_LOCAL_NAME}
+                    {
+                        "func_addr": TYPED_FIXTURE_USE_WRAPPER,
+                        "old": "rhs_value",
+                        "new": TYPED_FIXTURE_LOCAL_NAME,
+                    }
                 ]
             }
         )
@@ -318,18 +339,28 @@ def test_rename_stack_roundtrip():
         result = rename(
             {
                 "stack": [
-                    {"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": TYPED_FIXTURE_LOCAL_NAME, "new": "rhs_stack"}
+                    {
+                        "func_addr": TYPED_FIXTURE_USE_WRAPPER,
+                        "old": TYPED_FIXTURE_LOCAL_NAME,
+                        "new": "rhs_stack",
+                    }
                 ]
             }
         )
         assert result["stack"][0]["ok"] is True
-        names = {var["name"] for var in stack_frame(TYPED_FIXTURE_USE_WRAPPER)[0]["vars"]}
+        names = {
+            var["name"] for var in stack_frame(TYPED_FIXTURE_USE_WRAPPER)[0]["vars"]
+        }
         assert "rhs_stack" in names
     finally:
         rename(
             {
                 "stack": [
-                    {"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "rhs_stack", "new": TYPED_FIXTURE_LOCAL_NAME}
+                    {
+                        "func_addr": TYPED_FIXTURE_USE_WRAPPER,
+                        "old": "rhs_stack",
+                        "new": TYPED_FIXTURE_LOCAL_NAME,
+                    }
                 ]
             }
         )
@@ -338,7 +369,9 @@ def test_rename_stack_roundtrip():
 @test(binary="typed_fixture.elf")
 def test_rename_stack_missing_member_error():
     """rename(stack=...) reports missing frame members explicitly."""
-    result = rename({"stack": [{"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "nope", "new": "x"}]})
+    result = rename(
+        {"stack": [{"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "nope", "new": "x"}]}
+    )
     assert result["stack"][0]["ok"] is False
     assert_error(result["stack"][0], contains="not found")
 
@@ -347,7 +380,15 @@ def test_rename_stack_missing_member_error():
 def test_rename_stack_special_member_error():
     """rename(stack=...) rejects special frame members like saved registers/return address."""
     result = rename(
-        {"stack": [{"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "__return_address", "new": "x"}]}
+        {
+            "stack": [
+                {
+                    "func_addr": TYPED_FIXTURE_USE_WRAPPER,
+                    "old": "__return_address",
+                    "new": "x",
+                }
+            ]
+        }
     )
     assert result["stack"][0]["ok"] is False
     assert_error(result["stack"][0], contains="Special frame member")

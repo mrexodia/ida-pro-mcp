@@ -36,6 +36,7 @@ _BORING_CONSTANTS = frozenset({0, 1, -1, 0xFF, 0xFFFF, 0xFFFFFFFF, 0xFFFFFFFFFFF
 # Internal helpers (no @tool — called from within @idasync context)
 # ---------------------------------------------------------------------------
 
+
 def _resolve_addr(addr: str) -> int:
     """Resolve address or name to ea. Raises IDAError on failure."""
     import idaapi
@@ -78,7 +79,10 @@ def _filter_constants(raw: list[dict], limit: int = _TOP_CONSTANTS) -> list[dict
         if abs(val) < 0x100 or val in _BORING_CONSTANTS:
             continue
         out.append(c)
-    out.sort(key=lambda c: abs(c.get("value", 0)) if isinstance(c.get("value"), int) else 0, reverse=True)
+    out.sort(
+        key=lambda c: abs(c.get("value", 0)) if isinstance(c.get("value"), int) else 0,
+        reverse=True,
+    )
     return out[:limit]
 
 
@@ -178,7 +182,9 @@ def _analyze_function_internal(ea: int, *, include_asm: bool = False) -> dict:
 @tool_timeout(120.0)
 def analyze_function(
     addr: Annotated[str, "Function address or name"],
-    include_asm: Annotated[bool, "Include full disassembly (default: false, saves tokens)"] = False,
+    include_asm: Annotated[
+        bool, "Include full disassembly (default: false, saves tokens)"
+    ] = False,
 ) -> dict:
     """Get a compact analysis of a single function: decompiled pseudocode (capped
     at 100 lines), top 10 strings as values, top 10 non-trivial constants, caller
@@ -243,22 +249,24 @@ def analyze_component(
         top_strings = _compact_strings(strings_raw, limit=5)
         callee_list = _compact_callees(get_callees(hex(ea)))
         bb = _basic_block_info(ea)
-        functions.append({
-            "addr": hex(ea),
-            "name": name,
-            "prototype": get_prototype(func),
-            "size": func.end_ea - func.start_ea,
-            "callees": callee_list,
-            "strings": top_strings,
-            "basic_blocks": bb["count"],
-            "complexity": bb["cyclomatic_complexity"],
-        })
+        functions.append(
+            {
+                "addr": hex(ea),
+                "name": name,
+                "prototype": get_prototype(func),
+                "size": func.end_ea - func.start_ea,
+                "callees": callee_list,
+                "strings": top_strings,
+                "basic_blocks": bb["count"],
+                "complexity": bb["cyclomatic_complexity"],
+            }
+        )
 
     # --- Internal call graph ---
     nodes = [hex(ea) for ea in ea_set]
     edges: list[dict] = []
     for ea in ea_set:
-        for callee in (get_callees(hex(ea)) or []):
+        for callee in get_callees(hex(ea)) or []:
             callee_ea = callee.get("addr")
             if isinstance(callee_ea, str):
                 try:
@@ -266,11 +274,13 @@ def analyze_component(
                 except (ValueError, TypeError):
                     continue
             if callee_ea in ea_set:
-                edges.append({
-                    "from": hex(ea),
-                    "to": hex(callee_ea),
-                    "name": callee.get("name", ""),
-                })
+                edges.append(
+                    {
+                        "from": hex(ea),
+                        "to": hex(callee_ea),
+                        "name": callee.get("name", ""),
+                    }
+                )
 
     # --- Shared globals ---
     func_globals: dict[int, set[int]] = {}
@@ -298,11 +308,13 @@ def analyze_component(
     shared_globals = []
     for g_ea, accessors in sorted(global_refcount.items()):
         if len(accessors) >= 2:
-            shared_globals.append({
-                "addr": hex(g_ea),
-                "name": idaapi.get_name(g_ea) or hex(g_ea),
-                "accessed_by": sorted(accessors),
-            })
+            shared_globals.append(
+                {
+                    "addr": hex(g_ea),
+                    "name": idaapi.get_name(g_ea) or hex(g_ea),
+                    "accessed_by": sorted(accessors),
+                }
+            )
 
     # --- Interface vs internal ---
     interface_functions: list[str] = []
@@ -310,7 +322,7 @@ def analyze_component(
     for ea in ea_set:
         callers = get_callers(hex(ea))
         has_external = False
-        for c in (callers or []):
+        for c in callers or []:
             caller_addr = c.get("addr") or c.get("start_ea")
             if isinstance(caller_addr, str):
                 try:
@@ -330,7 +342,7 @@ def analyze_component(
     string_funcs: dict[str, set[str]] = defaultdict(set)
     for ea in ea_set:
         fname = idaapi.get_func_name(ea) or hex(ea)
-        for s in (extract_function_strings(ea) or []):
+        for s in extract_function_strings(ea) or []:
             sval = s.get("value") or s.get("string", "")
             if sval:
                 string_funcs[sval].add(fname)
@@ -358,7 +370,6 @@ def analyze_component(
 _VALID_ACTIONS = frozenset({"rename_func", "set_type", "set_comment"})
 
 
-
 @tool
 @unsafe
 @idasync
@@ -380,7 +391,9 @@ def diff_before_after(
     import ida_typeinf
 
     if action not in _VALID_ACTIONS:
-        return {"error": f"Invalid action {action!r}. Must be one of: {', '.join(sorted(_VALID_ACTIONS))}"}
+        return {
+            "error": f"Invalid action {action!r}. Must be one of: {', '.join(sorted(_VALID_ACTIONS))}"
+        }
 
     try:
         ea = _resolve_addr(addr)
@@ -451,13 +464,14 @@ _MAX_TRACE_NODES = 200
 _MAX_TRACE_EDGES = 500
 
 
-
 @tool
 @idasync
 @tool_timeout(120.0)
 def trace_data_flow(
     addr: Annotated[str, "Starting address"],
-    direction: Annotated[str, "'forward' (xrefs from) or 'backward' (xrefs to)"] = "forward",
+    direction: Annotated[
+        str, "'forward' (xrefs from) or 'backward' (xrefs to)"
+    ] = "forward",
     max_depth: Annotated[int, "Maximum traversal depth"] = 5,
 ) -> dict:
     """Follow cross-references from or to an address, automatically traversing
@@ -475,7 +489,9 @@ def trace_data_flow(
     from collections import deque
 
     if direction not in ("forward", "backward"):
-        return {"error": f"direction must be 'forward' or 'backward', got {direction!r}"}
+        return {
+            "error": f"direction must be 'forward' or 'backward', got {direction!r}"
+        }
 
     try:
         start_ea = _resolve_addr(addr)
@@ -515,14 +531,16 @@ def trace_data_flow(
         if func is None and idaapi.is_loaded(ea):
             node_type = "data"
 
-        nodes.append({
-            "addr": hex(ea),
-            "func": func_name,
-            "instruction": insn_text,
-            "type": node_type,
-            "name": name_at if name_at else None,
-            "depth": depth,
-        })
+        nodes.append(
+            {
+                "addr": hex(ea),
+                "func": func_name,
+                "instruction": insn_text,
+                "type": node_type,
+                "name": name_at if name_at else None,
+                "depth": depth,
+            }
+        )
 
         if depth >= max_depth:
             continue
@@ -540,11 +558,13 @@ def trace_data_flow(
             # Classify xref type.
             xtype = "code" if xref.iscode else "data"
 
-            edges.append({
-                "from": hex(ea) if direction == "forward" else hex(target),
-                "to": hex(target) if direction == "forward" else hex(ea),
-                "type": xtype,
-            })
+            edges.append(
+                {
+                    "from": hex(ea) if direction == "forward" else hex(target),
+                    "to": hex(target) if direction == "forward" else hex(ea),
+                    "type": xtype,
+                }
+            )
 
             if target not in visited and len(nodes) + len(queue) < _MAX_TRACE_NODES:
                 visited.add(target)

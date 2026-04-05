@@ -26,6 +26,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "coverage>=7.13.4",
+    "ruff>=0.15.9",
+    "ty>=0.0.29",
 ]
 
 [project.urls]

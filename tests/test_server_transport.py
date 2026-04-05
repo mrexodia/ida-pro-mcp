@@ -5,7 +5,12 @@ from ida_pro_mcp import server
 
 
 class _FakeResponse:
-    def __init__(self, status=200, reason="OK", body=b'{"jsonrpc":"2.0","result":{"ok":true},"id":1}'):
+    def __init__(
+        self,
+        status=200,
+        reason="OK",
+        body=b'{"jsonrpc":"2.0","result":{"ok":true},"id":1}',
+    ):
         self.status = status
         self.reason = reason
         self._body = body
@@ -60,7 +65,9 @@ class DispatchProxyTransportTests(unittest.TestCase):
 
     def test_dispatch_proxy_does_not_retry_post_send_failures(self):
         request = {"jsonrpc": "2.0", "method": "tools/call", "params": {}, "id": 1}
-        with patch("ida_pro_mcp.server.http.client.HTTPConnection", _ResponseFailureConnection):
+        with patch(
+            "ida_pro_mcp.server.http.client.HTTPConnection", _ResponseFailureConnection
+        ):
             response = server.dispatch_proxy(request)
 
         self.assertIsNotNone(response)
@@ -85,7 +92,9 @@ class DispatchProxyTransportTests(unittest.TestCase):
 
     def test_dispatch_proxy_does_not_retry_connection_failures(self):
         request = {"jsonrpc": "2.0", "method": "tools/call", "params": {}, "id": 1}
-        with patch("ida_pro_mcp.server.http.client.HTTPConnection", _ConnectFailureConnection):
+        with patch(
+            "ida_pro_mcp.server.http.client.HTTPConnection", _ConnectFailureConnection
+        ):
             response = server.dispatch_proxy(request)
 
         self.assertIsNotNone(response)

@@ -132,46 +132,72 @@ def append_comments(items: list[CommentAppendOp] | CommentAppendOp):
         try:
             ea = parse_address(addr_str)
             if scope not in {"auto", "func", "line"}:
-                results.append({"addr": addr_str, "error": f"Unsupported scope: {scope}"})
+                results.append(
+                    {"addr": addr_str, "error": f"Unsupported scope: {scope}"}
+                )
                 continue
 
             fn = idaapi.get_func(ea)
-            use_func_comment = scope == "func" or (scope == "auto" and fn is not None and fn.start_ea == ea)
+            use_func_comment = scope == "func" or (
+                scope == "auto" and fn is not None and fn.start_ea == ea
+            )
 
             if use_func_comment:
                 if fn is None:
-                    results.append({"addr": addr_str, "error": f"No function found at {hex(ea)}"})
+                    results.append(
+                        {"addr": addr_str, "error": f"No function found at {hex(ea)}"}
+                    )
                     continue
                 target_ea = fn.start_ea
                 current = idc.get_func_cmt(target_ea, False) or ""
-                new_comment, skipped = _append_comment_text(current, comment, dedupe=dedupe)
+                new_comment, skipped = _append_comment_text(
+                    current, comment, dedupe=dedupe
+                )
                 if skipped:
-                    results.append({"addr": addr_str, "ok": True, "scope": "func", "skipped": True})
+                    results.append(
+                        {"addr": addr_str, "ok": True, "scope": "func", "skipped": True}
+                    )
                     continue
                 if not idc.set_func_cmt(target_ea, new_comment, False):
                     results.append(
-                        {"addr": addr_str, "error": f"Failed to set function comment at {hex(target_ea)}"}
+                        {
+                            "addr": addr_str,
+                            "error": f"Failed to set function comment at {hex(target_ea)}",
+                        }
                     )
                     continue
-                results.append({"addr": addr_str, "ok": True, "scope": "func", "appended": True})
+                results.append(
+                    {"addr": addr_str, "ok": True, "scope": "func", "appended": True}
+                )
                 continue
 
             current = idaapi.get_cmt(ea, False) or ""
             new_comment, skipped = _append_comment_text(current, comment, dedupe=dedupe)
             if skipped:
-                results.append({"addr": addr_str, "ok": True, "scope": "line", "skipped": True})
+                results.append(
+                    {"addr": addr_str, "ok": True, "scope": "line", "skipped": True}
+                )
                 continue
             if not idaapi.set_cmt(ea, new_comment, False):
-                results.append({"addr": addr_str, "error": f"Failed to set disassembly comment at {hex(ea)}"})
+                results.append(
+                    {
+                        "addr": addr_str,
+                        "error": f"Failed to set disassembly comment at {hex(ea)}",
+                    }
+                )
                 continue
-            results.append({"addr": addr_str, "ok": True, "scope": "line", "appended": True})
+            results.append(
+                {"addr": addr_str, "ok": True, "scope": "line", "appended": True}
+            )
         except Exception as e:
             results.append({"addr": addr_str, "error": str(e)})
 
     return results
 
 
-def _append_comment_text(current: str, new_text: str, *, dedupe: bool) -> tuple[str, bool]:
+def _append_comment_text(
+    current: str, new_text: str, *, dedupe: bool
+) -> tuple[str, bool]:
     normalized_new = new_text.strip()
     if dedupe and normalized_new:
         existing_entries = [line.strip() for line in current.splitlines()]
@@ -265,11 +291,7 @@ def rename(batch: RenameBatch | dict) -> dict:
 
     def _set_name_checked(ea: int, new_name: str) -> tuple[bool, str | None]:
         conflict_ea = idaapi.get_name_ea(idaapi.BADADDR, new_name)
-        if (
-            conflict_ea != idaapi.BADADDR
-            and conflict_ea != ea
-            and not allow_overwrite
-        ):
+        if conflict_ea != idaapi.BADADDR and conflict_ea != ea and not allow_overwrite:
             return False, f"Name already exists at {hex(conflict_ea)}"
 
         if dry_run:
@@ -319,7 +341,9 @@ def rename(batch: RenameBatch | dict) -> dict:
         halted = False
         for item in items:
             try:
-                addr_text = item.get("addr") or item.get("func_addr") or item.get("func")
+                addr_text = (
+                    item.get("addr") or item.get("func_addr") or item.get("func")
+                )
                 new_name = item.get("name") or item.get("new") or item.get("new_name")
                 if not addr_text or not new_name:
                     result = {
@@ -394,7 +418,12 @@ def rename(batch: RenameBatch | dict) -> dict:
                 # 2) {name, new_name} => old=name, new=new_name
                 if new_name is None and addr_text is not None and item.get("name"):
                     new_name = item.get("name")
-                if old_name is None and new_name is not None and item.get("name") and not addr_text:
+                if (
+                    old_name is None
+                    and new_name is not None
+                    and item.get("name")
+                    and not addr_text
+                ):
                     old_name = item.get("name")
 
                 if not new_name:
@@ -509,7 +538,9 @@ def rename(batch: RenameBatch | dict) -> dict:
                     halted = True
                     break
             except Exception as e:
-                results.append({"func_addr": item.get("func_addr"), "ok": False, "error": str(e)})
+                results.append(
+                    {"func_addr": item.get("func_addr"), "ok": False, "error": str(e)}
+                )
                 if stop_on_error:
                     halted = True
                     break
@@ -635,11 +666,14 @@ def rename(batch: RenameBatch | dict) -> dict:
                     halted = True
                     break
             except Exception as e:
-                results.append({"func_addr": item.get("func_addr"), "ok": False, "error": str(e)})
+                results.append(
+                    {"func_addr": item.get("func_addr"), "ok": False, "error": str(e)}
+                )
                 if stop_on_error:
                     halted = True
                     break
         return results, halted
+
     data_items = []
     data_items.extend(_normalize_items(batch.get("data")))
     data_items.extend(_normalize_items(batch.get("global")))

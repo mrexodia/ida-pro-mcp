@@ -313,8 +313,18 @@ def test_enum_upsert_reports_conflicting_member_value():
         idc.del_enum(enum_id)
 
     try:
-        enum_upsert({"name": enum_name, "members": [{"name": "__TEST_ENUM_CONFLICT__", "value": 1}]})
-        result = enum_upsert({"name": enum_name, "members": [{"name": "__TEST_ENUM_CONFLICT__", "value": 2}]})
+        enum_upsert(
+            {
+                "name": enum_name,
+                "members": [{"name": "__TEST_ENUM_CONFLICT__", "value": 1}],
+            }
+        )
+        result = enum_upsert(
+            {
+                "name": enum_name,
+                "members": [{"name": "__TEST_ENUM_CONFLICT__", "value": 2}],
+            }
+        )
         assert_is_list(result, min_length=1)
         assert result[0].get("ok") is False
         assert result[0]["summary"]["conflicts"] == 1
@@ -354,7 +364,9 @@ def test_set_type_global_by_name_branch():
 @test(binary="typed_fixture.elf")
 def test_set_type_global_invalid_type_name():
     """set_type(kind=global) reports invalid type names cleanly."""
-    result = set_type({"addr": TYPED_FIXTURE_G_POINT, "ty": "NoSuchType", "kind": "global"})
+    result = set_type(
+        {"addr": TYPED_FIXTURE_G_POINT, "ty": "NoSuchType", "kind": "global"}
+    )
     assert_is_list(result, min_length=1)
     assert_error(result[0])
 
@@ -362,7 +374,9 @@ def test_set_type_global_invalid_type_name():
 @test()
 def test_type_apply_batch():
     """type_apply_batch applies edits and returns summary counters"""
-    result = type_apply_batch({"edits": [{"addr": _require_any_function(), "ty": TYPE_APPLY_SIGNATURE}]})
+    result = type_apply_batch(
+        {"edits": [{"addr": _require_any_function(), "ty": TYPE_APPLY_SIGNATURE}]}
+    )
     assert "ok" in result
     assert "applied" in result
     assert "failed" in result
@@ -404,7 +418,12 @@ def test_set_type_stack_missing_member():
 def test_set_type_stack_missing_member_typed_fixture():
     """typed_fixture reports missing stack members against a stable non-main function."""
     result = set_type(
-        {"addr": TYPED_FIXTURE_USE_WRAPPER, "kind": "stack", "name": "nope", "ty": TYPE_APPLY_SIGNATURE}
+        {
+            "addr": TYPED_FIXTURE_USE_WRAPPER,
+            "kind": "stack",
+            "name": "nope",
+            "ty": TYPE_APPLY_SIGNATURE,
+        }
     )
     assert_is_list(result, min_length=1)
     assert_error(result[0], contains="not found")

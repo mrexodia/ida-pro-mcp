@@ -326,11 +326,21 @@ def list_available_clients():
 
     print()
     print("Usage examples:")
-    print("  ida-pro-mcp --install                                    # Interactive selector")
-    print("  ida-pro-mcp --install claude,cursor                       # Specific client targets")
-    print("  ida-pro-mcp --install vscode --scope project              # Project-level config")
-    print("  ida-pro-mcp --install cursor --transport streamable-http  # Streamable HTTP config")
-    print("  ida-pro-mcp --uninstall cursor                            # Uninstall specific target")
+    print(
+        "  ida-pro-mcp --install                                    # Interactive selector"
+    )
+    print(
+        "  ida-pro-mcp --install claude,cursor                       # Specific client targets"
+    )
+    print(
+        "  ida-pro-mcp --install vscode --scope project              # Project-level config"
+    )
+    print(
+        "  ida-pro-mcp --install cursor --transport streamable-http  # Streamable HTTP config"
+    )
+    print(
+        "  ida-pro-mcp --uninstall cursor                            # Uninstall specific target"
+    )
 
 
 def install_mcp_servers(

@@ -429,6 +429,8 @@ def test_server_warmup():
     )
     assert_has_keys(result, "ok", "steps", "health")
     assert_is_list(result["steps"])
+
+
 @test()
 def test_imports():
     """imports returns import list with proper structure"""
