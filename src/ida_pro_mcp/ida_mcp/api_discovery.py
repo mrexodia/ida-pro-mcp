@@ -293,11 +293,13 @@ def list_instances() -> list[InstanceListItem]:
             active = inst["host"] == redirect[0] and inst["port"] == redirect[1]
         else:
             active = inst["host"] == _LOCAL_HOST and inst["port"] == _LOCAL_PORT
-        result.append({
-            **inst,
-            "reachable": reachable,
-            "active": active,
-        })
+        result.append(
+            {
+                **inst,
+                "reachable": reachable,
+                "active": active,
+            }
+        )
     return result
 
 
@@ -323,10 +325,18 @@ def select_instance(
     # Selecting the local instance clears redirect
     if host == _LOCAL_HOST and port == _LOCAL_PORT:
         _clear_redirect_target()
-        return {"success": True, "host": host, "port": port, "message": "Selected local instance"}
+        return {
+            "success": True,
+            "host": host,
+            "port": port,
+            "message": "Selected local instance",
+        }
 
     if not probe_instance(host, port):
-        return {"success": False, "error": f"Instance at {host}:{port} is not reachable"}
+        return {
+            "success": False,
+            "error": f"Instance at {host}:{port} is not reachable",
+        }
 
     _set_redirect_target(host, port)
     return {"success": True, "host": host, "port": port}
@@ -401,14 +411,19 @@ def open_file(
     try:
         subprocess.Popen(
             args,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-            if sys.platform == "win32" else 0,
+            creationflags=subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+            if sys.platform == "win32"
+            else 0,
         )
     except Exception as e:
         return {"success": False, "error": f"Failed to launch IDA: {e}"}
 
     if timeout == 0:
-        return {"success": True, "message": "IDA launched, not waiting for registration"}
+        return {
+            "success": True,
+            "message": "IDA launched, not waiting for registration",
+        }
 
     # Poll for the new instance to register
     deadline = time.monotonic() + timeout

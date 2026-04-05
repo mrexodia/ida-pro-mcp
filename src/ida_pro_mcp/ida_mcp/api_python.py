@@ -32,6 +32,7 @@ from .utils import parse_address, get_function
 
 def _make_exec_globals() -> dict:
     """Build an execution context with all IDA modules available."""
+
     def lazy_import(module_name):
         try:
             return __import__(module_name)

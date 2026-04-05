@@ -20,6 +20,7 @@ from ida_pro_mcp.ida_mcp.api_core import (
 from ida_pro_mcp.ida_mcp.rpc import get_current_transport_session_id, tool
 from ida_pro_mcp.idalib_session_manager import get_session_manager
 
+
 class IdalibContextFields(TypedDict):
     context_id: str
     transport_context_id: str | None
@@ -225,7 +226,7 @@ def idalib_open(
 
 @tool
 def idalib_close(
-    session_id: Annotated[str, "Session ID to close"]
+    session_id: Annotated[str, "Session ID to close"],
 ) -> IdalibCloseResult:
     """Close an IDA session and remove all context bindings targeting it."""
 

@@ -291,7 +291,7 @@ def test_analyze_component_crackme_main_check_pw():
     result = analyze_component(["main", "check_pw"])
     assert "error" not in result or result.get("error") is None
     assert_has_keys(result, "functions", "internal_call_graph")
-    
+
     # main calls check_pw, so there should be internal edges
     cg = result["internal_call_graph"]
     assert len(cg["nodes"]) == 2
@@ -485,7 +485,8 @@ def test_diff_set_comment():
 def test_diff_set_type():
     """diff_before_after set_type applies a function prototype."""
     result = diff_before_after(
-        "check_pw", "set_type",
+        "check_pw",
+        "set_type",
         {"type": "__int64 __fastcall check_pw(__int64 a1, __int64 a2, __int64 a3)"},
     )
     assert "error" not in result, f"unexpected error: {result.get('error')}"

@@ -43,7 +43,7 @@ class StackMutationResult(TypedDict):
 @tool
 @idasync
 def stack_frame(
-    addrs: Annotated[list[str] | str, "Address(es)"]
+    addrs: Annotated[list[str] | str, "Address(es)"],
 ) -> list[StackFrameResult]:
     """Return stack variables for function address(es)."""
     addrs = normalize_list_input(addrs)

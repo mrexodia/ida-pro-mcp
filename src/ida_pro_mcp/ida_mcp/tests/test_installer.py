@@ -10,7 +10,12 @@ import sys
 from ..framework import test
 
 try:
-    from ida_pro_mcp.installer import generate_mcp_config, SERVER_SCRIPT, IDA_HOST, IDA_PORT
+    from ida_pro_mcp.installer import (
+        generate_mcp_config,
+        SERVER_SCRIPT,
+        IDA_HOST,
+        IDA_PORT,
+    )
 except ImportError:
     _parent = os.path.join(os.path.dirname(__file__), "..", "..")
     sys.path.insert(0, _parent)

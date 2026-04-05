@@ -61,7 +61,9 @@ MCP Server Configuration
             {
                 "host": idaapi.Form.StringInput(value=host),
                 "port": idaapi.Form.NumericInput(value=port, tp=idaapi.Form.FT_DEC),
-                "checks": idaapi.Form.ChkGroupControl(("autostart",), value=1 if autostart else 0),
+                "checks": idaapi.Form.ChkGroupControl(
+                    ("autostart",), value=1 if autostart else 0
+                ),
             },
         )
 
@@ -196,9 +198,19 @@ class MCP(idaapi.plugin_t):
         # HACK: ensure fresh load of ida_mcp package
         unload_package("ida_mcp")
         if TYPE_CHECKING:
-            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_local_instance
+            from .ida_mcp import (
+                MCP_SERVER,
+                IdaMcpHttpRequestHandler,
+                init_caches,
+                set_local_instance,
+            )
         else:
-            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_local_instance
+            from ida_mcp import (
+                MCP_SERVER,
+                IdaMcpHttpRequestHandler,
+                init_caches,
+                set_local_instance,
+            )
 
         try:
             init_caches()
@@ -233,6 +245,7 @@ class MCP(idaapi.plugin_t):
             import os
             import idc
             import ida_nalt
+
             binary = ida_nalt.get_root_filename() or ""
             idb_path = idc.get_idb_path() or ""
             file_path = register_instance(
@@ -243,10 +256,13 @@ class MCP(idaapi.plugin_t):
                 idb_path=idb_path,
             )
             self._registered_port = port
-            print(f"[MCP] Registered instance: {binary} (pid={os.getpid()}, port={port})")
+            print(
+                f"[MCP] Registered instance: {binary} (pid={os.getpid()}, port={port})"
+            )
             print(f"  Discovery file: {file_path}")
         except Exception as e:
             import traceback
+
             print(f"[MCP] Instance registration failed: {e}")
             traceback.print_exc()
 

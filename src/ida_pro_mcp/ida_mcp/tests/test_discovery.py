@@ -18,6 +18,7 @@ from .. import discovery
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 @contextlib.contextmanager
 def _tmp_instances_dir():
     """Redirect discovery.get_instances_dir to a temp directory, then restore."""
@@ -50,7 +51,9 @@ def _patched_instances_dir(path):
 def test_register_unregister_roundtrip():
     """register_instance creates a file that unregister_instance removes."""
     with _tmp_instances_dir():
-        path = discovery.register_instance("127.0.0.1", 55000, os.getpid(), "test.exe", "/tmp/test.idb")
+        path = discovery.register_instance(
+            "127.0.0.1", 55000, os.getpid(), "test.exe", "/tmp/test.idb"
+        )
         assert os.path.isfile(path)
         assert discovery.unregister_instance(55000) is True
         assert not os.path.isfile(path)
@@ -67,8 +70,12 @@ def test_unregister_nonexistent_returns_false():
 def test_register_overwrites_existing():
     """Re-registering the same port atomically replaces the previous entry."""
     with _tmp_instances_dir() as tmp:
-        discovery.register_instance("127.0.0.1", 55005, os.getpid(), "first.bin", "first.idb")
-        discovery.register_instance("127.0.0.1", 55005, os.getpid(), "second.bin", "second.idb")
+        discovery.register_instance(
+            "127.0.0.1", 55005, os.getpid(), "first.bin", "first.idb"
+        )
+        discovery.register_instance(
+            "127.0.0.1", 55005, os.getpid(), "second.bin", "second.idb"
+        )
         with open(os.path.join(tmp, "instance_55005.json"), "r") as f:
             data = json.load(f)
         assert data["binary"] == "second.bin"
@@ -111,7 +118,9 @@ def test_probe_instance_unreachable():
 def test_discover_cleans_up_dead_pid():
     """discover_instances removes registrations whose PID is dead."""
     with _tmp_instances_dir() as tmp:
-        discovery.register_instance("127.0.0.1", 55002, 4_000_000, "dead.bin", "dead.idb")
+        discovery.register_instance(
+            "127.0.0.1", 55002, 4_000_000, "dead.bin", "dead.idb"
+        )
         assert discovery.discover_instances() == []
         assert not os.path.isfile(os.path.join(tmp, "instance_55002.json"))
 
@@ -142,7 +151,9 @@ def test_discover_cleans_up_missing_required_keys():
 def test_discover_skips_alive_pid_unreachable_port():
     """discover_instances removes entries with alive PID but no listening server."""
     with _tmp_instances_dir():
-        discovery.register_instance("127.0.0.1", 1, os.getpid(), "no_server.bin", "no.idb")
+        discovery.register_instance(
+            "127.0.0.1", 1, os.getpid(), "no_server.bin", "no.idb"
+        )
         assert discovery.discover_instances() == []
 
 
@@ -166,12 +177,17 @@ def test_discover_sorts_by_started_at():
     instance gets auto-connected when multiple are running.
     """
     with _tmp_instances_dir() as tmp:
-        for port, ts in [(55010, "2025-01-01T00:00:02+00:00"),
-                         (55011, "2025-01-01T00:00:01+00:00")]:
+        for port, ts in [
+            (55010, "2025-01-01T00:00:02+00:00"),
+            (55011, "2025-01-01T00:00:01+00:00"),
+        ]:
             info = {
-                "host": "127.0.0.1", "port": port,
-                "pid": os.getpid(), "binary": f"bin_{port}",
-                "idb_path": f"/tmp/{port}.idb", "started_at": ts,
+                "host": "127.0.0.1",
+                "port": port,
+                "pid": os.getpid(),
+                "binary": f"bin_{port}",
+                "idb_path": f"/tmp/{port}.idb",
+                "started_at": ts,
             }
             path = os.path.join(tmp, f"instance_{port}.json")
             with open(path, "w") as f:

@@ -149,9 +149,7 @@ def get_int(
                 raise ValueError(f"Failed to read {size} bytes at {addr}")
 
             value = int.from_bytes(data, byte_order, signed=signed)
-            results.append(
-                {"addr": addr, "ty": normalized, "value": value}
-            )
+            results.append({"addr": addr, "ty": normalized, "value": value})
         except Exception as e:
             results.append({"addr": addr, "ty": ty, "value": None, "error": str(e)})
 
@@ -282,9 +280,7 @@ def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[PatchResult]:
                 raise ValueError(f"Address not mapped: {patch['addr']}")
 
             ida_bytes.patch_bytes(ea, data)
-            results.append(
-                {"addr": patch["addr"], "size": len(data)}
-            )
+            results.append({"addr": patch["addr"], "size": len(data)})
 
         except Exception as e:
             results.append({"addr": patch.get("addr"), "size": 0, "error": str(e)})

@@ -16,8 +16,10 @@ from .. import api_discovery
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 class _SavedState:
     """Context manager that snapshots and restores api_discovery globals."""
+
     def __enter__(self):
         self._host = api_discovery._redirect_host
         self._port = api_discovery._redirect_port
@@ -25,8 +27,11 @@ class _SavedState:
         self._lhost = api_discovery._LOCAL_HOST
         self._lport = api_discovery._LOCAL_PORT
         self._proxied = api_discovery.is_request_proxied()
-        self._session = getattr(api_discovery.MCP_SERVER._transport_session_id, "data", None)
+        self._session = getattr(
+            api_discovery.MCP_SERVER._transport_session_id, "data", None
+        )
         return self
+
     def __exit__(self, *exc):
         api_discovery._redirect_host = self._host
         api_discovery._redirect_port = self._port
@@ -223,7 +228,9 @@ def test_dispatch_no_redirect_goes_local():
         result = api_discovery._redirecting_dispatch(req)
         # Local registry returns -32602 (missing required 'addr' param),
         # NOT -32000 (proxy error).
-        assert _is_local_registry_response(result), f"Expected local response, got: {result}"
+        assert _is_local_registry_response(result), (
+            f"Expected local response, got: {result}"
+        )
 
 
 @test()
@@ -236,7 +243,9 @@ def test_dispatch_initialize_always_local():
         result = api_discovery._redirecting_dispatch(req)
         # initialize hits the local registry (returns error for missing params,
         # but it's a registry error, not a proxy error).
-        assert _is_local_registry_response(result), f"Expected local response, got: {result}"
+        assert _is_local_registry_response(result), (
+            f"Expected local response, got: {result}"
+        )
 
 
 @test()
@@ -277,7 +286,9 @@ def test_dispatch_non_local_tool_proxied_when_redirecting():
     with _SavedState():
         api_discovery._redirect_host = "127.0.0.1"
         api_discovery._redirect_port = 1  # unreachable
-        req = _make_jsonrpc("tools/call", {"name": "decompile", "arguments": {"addr": "0x1000"}})
+        req = _make_jsonrpc(
+            "tools/call", {"name": "decompile", "arguments": {"addr": "0x1000"}}
+        )
         result = api_discovery._redirecting_dispatch(req)
         # Proxy fails → -32000 error, not a local registry error
         assert _is_proxy_error(result), f"Expected proxy error, got: {result}"
@@ -297,7 +308,9 @@ def test_dispatch_loop_prevention_proxied_request_goes_local():
         api_discovery.set_request_proxied(True)
         req = _make_jsonrpc("tools/call", {"name": "decompile", "arguments": {}})
         result = api_discovery._redirecting_dispatch(req)
-        assert _is_local_registry_response(result), f"Expected local response, got: {result}"
+        assert _is_local_registry_response(result), (
+            f"Expected local response, got: {result}"
+        )
         assert not _is_proxy_error(result)
 
 
@@ -355,7 +368,9 @@ def test_dispatch_unknown_method_proxied_with_fallback():
         req = _make_jsonrpc("resources/list", {})
         result = api_discovery._redirecting_dispatch(req)
         # Proxy to port 1 fails; fallback gives us a local registry response
-        assert _is_local_registry_response(result), f"Expected local fallback, got: {result}"
+        assert _is_local_registry_response(result), (
+            f"Expected local fallback, got: {result}"
+        )
         assert not _is_proxy_error(result)
 
 

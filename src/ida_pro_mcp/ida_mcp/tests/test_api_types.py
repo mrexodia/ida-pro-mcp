@@ -373,7 +373,9 @@ def test_set_type_global_invalid_type_name():
 @test()
 def test_type_apply_batch():
     """type_apply_batch applies edits and returns summary counters"""
-    result = type_apply_batch({"edits": [{"addr": _require_any_function(), "ty": TYPE_APPLY_SIGNATURE}]})
+    result = type_apply_batch(
+        {"edits": [{"addr": _require_any_function(), "ty": TYPE_APPLY_SIGNATURE}]}
+    )
     assert "error" not in result
     assert "applied" in result
     assert "failed" in result

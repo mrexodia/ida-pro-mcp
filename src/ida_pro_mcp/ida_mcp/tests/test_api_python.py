@@ -11,7 +11,9 @@ from ..api_python import py_eval, py_exec_file
 @contextlib.contextmanager
 def _tmp_script(content):
     """Write content to a temporary .py file, yield its path, then clean up."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", delete=False, encoding="utf-8"
+    ) as f:
         f.write(content)
     try:
         yield f.name
@@ -93,7 +95,7 @@ def test_py_exec_file_returns_error_for_missing_file():
 @test()
 def test_py_exec_file_shared_globals():
     """py_exec_file uses shared globals so top-level defs are visible later in the script."""
-    with _tmp_script('def add(a, b): return a + b\nresult = add(3, 4)\n') as path:
+    with _tmp_script("def add(a, b): return a + b\nresult = add(3, 4)\n") as path:
         out = py_exec_file(path)
         assert out["result"] == "7"
         assert out["stderr"] == ""
@@ -102,7 +104,7 @@ def test_py_exec_file_shared_globals():
 @test()
 def test_py_exec_file_sets_dunder_file():
     """py_exec_file sets __file__ in the execution context."""
-    with _tmp_script('result = __file__\n') as path:
+    with _tmp_script("result = __file__\n") as path:
         out = py_exec_file(path)
         assert out["result"] == path
         assert out["stderr"] == ""
@@ -111,7 +113,9 @@ def test_py_exec_file_sets_dunder_file():
 @test()
 def test_py_exec_file_sets_dunder_name_main():
     """py_exec_file should execute scripts as __main__ so __name__ guards run."""
-    script = 'if __name__ == "__main__":\n    result = "ran"\nelse:\n    result = __name__\n'
+    script = (
+        'if __name__ == "__main__":\n    result = "ran"\nelse:\n    result = __name__\n'
+    )
     with _tmp_script(script) as path:
         out = py_exec_file(path)
         assert out["result"] == "ran"

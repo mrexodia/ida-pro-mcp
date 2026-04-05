@@ -348,7 +348,9 @@ def test_rename_stack_roundtrip():
             }
         )
         assert "error" not in result["stack"][0]
-        names = {var["name"] for var in stack_frame(TYPED_FIXTURE_USE_WRAPPER)[0]["vars"]}
+        names = {
+            var["name"] for var in stack_frame(TYPED_FIXTURE_USE_WRAPPER)[0]["vars"]
+        }
         assert "rhs_stack" in names
     finally:
         rename(
@@ -367,7 +369,9 @@ def test_rename_stack_roundtrip():
 @test(binary="typed_fixture.elf")
 def test_rename_stack_missing_member_error():
     """rename(stack=...) reports missing frame members explicitly."""
-    result = rename({"stack": [{"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "nope", "new": "x"}]})
+    result = rename(
+        {"stack": [{"func_addr": TYPED_FIXTURE_USE_WRAPPER, "old": "nope", "new": "x"}]}
+    )
     assert "error" in result["stack"][0]
     assert_error(result["stack"][0], contains="not found")
 

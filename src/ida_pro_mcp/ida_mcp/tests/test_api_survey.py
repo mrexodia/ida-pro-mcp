@@ -126,7 +126,9 @@ def test_survey_binary_interesting_functions_structure():
     assert isinstance(funcs, list)
     if funcs:
         for fn in funcs:
-            assert_has_keys(fn, "addr", "name", "size", "xref_count", "callee_count", "type")
+            assert_has_keys(
+                fn, "addr", "name", "size", "xref_count", "callee_count", "type"
+            )
             assert_valid_address(fn["addr"])
             assert isinstance(fn["size"], int)
             assert fn["type"] in ("thunk", "wrapper", "leaf", "dispatcher", "complex")
@@ -138,7 +140,14 @@ def test_survey_binary_imports_by_category_structure():
     result = survey_binary()
     imports = result.get("imports_by_category", {})
     assert isinstance(imports, dict)
-    expected_categories = {"crypto", "network", "file_io", "process", "registry", "other"}
+    expected_categories = {
+        "crypto",
+        "network",
+        "file_io",
+        "process",
+        "registry",
+        "other",
+    }
     assert set(imports.keys()) == expected_categories
     for category, items in imports.items():
         assert isinstance(items, list)
@@ -175,7 +184,7 @@ def test_survey_binary_crackme_has_expected_functions():
     result = survey_binary()
     stats = result["statistics"]
     assert stats["total_functions"] > 0
-    
+
     funcs = result.get("interesting_functions", [])
     func_names = {f["name"] for f in funcs}
     # main or check_pw should be among interesting functions (high xref or named)
@@ -188,7 +197,7 @@ def test_survey_binary_crackme_has_strings():
     result = survey_binary()
     stats = result["statistics"]
     assert stats["total_strings"] > 0
-    
+
     strings = result.get("interesting_strings", [])
     string_values = {s["string"] for s in strings}
     # Should find at least one of the crackme strings

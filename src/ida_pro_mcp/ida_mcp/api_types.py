@@ -302,7 +302,9 @@ def enum_upsert(
                     )
                     conflict_count += 1
                     continue
-                member_results.append({"name": member_name, "value": value, "created": True})
+                member_results.append(
+                    {"name": member_name, "value": value, "created": True}
+                )
                 created_count += 1
 
             result_dict: dict = {
@@ -883,7 +885,10 @@ def _parse_type_tinfo(type_text: str) -> ida_typeinf.tinfo_t:
             tif = ida_typeinf.tinfo_t()
             try:
                 # parse_decl returns '' on success in IDA 9.0, check is not None
-                if parse_decl(tif, None, candidate, flags) is not None and not tif.empty():
+                if (
+                    parse_decl(tif, None, candidate, flags) is not None
+                    and not tif.empty()
+                ):
                     return tif
             except Exception:
                 continue
@@ -918,7 +923,10 @@ def _parse_function_tinfo(signature_text: str) -> ida_typeinf.tinfo_t:
             tif = ida_typeinf.tinfo_t()
             try:
                 # parse_decl returns '' on success in IDA 9.0, check is not None
-                if parse_decl(tif, None, candidate, flags) is not None and tif.is_func():
+                if (
+                    parse_decl(tif, None, candidate, flags) is not None
+                    and tif.is_func()
+                ):
                     return tif
             except Exception:
                 continue

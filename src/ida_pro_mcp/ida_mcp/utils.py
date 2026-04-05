@@ -827,7 +827,10 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
     tif = ida_typeinf.tinfo_t()
     flags = ida_typeinf.PT_SIL | ida_typeinf.PT_TYP
     candidate = type_name if type_name.endswith(";") else type_name + ";"
-    if ida_typeinf.parse_decl(tif, None, candidate, flags) is not None and not tif.empty():
+    if (
+        ida_typeinf.parse_decl(tif, None, candidate, flags) is not None
+        and not tif.empty()
+    ):
         return tif
 
     raise IDAError(f"Unable to retrieve {type_name} type info object")

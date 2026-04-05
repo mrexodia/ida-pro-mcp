@@ -278,7 +278,9 @@ def _analyze_function_internal(
 @tool_timeout(120.0)
 def analyze_function(
     addr: Annotated[str, "Function address or name"],
-    include_asm: Annotated[bool, "Include full disassembly (default: false, saves tokens)"] = False,
+    include_asm: Annotated[
+        bool, "Include full disassembly (default: false, saves tokens)"
+    ] = False,
 ) -> AnalyzeFunctionResult:
     """Compact single-function analysis: pseudocode, strings, constants, callers, callees, xrefs, blocks."""
 
@@ -507,6 +509,7 @@ def diff_before_after(
             if not type_str:
                 return {"error": "action_args must contain 'type'"}
             from .api_types import _parse_function_tinfo
+
             try:
                 tif = _parse_function_tinfo(type_str)
             except ValueError:

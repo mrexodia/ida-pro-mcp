@@ -44,6 +44,7 @@ except ImportError:
 
         sys.path.pop(0)
 
+
 class ProxyInstanceInfo(TypedDict, total=False):
     host: str
     port: int
@@ -121,9 +122,7 @@ def _proxy_to_instance(host: str, port: int, payload: bytes | str | dict) -> dic
         response = conn.getresponse()
         raw_data = response.read().decode()
         if response.status >= 400:
-            raise RuntimeError(
-                f"HTTP {response.status} {response.reason}: {raw_data}"
-            )
+            raise RuntimeError(f"HTTP {response.status} {response.reason}: {raw_data}")
         return json.loads(raw_data)
     finally:
         conn.close()
@@ -200,9 +199,9 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
                     if t.get("name") not in local_tool_names
                 ]
                 if local_result and "result" in local_result:
-                    local_result["result"]["tools"] = (
-                        ida_tools + local_result["result"].get("tools", [])
-                    )
+                    local_result["result"]["tools"] = ida_tools + local_result[
+                        "result"
+                    ].get("tools", [])
         except Exception:
             pass  # IDA unreachable — local tools still work
         return local_result
@@ -281,7 +280,10 @@ def select_instance(
             "message": "Reset to default IDA target",
         }
     if not probe_instance(host, port):
-        return {"success": False, "error": f"Instance at {host}:{port} is not reachable"}
+        return {
+            "success": False,
+            "error": f"Instance at {host}:{port} is not reachable",
+        }
     IDA_HOST = host
     IDA_PORT = port
     set_ida_rpc(IDA_HOST, IDA_PORT)
@@ -388,7 +390,10 @@ def _resolve_ida_rpc(args) -> None:
     else:
         print(f"[MCP] Found {len(instances)} IDA instances:", file=sys.stderr)
         for i, inst in enumerate(instances):
-            print(f"  [{i}] {inst['binary']} at {inst['host']}:{inst['port']}", file=sys.stderr)
+            print(
+                f"  [{i}] {inst['binary']} at {inst['host']}:{inst['port']}",
+                file=sys.stderr,
+            )
         inst = instances[0]
         IDA_HOST = inst["host"]
         IDA_PORT = inst["port"]

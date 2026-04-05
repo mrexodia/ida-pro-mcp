@@ -81,7 +81,9 @@ def test_tools_list_keeps_discovery_and_launch_tools_when_ida_unreachable():
         server.IDA_PORT = 1  # unreachable
         req = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
         result = server.dispatch_proxy(req)
-        assert "result" in result, f"Expected successful tools/list response, got: {result}"
+        assert "result" in result, (
+            f"Expected successful tools/list response, got: {result}"
+        )
         tool_names = {tool["name"] for tool in result["result"].get("tools", [])}
         assert "select_instance" in tool_names
         assert "list_instances" in tool_names
@@ -167,4 +169,6 @@ def test_safe_tools_unaffected_by_unsafe_removal():
         for name in MCP_UNSAFE:
             MCP_SERVER.tools.methods.pop(name, None)
         assert "decompile" not in MCP_UNSAFE, "decompile should not be unsafe"
-        assert "decompile" in MCP_SERVER.tools.methods, "decompile should survive removal"
+        assert "decompile" in MCP_SERVER.tools.methods, (
+            "decompile should survive removal"
+        )

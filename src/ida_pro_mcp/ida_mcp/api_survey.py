@@ -95,6 +95,7 @@ class SurveyBinaryResult(TypedDict, total=False):
     call_graph_summary: SurveyCallGraphSummary
     _note: str
 
+
 # Max functions to iterate for xref counting on large binaries.
 _MAX_FUNC_ITER = 10_000
 

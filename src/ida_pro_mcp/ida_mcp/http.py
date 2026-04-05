@@ -118,6 +118,7 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         else:
             # Mark proxied requests so _redirecting_dispatch won't re-proxy (loop prevention)
             from .api_discovery import PROXY_HEADER, set_request_proxied
+
             set_request_proxied(self.headers.get(PROXY_HEADER) == "1")
             try:
                 super().do_POST()
@@ -398,6 +399,7 @@ input[type="submit"]:hover {
 
         # Update the server's tools (discovery tools cannot be disabled)
         from .api_discovery import _LOCAL_TOOL_NAMES as PROTECTED_TOOLS
+
         enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS.keys()}
         for name in PROTECTED_TOOLS:
             enabled_tools[name] = True

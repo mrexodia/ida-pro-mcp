@@ -857,9 +857,7 @@ def define_code(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
             ea = parse_address(addr_str)
             length = ida_ua.create_insn(ea)
             if length > 0:
-                results.append(
-                    {"addr": addr_str, "ea": hex(ea), "length": length}
-                )
+                results.append({"addr": addr_str, "ea": hex(ea), "length": length})
             else:
                 results.append(
                     {

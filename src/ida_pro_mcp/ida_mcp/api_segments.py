@@ -60,9 +60,9 @@ def _seg_info(seg: ida_segment.segment_t) -> dict:
         "perm": seg.perm,
         "perm_str": "".join(
             [
-                "r" if seg.perm & ida_segment.SFL_READ else "-",
-                "w" if seg.perm & ida_segment.SFL_WRITE else "-",
-                "x" if seg.perm & ida_segment.SFL_EXEC else "-",
+                "r" if seg.perm & ida_segment.SEGPERM_READ else "-",
+                "w" if seg.perm & ida_segment.SEGPERM_WRITE else "-",
+                "x" if seg.perm & ida_segment.SEGPERM_EXEC else "-",
             ]
         )
         if seg.perm
