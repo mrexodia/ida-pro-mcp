@@ -411,11 +411,20 @@ class McpServer:
             request_handler,
             bind_and_activate=False
         )
-        # allow_reuse_address=True allows fast restarts (skip TCP TIME_WAIT).
-        # Do NOT set allow_reuse_port: on macOS SO_REUSEPORT lets multiple
-        # processes silently bind the same port, causing request mis-routing
-        # and SIGPIPE crashes when one instance closes.
-        self._http_server.allow_reuse_address = True
+        # Fast restarts: skip TCP TIME_WAIT so a port can be reused immediately
+        # after the server stops. On Windows, SO_REUSEADDR is dangerous (allows
+        # multiple processes to bind the same port silently), so we use
+        # SO_EXCLUSIVEADDRUSE instead, which still allows TIME_WAIT reuse but
+        # prevents port hijacking. On Unix, SO_REUSEADDR is the correct option.
+        import sys
+        if sys.platform == "win32":
+            import socket
+            self._http_server.allow_reuse_address = False
+            self._http_server.socket.setsockopt(
+                socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1  # type: ignore[attr-defined]
+            )
+        else:
+            self._http_server.allow_reuse_address = True
 
         # Set the MCPServer instance on the handler class
         setattr(self._http_server, "mcp_server", self)
@@ -785,6 +794,9 @@ class McpServer:
 
     def _type_to_json_schema(self, py_type: Any) -> dict:
         """Convert Python type hint to JSON schema object"""
+        if py_type is Any:
+            return {}
+
         origin = get_origin(py_type)
         # Annotated[T, "description"]
         if origin is Annotated:

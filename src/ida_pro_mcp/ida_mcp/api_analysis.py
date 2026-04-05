@@ -1,6 +1,6 @@
 from itertools import islice
 import struct
-from typing import Annotated, Optional
+from typing import Annotated, Any, NotRequired, Optional, TypedDict
 import ida_lines
 import ida_funcs
 import idaapi
@@ -44,6 +44,282 @@ from .utils import (
     AnalyzeBatchQuery,
 )
 from . import compat
+
+
+class DecompileResult(TypedDict):
+    addr: str
+    code: str | None
+    error: NotRequired[str]
+
+
+class ResultCursor(TypedDict, total=False):
+    next: int
+    done: bool
+
+
+class DisasmResult(TypedDict, total=False):
+    addr: str
+    asm: DisassemblyFunction | None
+    instruction_count: int
+    total_instructions: int | None
+    cursor: ResultCursor
+    error: str
+
+
+class FuncProfileItem(TypedDict, total=False):
+    addr: str
+    name: str
+    size: str
+    instruction_count: int
+    basic_block_count: int
+    caller_count: int
+    callee_count: int
+    string_ref_count: int
+    constant_count: int
+    has_type: bool
+    prototype: str | None
+    callers: list[dict[str, Any]]
+    callers_truncated: bool
+    callees: list[dict[str, Any]]
+    callees_truncated: bool
+    strings: list[dict[str, Any]]
+    strings_truncated: bool
+    constants: list[dict[str, Any]]
+    constants_truncated: bool
+    error: str | None
+
+
+class FuncProfileResult(TypedDict, total=False):
+    query: str
+    data: list[FuncProfileItem]
+    next_offset: int | None
+    error: str | None
+
+
+class AnalyzeBatchDisasm(TypedDict):
+    lines: list[str]
+    instruction_count: int
+    truncated: bool
+
+
+AnalyzeBatchXrefs = TypedDict(
+    "AnalyzeBatchXrefs",
+    {
+        "to": list[dict[str, str]],
+        "from": list[dict[str, str]],
+        "to_truncated": bool,
+        "from_truncated": bool,
+        "to_count": int,
+        "from_count": int,
+    },
+)
+
+
+class AnalyzeBatchDetails(TypedDict, total=False):
+    size: str
+    prototype: str | None
+    decompile: str | None
+    decompile_error: str | None
+    disasm: AnalyzeBatchDisasm | None
+    xrefs: AnalyzeBatchXrefs | None
+    callers: list[dict[str, Any]] | None
+    caller_count: int
+    callers_truncated: bool
+    callees: list[dict[str, Any]] | None
+    callee_count: int
+    callees_truncated: bool
+    strings: list[dict[str, Any]] | None
+    string_ref_count: int
+    strings_truncated: bool
+    constants: list[dict[str, Any]] | None
+    constant_count: int
+    constants_truncated: bool
+    basic_blocks: list[BasicBlock] | None
+    basic_block_count: int
+    basic_blocks_truncated: bool
+
+
+class AnalyzeBatchResult(TypedDict, total=False):
+    query: str
+    addr: str | None
+    name: str | None
+    analysis: AnalyzeBatchDetails | None
+    error: str | None
+
+
+class XrefsToResult(TypedDict, total=False):
+    addr: str
+    xrefs: list[Xref] | None
+    more: bool
+    error: str
+
+
+XrefQueryRow = TypedDict(
+    "XrefQueryRow",
+    {
+        "direction": str,
+        "addr": str,
+        "from": str,
+        "to": str,
+        "type": str,
+        "fn": Function | None,
+    },
+    total=False,
+)
+
+
+class XrefQueryResult(TypedDict, total=False):
+    query: str
+    resolved_addr: str | None
+    direction: str
+    xref_type: str
+    data: list[XrefQueryRow]
+    next_offset: int | None
+    total: int
+    error: str | None
+
+
+class StructFieldXrefsResult(TypedDict, total=False):
+    struct: str
+    field: str
+    xrefs: list[Xref]
+    error: str
+
+
+class CalleeResultItem(TypedDict):
+    addr: str
+    name: str
+    type: str
+
+
+class CalleesResult(TypedDict, total=False):
+    addr: str
+    callees: list[CalleeResultItem] | None
+    more: bool
+    error: str
+
+
+class FindBytesResult(TypedDict, total=False):
+    pattern: str
+    matches: list[str]
+    n: int
+    cursor: ResultCursor
+    error: str
+
+
+class BasicBlocksResult(TypedDict, total=False):
+    addr: str
+    error: str
+    blocks: list[BasicBlock]
+    count: int
+    total_blocks: int
+    cursor: ResultCursor
+
+
+class FindResult(TypedDict, total=False):
+    query: str | int | None
+    matches: list[str]
+    count: int
+    cursor: ResultCursor
+    error: str | None
+
+
+class InsnScanRange(TypedDict):
+    start: str
+    end: str
+
+
+class InsnQuerySummary(TypedDict, total=False):
+    mnem: str | None
+    op0: int | str | None
+    op1: int | str | None
+    op2: int | str | None
+    op_any: int | str | None
+    func: str | None
+    segment: str | None
+    start: str | None
+    end: str | None
+    offset: int
+    count: int
+    max_scan_insns: int
+    allow_broad: bool
+
+
+class InsnQueryMatch(TypedDict, total=False):
+    addr: str
+    disasm: str
+    fn: Function | None
+
+
+class InsnQueryResult(TypedDict, total=False):
+    query: InsnQuerySummary
+    ranges: list[InsnScanRange]
+    matches: list[InsnQueryMatch]
+    count: int
+    cursor: ResultCursor
+    scanned: int
+    truncated: bool
+    next_start: str | None
+    error: str | None
+
+
+class ExportedFunctionJson(TypedDict, total=False):
+    addr: str
+    name: str | None
+    prototype: str | None
+    size: str
+    comments: dict[str, dict[str, str]]
+    asm: str
+    code: str | None
+    xrefs: dict[str, list[dict[str, str]]]
+    error: str
+
+
+class ExportedPrototype(TypedDict, total=False):
+    name: str | None
+    prototype: str
+
+
+class ExportFuncsJsonResult(TypedDict):
+    format: str
+    functions: list[ExportedFunctionJson]
+
+
+class ExportFuncsHeaderResult(TypedDict):
+    format: str
+    content: str
+
+
+class ExportFuncsPrototypesResult(TypedDict):
+    format: str
+    functions: list[ExportedPrototype]
+
+
+class CallGraphNode(TypedDict):
+    addr: str
+    name: str | None
+    depth: int
+
+
+CallGraphEdge = TypedDict(
+    "CallGraphEdge",
+    {"from": str, "to": str, "type": str},
+)
+
+
+class CallGraphResult(TypedDict, total=False):
+    root: str
+    nodes: list[CallGraphNode]
+    edges: list[CallGraphEdge]
+    max_depth: int
+    truncated: bool
+    limit_reason: str | None
+    max_nodes: int
+    max_edges: int
+    max_edges_per_func: int
+    per_func_capped: bool
+    error: str
+
 
 # ============================================================================
 # Instruction Helpers
@@ -306,7 +582,7 @@ def _profile_function(
     include_lists: bool,
     max_items: int,
     include_prototype: bool,
-) -> dict:
+) -> FuncProfileItem:
     func = idaapi.get_func(start_ea)
     if not func:
         return {"addr": hex(start_ea), "error": "Function not found"}
@@ -369,7 +645,7 @@ def _profile_function(
 @tool_timeout(90.0)
 def decompile(
     addr: Annotated[str, "Function address or name to decompile"],
-) -> dict:
+) -> DecompileResult:
     """Decompile function(s) at address(es); returns pseudocode and per-item errors."""
     try:
         try:
@@ -403,7 +679,7 @@ def disasm(
     include_total: Annotated[
         bool, "Compute total instruction count (default: false)"
     ] = False,
-) -> dict:
+) -> DisasmResult:
     """Disassemble function with offset/max_instructions pagination and optional total count."""
 
     # Enforce max limit
@@ -448,7 +724,7 @@ def disasm(
             func_name = "<no function>"
             header_addr = start
 
-        lines = []
+        lines: list[dict] = []
         seen = 0
         total_count = 0
         more = False
@@ -463,7 +739,7 @@ def disasm(
             if len(lines) < max_instructions:
                 line = ida_lines.generate_disasm_line(ea, 0)
                 instruction = ida_lines.tag_remove(line) if line else ""
-                lines.append(f"{ea:x}  {instruction}")
+                lines.append({"addr": f"{ea:x}", "instruction": instruction})
                 seen += 1
                 return True
             more = True
@@ -494,10 +770,6 @@ def disasm(
         if include_total and not more:
             more = total_count > offset + max_instructions
 
-        lines_str = f"{func_name} ({segment_name} @ {hex(header_addr)}):"
-        if lines:
-            lines_str += "\n" + "\n".join(lines)
-
         rettype = None
         args: Optional[list[Argument]] = None
         stack_frame = None
@@ -517,7 +789,8 @@ def disasm(
         out: DisassemblyFunction = {
             "name": func_name,
             "start_ea": hex(header_addr),
-            "lines": lines_str,
+            "segment": segment_name,
+            "lines": lines,
         }
         if stack_frame:
             out["stack_frame"] = stack_frame
@@ -555,7 +828,7 @@ def func_profile(
         list[FuncProfileQuery] | FuncProfileQuery | str,
         "Function profiling query (supports name/address filters + pagination)",
     ],
-) -> list[dict]:
+) -> list[FuncProfileResult]:
     """Profile functions with summary metrics and optional sampled details."""
     queries = normalize_dict_list(
         queries,
@@ -668,7 +941,7 @@ def analyze_batch(
         list[AnalyzeBatchQuery] | AnalyzeBatchQuery | str,
         "Comprehensive per-function analysis with selectable sections",
     ],
-) -> list[dict]:
+) -> list[AnalyzeBatchResult]:
     """Run comprehensive analysis over one or more target functions."""
     queries = normalize_dict_list(
         queries,
@@ -877,7 +1150,7 @@ def analyze_batch(
 def xrefs_to(
     addrs: Annotated[list[str] | str, "Addresses to find cross-references to"],
     limit: Annotated[int, "Max xrefs per address (default: 100, max: 1000)"] = 100,
-) -> list[dict]:
+) -> list[XrefsToResult]:
     """Return xrefs to address(es), capped per target with truncation flag."""
     addrs = normalize_list_input(addrs)
 
@@ -915,7 +1188,7 @@ def xref_query(
         list[XrefQuery] | XrefQuery | str,
         "Generic xref query with direction/type filters and pagination",
     ],
-) -> list[dict]:
+) -> list[XrefQueryResult]:
     """Query xrefs with direction/type filters and pagination."""
     queries = normalize_dict_list(
         queries,
@@ -1043,7 +1316,9 @@ def xref_query(
 
 @tool
 @idasync
-def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[dict]:
+def xrefs_to_field(
+    queries: list[StructFieldQuery] | StructFieldQuery,
+) -> list[StructFieldXrefsResult]:
     """Get cross-references to structure fields"""
     if isinstance(queries, dict):
         queries = [queries]
@@ -1138,7 +1413,7 @@ def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[d
 def callees(
     addrs: Annotated[list[str] | str, "Function addresses to get callees for"],
     limit: Annotated[int, "Max callees per function (default: 200, max: 500)"] = 200,
-) -> list[dict]:
+) -> list[CalleesResult]:
     """Return unique callees per function, capped by limit."""
     addrs = normalize_list_input(addrs)
 
@@ -1223,7 +1498,7 @@ def find_bytes(
     ],
     limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
-) -> list[dict]:
+) -> list[FindBytesResult]:
     """Search byte patterns (supports ??) with offset/limit pagination."""
     patterns = normalize_list_input(patterns)
 
@@ -1311,7 +1586,7 @@ def basic_blocks(
         int, "Max basic blocks per function (default: 1000, max: 10000)"
     ] = 1000,
     offset: Annotated[int, "Skip first N blocks (default: 0)"] = 0,
-) -> list[dict]:
+) -> list[BasicBlocksResult]:
     """Return function CFG blocks with offset/max_blocks pagination."""
     addrs = normalize_list_input(addrs)
 
@@ -1364,7 +1639,6 @@ def basic_blocks(
                     "cursor": (
                         {"next": offset + max_blocks} if more else {"done": True}
                     ),
-                    "error": None,
                 }
             )
         except Exception as e:
@@ -1395,7 +1669,7 @@ def find(
     ],
     limit: Annotated[int, "Max matches per target (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
-) -> list[dict]:
+) -> list[FindResult]:
     """Search strings/immediates/refs for targets with offset/limit pagination."""
     if not isinstance(targets, list):
         targets = [targets]
@@ -1770,7 +2044,7 @@ def insn_query(
         list[InsnPattern] | InsnPattern | str,
         "Instruction query with mnemonic/operand filters and scoped scan",
     ],
-) -> list[dict]:
+) -> list[InsnQueryResult]:
     """Query instructions with mnemonic/operand filters and scoped scans."""
     queries = normalize_dict_list(
         queries,
@@ -1900,7 +2174,7 @@ def export_funcs(
     format: Annotated[
         str, "Export format: json (default), c_header, or prototypes"
     ] = "json",
-) -> dict:
+) -> ExportFuncsJsonResult | ExportFuncsHeaderResult | ExportFuncsPrototypesResult:
     """Export function data for addresses in json/c_header/prototypes formats."""
     addrs = normalize_list_input(addrs)
     results = []
@@ -1973,7 +2247,7 @@ def callgraph(
     max_edges_per_func: Annotated[
         int, "Max edges per function (default: 200, max: 5000)"
     ] = 200,
-) -> list[dict]:
+) -> list[CallGraphResult]:
     """Build bounded callgraph from roots with depth/node/edge limits."""
     roots = normalize_list_input(roots)
     if max_depth < 0:
@@ -2077,7 +2351,6 @@ def callgraph(
                     "max_edges": max_edges,
                     "max_edges_per_func": max_edges_per_func,
                     "per_func_capped": per_func_capped,
-                    "error": None,
                 }
             )
 

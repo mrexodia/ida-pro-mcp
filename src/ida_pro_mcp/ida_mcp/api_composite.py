@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Annotated
+from typing import Annotated, Any, TypedDict
 
 from .rpc import tool, unsafe
 from .sync import idasync, tool_timeout, IDAError
@@ -32,6 +32,100 @@ _TOP_CONSTANTS = 10
 _BORING_CONSTANTS = frozenset({0, 1, -1, 0xFF, 0xFFFF, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF})
 
 
+class BasicBlockSummary(TypedDict):
+    count: int
+    cyclomatic_complexity: int
+
+
+class AnalyzeFunctionResult(TypedDict, total=False):
+    addr: str
+    name: str
+    prototype: str | None
+    size: int
+    decompiled: str | None
+    decompile_truncated: int
+    assembly: str | None
+    strings: list[str]
+    constants: list[dict[str, Any]]
+    callees: list[str]
+    callers: list[str]
+    xrefs: dict[str, Any]
+    comments: dict[str, Any]
+    basic_blocks: BasicBlockSummary
+    error: str | None
+
+
+class ComponentFunctionSummary(TypedDict, total=False):
+    addr: str
+    name: str
+    prototype: str | None
+    size: int
+    callees: list[str]
+    strings: list[str]
+    basic_blocks: int
+    complexity: int
+    error: str
+
+
+ComponentGraphEdge = TypedDict(
+    "ComponentGraphEdge",
+    {"from": str, "to": str, "name": str},
+)
+
+
+class InternalCallGraph(TypedDict):
+    nodes: list[str]
+    edges: list[ComponentGraphEdge]
+
+
+class SharedGlobalInfo(TypedDict):
+    addr: str
+    name: str
+    accessed_by: list[str]
+
+
+class AnalyzeComponentResult(TypedDict, total=False):
+    functions: list[ComponentFunctionSummary]
+    internal_call_graph: InternalCallGraph
+    shared_globals: list[SharedGlobalInfo]
+    interface_functions: list[str]
+    internal_only: list[str]
+    string_usage: dict[str, list[str]]
+    error: str
+
+
+class DiffBeforeAfterResult(TypedDict, total=False):
+    before: str | None
+    after: str | None
+    action_applied: str
+    changes_detected: bool
+    error: str
+
+
+class TraceDataFlowNode(TypedDict):
+    addr: str
+    func: str | None
+    instruction: str | None
+    type: str
+    name: str | None
+    depth: int
+
+
+TraceDataFlowEdge = TypedDict(
+    "TraceDataFlowEdge",
+    {"from": str, "to": str, "type": str},
+)
+
+
+class TraceDataFlowResult(TypedDict, total=False):
+    start: str
+    direction: str
+    depth_reached: int
+    nodes: list[TraceDataFlowNode]
+    edges: list[TraceDataFlowEdge]
+    error: str
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers (no @tool — called from within @idasync context)
 # ---------------------------------------------------------------------------
@@ -50,7 +144,7 @@ def _resolve_addr(addr: str) -> int:
         return ea
 
 
-def _basic_block_info(ea: int) -> dict:
+def _basic_block_info(ea: int) -> BasicBlockSummary:
     """Return block count and cyclomatic complexity for the function at *ea*."""
     import idaapi
 
@@ -118,7 +212,9 @@ def _compact_callees(raw: list[dict]) -> list[str]:
     return [c.get("name") or c.get("addr", "?") for c in raw]
 
 
-def _analyze_function_internal(ea: int, *, include_asm: bool = False) -> dict:
+def _analyze_function_internal(
+    ea: int, *, include_asm: bool = False
+) -> AnalyzeFunctionResult:
     """Core analysis logic — must be called from an @idasync context.
 
     Returns a compact response by default: decompilation capped at 100 lines,
@@ -182,17 +278,9 @@ def _analyze_function_internal(ea: int, *, include_asm: bool = False) -> dict:
 @tool_timeout(120.0)
 def analyze_function(
     addr: Annotated[str, "Function address or name"],
-    include_asm: Annotated[
-        bool, "Include full disassembly (default: false, saves tokens)"
-    ] = False,
-) -> dict:
-    """Get a compact analysis of a single function: decompiled pseudocode (capped
-    at 100 lines), top 10 strings as values, top 10 non-trivial constants, caller
-    and callee names, cross-references, and basic block metrics. Disassembly is
-    excluded by default to save context tokens — set include_asm=true only when
-    you need raw instructions (crypto analysis, shellcode, decompiler failure).
-    Use this instead of calling decompile, disasm, callees, xrefs_to, stack_frame,
-    and basic_blocks separately."""
+    include_asm: Annotated[bool, "Include full disassembly (default: false, saves tokens)"] = False,
+) -> AnalyzeFunctionResult:
+    """Compact single-function analysis: pseudocode, strings, constants, callers, callees, xrefs, blocks."""
 
     try:
         ea = _resolve_addr(addr)
@@ -212,14 +300,8 @@ def analyze_function(
 @tool_timeout(180.0)
 def analyze_component(
     addrs: Annotated[list[str] | str, "Function addresses (comma-separated or list)"],
-) -> dict:
-    """Analyze a group of related functions as one logical unit. Returns a COMPACT
-    summary of each function (name, prototype, size, callee names, top 5 strings,
-    block count) plus relationship data: internal call graph, shared globals,
-    interface vs internal classification, and strings used by multiple functions.
-    Use analyze_function on individual addresses if you need full decompilation.
-    Use this when you see a cluster of sub_* functions called from the same parent
-    or when callees/callers overlap suggests a module."""
+) -> AnalyzeComponentResult:
+    """Analyze related functions as a group: per-function summaries, internal call graph, shared data."""
 
     import idaapi
     import idautils
@@ -378,7 +460,7 @@ def diff_before_after(
     addr: Annotated[str, "Function address"],
     action: Annotated[str, "Action: 'rename_func', 'set_type', 'set_comment'"],
     action_args: Annotated[dict, "Arguments for the action"],
-) -> dict:
+) -> DiffBeforeAfterResult:
     """Rename a function, set its type, or add a comment, and immediately see the
     before/after decompilation side by side. Use this instead of calling rename
     then decompile separately when you want to verify that a rename or type change
@@ -388,6 +470,7 @@ def diff_before_after(
     during batch renaming to confirm each change had the intended effect."""
 
     import idaapi
+    import ida_hexrays
     import ida_typeinf
 
     if action not in _VALID_ACTIONS:
@@ -423,10 +506,10 @@ def diff_before_after(
             type_str = action_args.get("type")
             if not type_str:
                 return {"error": "action_args must contain 'type'"}
-            tif = ida_typeinf.tinfo_t()
-            til = ida_typeinf.get_idati()
-            parsed = ida_typeinf.parse_decl(tif, til, type_str, ida_typeinf.PT_SIL)
-            if parsed is None:
+            from .api_types import _parse_function_tinfo
+            try:
+                tif = _parse_function_tinfo(type_str)
+            except ValueError:
                 return {"error": f"Failed to parse type: {type_str!r}"}
             ok = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE)
             if not ok:
@@ -445,7 +528,8 @@ def diff_before_after(
     except Exception as exc:
         return {"error": f"Action {action!r} failed: {exc}"}
 
-    # --- After ---
+    # --- After (invalidate Hex-Rays cache so we see the change) ---
+    ida_hexrays.mark_cfunc_dirty(ea)
     after = decompile_function_safe(ea)
 
     return {
@@ -473,7 +557,7 @@ def trace_data_flow(
         str, "'forward' (xrefs from) or 'backward' (xrefs to)"
     ] = "forward",
     max_depth: Annotated[int, "Maximum traversal depth"] = 5,
-) -> dict:
+) -> TraceDataFlowResult:
     """Follow cross-references from or to an address, automatically traversing
     multiple hops. Use 'forward' to see where data flows TO (xrefs-from), or
     'backward' to see where data flows FROM (xrefs-to). At each node in the

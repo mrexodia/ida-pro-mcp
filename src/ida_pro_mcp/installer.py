@@ -124,14 +124,13 @@ def infer_http_transport_type(transport_url: str) -> str:
 
 def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
     if transport == "stdio":
+        # No --ida-rpc: server auto-discovers running IDA instances
         if client_name == "Opencode":
             mcp_config = {
                 "type": "local",
                 "command": [
                     get_python_executable(),
                     SERVER_SCRIPT,
-                    "--ida-rpc",
-                    f"http://{IDA_HOST}:{IDA_PORT}",
                 ],
             }
         else:
@@ -139,8 +138,6 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
                 "command": get_python_executable(),
                 "args": [
                     SERVER_SCRIPT,
-                    "--ida-rpc",
-                    f"http://{IDA_HOST}:{IDA_PORT}",
                 ],
             }
         env = {}

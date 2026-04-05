@@ -59,7 +59,7 @@ def test_declare_delete_stack_roundtrip():
         declared = declare_stack(
             {"addr": CRACKME_MAIN, "name": TEST_STACK_VAR, "offset": -8, "ty": "int"}
         )[0]
-        assert declared.get("ok") is True
+        assert "error" not in declared
         during = stack_frame(CRACKME_MAIN)[0]
         assert TEST_STACK_VAR in [var["name"] for var in during["vars"]]
     finally:
@@ -91,7 +91,7 @@ def test_stack_frame_batch_on_typed_fixture():
     result = stack_frame(["0x1013dc0", "0x1069f80"])
     assert_is_list(result, min_length=2)
     assert result[0]["addr"] == "0x1013dc0"
-    assert result[0].get("error") in (None, "")
+    assert "error" not in result[0]
     assert any(var["name"] == "rhs_handle" for var in result[0]["vars"])
     assert result[1]["addr"] == "0x1069f80"
     assert result[1].get("vars") is None
@@ -109,7 +109,7 @@ def test_declare_delete_stack_roundtrip_typed_fixture():
         declared = declare_stack(
             {"addr": "0x1013dc0", "name": TEST_STACK_VAR, "offset": -0x18, "ty": "int"}
         )[0]
-        assert declared.get("ok") is True
+        assert "error" not in declared
         during = stack_frame("0x1013dc0")[0]
         assert TEST_STACK_VAR in [var["name"] for var in during["vars"]]
     finally:
@@ -126,7 +126,8 @@ def test_declare_stack_invalid_type_error():
         {"addr": "0x1013dc0", "name": "x", "offset": -0x18, "ty": "NoSuchType"}
     )
     assert_is_list(result, min_length=1)
-    assert_error(result[0], contains="Invalid input data")
+    # Error message may vary: "Unable to retrieve ... type info object" or similar
+    assert_error(result[0], contains="NoSuchType")
 
 
 @test(binary="typed_fixture.elf")

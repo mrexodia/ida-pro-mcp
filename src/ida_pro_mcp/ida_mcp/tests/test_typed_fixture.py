@@ -65,8 +65,9 @@ def test_typed_fixture_decompile_and_disasm():
 
     asm = disasm(USE_WRAPPER, max_instructions=40)
     assert_ok(asm, "asm")
-    assert "sum_point" in asm["asm"]["lines"]
-    assert "4D2h" in asm["asm"]["lines"]
+    lines_text = " ".join(item["instruction"] for item in asm["asm"]["lines"])
+    assert "sum_point" in lines_text
+    assert "4D2h" in lines_text
 
 
 @test(binary="typed_fixture.elf")
@@ -132,7 +133,7 @@ def test_typed_fixture_put_int_roundtrip():
     original_plain = _plain_hex_bytes(original)
     try:
         written = put_int({"addr": G_NUMBERS, "ty": "u32", "value": "99"})[0]
-        assert written["ok"] is True
+        assert "error" not in written
         roundtrip = get_int({"addr": G_NUMBERS, "ty": "u32"})[0]
         assert roundtrip["value"] == 99
     finally:
@@ -148,7 +149,7 @@ def test_typed_fixture_struct_types_and_resources():
     assert any(item["name"] == "Wrapper" for item in wrapper_matches)
 
     set_point = set_type({"addr": G_POINT, "ty": "Point"})[0]
-    assert set_point.get("ok") is True
+    assert "error" not in set_point
     auto = read_struct({"addr": G_POINT})[0]
     assert auto["struct"] == "Point"
     members = {m["name"]: m["value"] for m in auto["members"]}
@@ -156,7 +157,7 @@ def test_typed_fixture_struct_types_and_resources():
     assert members["y"].endswith("(22)")
 
     wrapper = struct_name_resource("Wrapper")
-    assert wrapper.get("error") is None
+    assert "error" not in wrapper
     assert len(wrapper["members"]) == 2
 
     inferred = infer_types(G_POINT)[0]
@@ -175,7 +176,7 @@ def test_typed_fixture_set_type_local_and_stack_paths():
         }
     )[0]
     assert (
-        local.get("ok") is True
+        "error" not in local
         or local.get("error") == "Failed to apply local variable type"
     )
 
@@ -187,7 +188,7 @@ def test_typed_fixture_set_type_local_and_stack_paths():
             "ty": "int",
         }
     )[0]
-    assert stack.get("ok") is True
+    assert "error" not in stack
 
 
 @test(binary="typed_fixture.elf")
@@ -206,7 +207,7 @@ def test_typed_fixture_rename_local_and_stack_paths():
             }
         )
         assert (
-            local["local"][0].get("ok") is True
+            "error" not in local["local"][0]
             or local["local"][0].get("error") == "Rename failed"
         )
         stack = rename(
@@ -220,7 +221,7 @@ def test_typed_fixture_rename_local_and_stack_paths():
                 ]
             }
         )
-        assert stack["stack"][0]["ok"] is True
+        assert "error" not in stack["stack"][0]
         frame = stack_frame(USE_WRAPPER)[0]
         names = {var["name"] for var in frame["vars"]}
         assert "rhs_stack" in names

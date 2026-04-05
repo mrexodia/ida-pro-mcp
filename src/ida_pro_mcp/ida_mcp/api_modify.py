@@ -1,3 +1,5 @@
+from typing import Any, NotRequired, TypedDict
+
 import idaapi
 import idautils
 import idc
@@ -28,6 +30,66 @@ from .utils import (
 )
 
 
+class CommentResult(TypedDict):
+    addr: str
+    error: NotRequired[str]
+
+
+class AppendCommentResult(TypedDict):
+    addr: str
+    scope: NotRequired[str]
+    appended: NotRequired[bool]
+    skipped: NotRequired[bool]
+    error: NotRequired[str]
+
+
+class PatchAsmResult(TypedDict):
+    addr: str
+    error: NotRequired[str]
+
+
+class RenameItemResult(TypedDict, total=False):
+    addr: str
+    func_addr: str
+    old: str
+    new: str | None
+    name: str
+    dir: str
+    dir_error: str
+    dry_run: bool
+    error: str
+
+
+class RenameSummaryResult(TypedDict, total=False):
+    total: int
+    ok: int
+    failed: int
+    stopped: bool
+    dry_run: bool
+    allow_overwrite: bool
+    stop_on_error: bool
+    stopped_at: str
+
+
+class RenameResult(TypedDict, total=False):
+    func: list[RenameItemResult]
+    data: list[RenameItemResult]
+    global_alias: list[RenameItemResult]
+    local: list[RenameItemResult]
+    stack: list[RenameItemResult]
+    summary: RenameSummaryResult
+
+
+class DefineResult(TypedDict, total=False):
+    addr: str
+    ea: str
+    start: str
+    end: str
+    size: int
+    length: int
+    error: str
+
+
 # ============================================================================
 # Modification Operations
 # ============================================================================
@@ -35,7 +97,7 @@ from .utils import (
 
 @tool
 @idasync
-def set_comments(items: list[CommentOp] | CommentOp):
+def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
     """Set comments at addresses (both disassembly and decompiler views)"""
     if isinstance(items, dict):
         items = [items]
@@ -58,19 +120,19 @@ def set_comments(items: list[CommentOp] | CommentOp):
                 continue
 
             if not ida_hexrays.init_hexrays_plugin():
-                results.append({"addr": addr_str, "ok": True})
+                results.append({"addr": addr_str})
                 continue
 
             try:
                 cfunc = decompile_checked(ea)
             except IDAError:
-                results.append({"addr": addr_str, "ok": True})
+                results.append({"addr": addr_str})
                 continue
 
             if ea == cfunc.entry_ea:
                 idc.set_func_cmt(ea, comment, True)
                 cfunc.refresh_func_ctext()
-                results.append({"addr": addr_str, "ok": True})
+                results.append({"addr": addr_str})
                 continue
 
             eamap = cfunc.get_eamap()
@@ -78,7 +140,6 @@ def set_comments(items: list[CommentOp] | CommentOp):
                 results.append(
                     {
                         "addr": addr_str,
-                        "ok": True,
                         "error": f"Failed to set decompiler comment at {hex(ea)}",
                     }
                 )
@@ -97,7 +158,7 @@ def set_comments(items: list[CommentOp] | CommentOp):
                 cfunc.save_user_cmts()
                 cfunc.refresh_func_ctext()
                 if not cfunc.has_orphan_cmts():
-                    results.append({"addr": addr_str, "ok": True})
+                    results.append({"addr": addr_str})
                     break
                 cfunc.del_orphan_cmts()
                 cfunc.save_user_cmts()
@@ -105,7 +166,6 @@ def set_comments(items: list[CommentOp] | CommentOp):
                 results.append(
                     {
                         "addr": addr_str,
-                        "ok": True,
                         "error": f"Failed to set decompiler comment at {hex(ea)}",
                     }
                 )
@@ -117,7 +177,9 @@ def set_comments(items: list[CommentOp] | CommentOp):
 
 @tool
 @idasync
-def append_comments(items: list[CommentAppendOp] | CommentAppendOp):
+def append_comments(
+    items: list[CommentAppendOp] | CommentAppendOp,
+) -> list[AppendCommentResult]:
     """Append comments at addresses, deduping exact text by default."""
     if isinstance(items, dict):
         items = [items]
@@ -154,9 +216,7 @@ def append_comments(items: list[CommentAppendOp] | CommentAppendOp):
                     current, comment, dedupe=dedupe
                 )
                 if skipped:
-                    results.append(
-                        {"addr": addr_str, "ok": True, "scope": "func", "skipped": True}
-                    )
+                    results.append({"addr": addr_str, "scope": "func", "skipped": True})
                     continue
                 if not idc.set_func_cmt(target_ea, new_comment, False):
                     results.append(
@@ -166,17 +226,13 @@ def append_comments(items: list[CommentAppendOp] | CommentAppendOp):
                         }
                     )
                     continue
-                results.append(
-                    {"addr": addr_str, "ok": True, "scope": "func", "appended": True}
-                )
+                results.append({"addr": addr_str, "scope": "func", "appended": True})
                 continue
 
             current = idaapi.get_cmt(ea, False) or ""
             new_comment, skipped = _append_comment_text(current, comment, dedupe=dedupe)
             if skipped:
-                results.append(
-                    {"addr": addr_str, "ok": True, "scope": "line", "skipped": True}
-                )
+                results.append({"addr": addr_str, "scope": "line", "skipped": True})
                 continue
             if not idaapi.set_cmt(ea, new_comment, False):
                 results.append(
@@ -186,9 +242,7 @@ def append_comments(items: list[CommentAppendOp] | CommentAppendOp):
                     }
                 )
                 continue
-            results.append(
-                {"addr": addr_str, "ok": True, "scope": "line", "appended": True}
-            )
+            results.append({"addr": addr_str, "scope": "line", "appended": True})
         except Exception as e:
             results.append({"addr": addr_str, "error": str(e)})
 
@@ -213,7 +267,7 @@ def _append_comment_text(
 
 @tool
 @idasync
-def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
+def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[PatchAsmResult]:
     """Patch assembly instructions at addresses"""
     if isinstance(items, dict):
         items = [items]
@@ -246,7 +300,7 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
                     )
                     break
             else:
-                results.append({"addr": addr_str, "ok": True})
+                results.append({"addr": addr_str})
         except Exception as e:
             results.append({"addr": addr_str, "error": str(e)})
 
@@ -255,7 +309,7 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
 
 @tool
 @idasync
-def rename(batch: RenameBatch | dict) -> dict:
+def rename(batch: RenameBatch | dict) -> RenameResult:
     """Batch-rename funcs/globals/locals/stack vars with dry-run options."""
 
     if not isinstance(batch, dict):
@@ -349,7 +403,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                     result = {
                         "addr": addr_text,
                         "name": new_name,
-                        "ok": False,
                         "error": "Function rename requires addr + name",
                     }
                     results.append(result)
@@ -364,7 +417,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                     result = {
                         "addr": addr_text,
                         "name": new_name,
-                        "ok": False,
                         "error": "Function not found",
                     }
                     results.append(result)
@@ -387,18 +439,21 @@ def rename(batch: RenameBatch | dict) -> dict:
                     "addr": addr_text,
                     "old": old_name,
                     "name": str(new_name),
-                    "ok": success,
-                    "error": error,
-                    "dir": "vibe" if success and placed else None,
-                    "dir_error": place_error if success else None,
-                    "dry_run": dry_run,
                 }
+                if error:
+                    result["error"] = error
+                if success and placed:
+                    result["dir"] = "vibe"
+                if place_error and success:
+                    result["dir_error"] = place_error
+                if dry_run:
+                    result["dry_run"] = True
                 results.append(result)
                 if not success and stop_on_error:
                     halted = True
                     break
             except Exception as e:
-                results.append({"addr": item.get("addr"), "ok": False, "error": str(e)})
+                results.append({"addr": item.get("addr"), "error": str(e)})
                 if stop_on_error:
                     halted = True
                     break
@@ -430,7 +485,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                     result = {
                         "old": old_name,
                         "new": None,
-                        "ok": False,
                         "error": "Global rename requires target and new name",
                     }
                     results.append(result)
@@ -450,7 +504,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                     result = {
                         "old": old_name,
                         "new": str(new_name),
-                        "ok": False,
                         "error": f"Global '{old_name}' not found",
                     }
                     results.append(result)
@@ -464,16 +517,17 @@ def rename(batch: RenameBatch | dict) -> dict:
                     "addr": hex(ea),
                     "old": old_name,
                     "new": str(new_name),
-                    "ok": success,
-                    "error": error,
-                    "dry_run": dry_run,
                 }
+                if error:
+                    result["error"] = error
+                if dry_run:
+                    result["dry_run"] = True
                 results.append(result)
                 if not success and stop_on_error:
                     halted = True
                     break
             except Exception as e:
-                results.append({"old": item.get("old"), "ok": False, "error": str(e)})
+                results.append({"old": item.get("old"), "error": str(e)})
                 if stop_on_error:
                     halted = True
                     break
@@ -492,7 +546,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                         "func_addr": func_addr,
                         "old": old_name,
                         "new": new_name,
-                        "ok": False,
                         "error": "Local rename requires func_addr + old + new",
                     }
                     results.append(result)
@@ -507,7 +560,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                         "func_addr": func_addr,
                         "old": old_name,
                         "new": new_name,
-                        "ok": False,
                         "error": "No function found",
                     }
                     results.append(result)
@@ -529,18 +581,17 @@ def rename(batch: RenameBatch | dict) -> dict:
                     "func_addr": func_addr,
                     "old": old_name,
                     "new": new_name,
-                    "ok": success,
-                    "error": error,
-                    "dry_run": dry_run,
                 }
+                if error:
+                    result["error"] = error
+                if dry_run:
+                    result["dry_run"] = True
                 results.append(result)
                 if not success and stop_on_error:
                     halted = True
                     break
             except Exception as e:
-                results.append(
-                    {"func_addr": item.get("func_addr"), "ok": False, "error": str(e)}
-                )
+                results.append({"func_addr": item.get("func_addr"), "error": str(e)})
                 if stop_on_error:
                     halted = True
                     break
@@ -559,7 +610,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                         "func_addr": func_addr,
                         "old": old_name,
                         "new": new_name,
-                        "ok": False,
                         "error": "Stack rename requires func_addr + old + new",
                     }
                     results.append(result)
@@ -574,7 +624,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                         "func_addr": func_addr,
                         "old": old_name,
                         "new": new_name,
-                        "ok": False,
                         "error": "No function found",
                     }
                     results.append(result)
@@ -589,7 +638,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                         "func_addr": func_addr,
                         "old": old_name,
                         "new": new_name,
-                        "ok": False,
                         "error": "No frame",
                     }
                     results.append(result)
@@ -604,7 +652,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                         "func_addr": func_addr,
                         "old": old_name,
                         "new": new_name,
-                        "ok": False,
                         "error": f"'{old_name}' not found",
                     }
                     results.append(result)
@@ -619,7 +666,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                         "func_addr": func_addr,
                         "old": old_name,
                         "new": new_name,
-                        "ok": False,
                         "error": "Special frame member",
                     }
                     results.append(result)
@@ -636,7 +682,6 @@ def rename(batch: RenameBatch | dict) -> dict:
                         "func_addr": func_addr,
                         "old": old_name,
                         "new": new_name,
-                        "ok": False,
                         "error": "Argument member",
                     }
                     results.append(result)
@@ -657,18 +702,17 @@ def rename(batch: RenameBatch | dict) -> dict:
                     "func_addr": func_addr,
                     "old": old_name,
                     "new": new_name,
-                    "ok": success,
-                    "error": error,
-                    "dry_run": dry_run,
                 }
+                if error:
+                    result["error"] = error
+                if dry_run:
+                    result["dry_run"] = True
                 results.append(result)
                 if not success and stop_on_error:
                     halted = True
                     break
             except Exception as e:
-                results.append(
-                    {"func_addr": item.get("func_addr"), "ok": False, "error": str(e)}
-                )
+                results.append({"func_addr": item.get("func_addr"), "error": str(e)})
                 if stop_on_error:
                     halted = True
                     break
@@ -723,27 +767,32 @@ def rename(batch: RenameBatch | dict) -> dict:
     for key in ("func", "data", "local", "stack"):
         for item in result.get(key, []):
             total += 1
-            if item.get("ok"):
+            if "error" not in item:
                 ok += 1
             else:
                 failed += 1
 
-    result["summary"] = {
+    summary: dict = {
         "total": total,
         "ok": ok,
         "failed": failed,
-        "dry_run": dry_run,
-        "allow_overwrite": allow_overwrite,
-        "stop_on_error": stop_on_error,
         "stopped": stopped,
-        "stopped_at": stopped_at,
     }
+    if dry_run:
+        summary["dry_run"] = True
+    if allow_overwrite:
+        summary["allow_overwrite"] = True
+    if stop_on_error:
+        summary["stop_on_error"] = True
+    if stopped:
+        summary["stopped_at"] = stopped_at
+    result["summary"] = summary
     return result
 
 
 @tool
 @idasync
-def define_func(items: list[DefineOp] | DefineOp) -> list[dict]:
+def define_func(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
     """Define functions; IDA infers bounds unless end is provided."""
     if isinstance(items, dict):
         items = [items]
@@ -777,7 +826,6 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[dict]:
                         "addr": addr_str,
                         "start": hex(func.start_ea),
                         "end": hex(func.end_ea),
-                        "ok": True,
                     }
                 )
             else:
@@ -796,7 +844,7 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[dict]:
 
 @tool
 @idasync
-def define_code(items: list[DefineOp] | DefineOp) -> list[dict]:
+def define_code(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
     """Convert bytes to code instruction(s) at address(es)."""
     if isinstance(items, dict):
         items = [items]
@@ -810,7 +858,7 @@ def define_code(items: list[DefineOp] | DefineOp) -> list[dict]:
             length = ida_ua.create_insn(ea)
             if length > 0:
                 results.append(
-                    {"addr": addr_str, "ea": hex(ea), "length": length, "ok": True}
+                    {"addr": addr_str, "ea": hex(ea), "length": length}
                 )
             else:
                 results.append(
@@ -828,7 +876,7 @@ def define_code(items: list[DefineOp] | DefineOp) -> list[dict]:
 
 @tool
 @idasync
-def undefine(items: list[UndefineOp] | UndefineOp) -> list[dict]:
+def undefine(items: list[UndefineOp] | UndefineOp) -> list[DefineResult]:
     """Undefine item(s) at address(es), converting back to raw bytes."""
     if isinstance(items, dict):
         items = [items]
@@ -859,7 +907,6 @@ def undefine(items: list[UndefineOp] | UndefineOp) -> list[dict]:
                         "addr": addr_str,
                         "start": hex(start_ea),
                         "size": nbytes,
-                        "ok": True,
                     }
                 )
             else:

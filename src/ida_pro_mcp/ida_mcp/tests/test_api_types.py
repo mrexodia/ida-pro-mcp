@@ -56,7 +56,7 @@ def create_test_struct(name: str = TEST_STRUCT_NAME) -> bool:
         return False
 
     entry = result[0]
-    if entry.get("ok"):
+    if "error" not in entry:
         return True
 
     search_result = search_structs(name)
@@ -229,7 +229,6 @@ def test_type_query():
     assert "data" in page
     assert "next_offset" in page
     assert "total" in page
-    assert "error" in page
     if page["data"]:
         assert "ordinal" in page["data"][0]
         assert "name" in page["data"][0]
@@ -249,7 +248,7 @@ def test_type_inspect():
     r = result[0]
     assert r["name"] == tname
     assert r["exists"] is True
-    assert r["error"] is None
+    assert "error" not in r
     assert r.get("member_count", 0) >= 0
 
 
@@ -290,11 +289,11 @@ def test_enum_upsert_creates_and_replays_idempotently():
             }
         )
         assert_is_list(first, min_length=1)
-        assert first[0].get("ok") is True
+        assert "error" not in first[0]
         assert first[0].get("created") is True
         assert first[0]["summary"]["created"] == 2
         assert_is_list(second, min_length=1)
-        assert second[0].get("ok") is True
+        assert "error" not in second[0]
         assert second[0]["summary"]["skipped"] == 2
     finally:
         enum_id = idc.get_enum(enum_name)
@@ -326,7 +325,7 @@ def test_enum_upsert_reports_conflicting_member_value():
             }
         )
         assert_is_list(result, min_length=1)
-        assert result[0].get("ok") is False
+        assert "error" in result[0]
         assert result[0]["summary"]["conflicts"] == 1
         assert "conflict" in (result[0]["members"][0].get("error") or "").lower()
     finally:
@@ -342,7 +341,7 @@ def test_set_type_applies_named_global_type():
     assert_is_list(result, min_length=1)
     entry = result[0]
     assert entry["edit"]["addr"] == CRACKME_DSO_HANDLE
-    assert entry.get("ok") is True or entry.get("error") is None
+    assert "error" not in entry
 
 
 @test()
@@ -358,7 +357,7 @@ def test_set_type_global_by_name_branch():
     """set_type(kind=global) can resolve the target by symbol name instead of address."""
     result = set_type({"name": "g_point", "ty": "Point", "kind": "global"})
     assert_is_list(result, min_length=1)
-    assert result[0].get("ok") is True
+    assert "error" not in result[0]
 
 
 @test(binary="typed_fixture.elf")
@@ -374,10 +373,8 @@ def test_set_type_global_invalid_type_name():
 @test()
 def test_type_apply_batch():
     """type_apply_batch applies edits and returns summary counters"""
-    result = type_apply_batch(
-        {"edits": [{"addr": _require_any_function(), "ty": TYPE_APPLY_SIGNATURE}]}
-    )
-    assert "ok" in result
+    result = type_apply_batch({"edits": [{"addr": _require_any_function(), "ty": TYPE_APPLY_SIGNATURE}]})
+    assert "error" not in result
     assert "applied" in result
     assert "failed" in result
     assert "stopped" in result
@@ -456,7 +453,7 @@ def test_set_type_function_branch():
         }
     )
     assert_is_list(result, min_length=1)
-    assert result[0].get("ok") is True
+    assert "error" not in result[0]
 
 
 @test(binary="typed_fixture.elf")
@@ -486,7 +483,7 @@ def test_set_type_local_branch():
     )
     assert_is_list(result, min_length=1)
     assert (
-        result[0].get("ok") is True
+        "error" not in result[0]
         or result[0].get("error") == "Failed to apply local variable type"
     )
 
@@ -518,7 +515,7 @@ def test_set_type_stack_branch():
         }
     )
     assert_is_list(result, min_length=1)
-    assert result[0].get("ok") is True
+    assert "error" not in result[0]
 
 
 @test(binary="typed_fixture.elf")

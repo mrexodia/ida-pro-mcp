@@ -57,12 +57,14 @@ from . import api_processor
 from . import api_loader
 from . import api_xrefs_manage
 from . import api_database
+from . import api_discovery
 
 # Re-export key components for external use
 from .sync import idasync, IDAError, IDASyncError, CancelledError
 from .rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, resource
 from .http import IdaMcpHttpRequestHandler
 from .api_core import init_caches
+from .api_discovery import set_local_instance
 
 __all__ = [
     # Infrastructure modules
@@ -102,6 +104,7 @@ __all__ = [
     "api_loader",
     "api_xrefs_manage",
     "api_database",
+    "api_discovery",
     # Re-exported components
     "idasync",
     "IDAError",
@@ -114,4 +117,5 @@ __all__ = [
     "resource",
     "IdaMcpHttpRequestHandler",
     "init_caches",
+    "set_local_instance",
 ]

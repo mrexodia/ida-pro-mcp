@@ -5,13 +5,95 @@ from __future__ import annotations
 import hashlib
 import re
 from itertools import islice
-from typing import Annotated
+from typing import Annotated, TypedDict
 
 from .rpc import tool
 from .sync import idasync, tool_timeout
 from . import compat
 from .api_core import _get_strings_cache
 from .utils import get_image_size
+
+
+class SurveyMetadata(TypedDict):
+    path: str
+    module: str
+    arch: str
+    base_address: str
+    image_size: str
+    md5: str
+    sha256: str
+
+
+class SurveySegmentInfo(TypedDict):
+    name: str
+    start: str
+    end: str
+    size: str
+    permissions: str
+
+
+class SurveyEntrypoint(TypedDict):
+    addr: str
+    name: str
+    ordinal: int
+
+
+class SurveyStatistics(TypedDict):
+    total_functions: int
+    named_functions: int
+    library_functions: int
+    unnamed_functions: int
+    total_strings: int
+    total_segments: int
+
+
+class SurveyInterestingString(TypedDict):
+    addr: str
+    string: str
+    xref_count: int
+
+
+class SurveyInterestingFunction(TypedDict):
+    addr: str
+    name: str
+    size: int
+    xref_count: int
+    callee_count: int
+    type: str
+
+
+class SurveyImportEntry(TypedDict):
+    addr: str
+    name: str
+    module: str
+
+
+class SurveyImportsByCategory(TypedDict):
+    crypto: list[SurveyImportEntry]
+    network: list[SurveyImportEntry]
+    file_io: list[SurveyImportEntry]
+    process: list[SurveyImportEntry]
+    registry: list[SurveyImportEntry]
+    other: list[SurveyImportEntry]
+
+
+class SurveyCallGraphSummary(TypedDict):
+    total_edges: int
+    max_depth_estimate: None
+    root_functions: list[str]
+    leaf_functions_count: int
+
+
+class SurveyBinaryResult(TypedDict, total=False):
+    metadata: SurveyMetadata
+    statistics: SurveyStatistics
+    segments: list[SurveySegmentInfo]
+    entrypoints: list[SurveyEntrypoint]
+    interesting_strings: list[SurveyInterestingString]
+    interesting_functions: list[SurveyInterestingFunction]
+    imports_by_category: SurveyImportsByCategory
+    call_graph_summary: SurveyCallGraphSummary
+    _note: str
 
 # Max functions to iterate for xref counting on large binaries.
 _MAX_FUNC_ITER = 10_000
@@ -343,7 +425,7 @@ def _build_call_graph_summary(func_eas: list[int]) -> dict:
 @tool_timeout(120.0)
 def survey_binary(
     detail_level: Annotated[str, "Detail level: 'standard' or 'minimal'"] = "standard",
-) -> dict:
+) -> SurveyBinaryResult:
     """Get a compact overview of the binary in one call. Returns file metadata,
     segment layout, entry points, statistics, top 15 strings and functions ranked
     by xref count (functions include classification: thunk/wrapper/leaf/dispatcher/
