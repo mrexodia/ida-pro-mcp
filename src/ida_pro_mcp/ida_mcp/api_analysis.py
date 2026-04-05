@@ -25,6 +25,7 @@ from .utils import (
     pattern_filter,
     get_stack_frame_variables_internal,
     decompile_function_safe,
+    compact_whitespace,
     get_assembly_lines,
     get_all_xrefs,
     get_all_comments,
@@ -510,7 +511,7 @@ def _disasm_lines_limited(func: ida_funcs.func_t, max_insns: int) -> tuple[list[
             break
         line = ida_lines.generate_disasm_line(item_ea, 0)
         instruction = ida_lines.tag_remove(line) if line else ""
-        lines.append(f"{item_ea:x}  {instruction}")
+        lines.append(f"{item_ea:x}  {compact_whitespace(instruction)}")
     return lines, truncated
 
 
@@ -737,7 +738,7 @@ def disasm(
             if len(lines) < max_instructions:
                 line = ida_lines.generate_disasm_line(ea, 0)
                 instruction = ida_lines.tag_remove(line) if line else ""
-                lines.append({"addr": f"{ea:x}", "instruction": instruction})
+                lines.append({"addr": f"{ea:x}", "instruction": compact_whitespace(instruction)})
                 seen += 1
                 return True
             more = True
@@ -2114,7 +2115,7 @@ def insn_query(
                 row = {"addr": addr_s}
                 if include_disasm:
                     line = ida_lines.generate_disasm_line(ea, 0)
-                    row["disasm"] = ida_lines.tag_remove(line) if line else ""
+                    row["disasm"] = compact_whitespace(ida_lines.tag_remove(line)) if line else ""
                 if include_fn:
                     row["fn"] = get_function(ea, raise_error=False)
                 rows.append(row)

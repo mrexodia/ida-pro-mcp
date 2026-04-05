@@ -1000,6 +1000,29 @@ def get_stack_frame_variables_internal(
     return members
 
 
+_STRING_OR_SPACES_RE = re.compile(
+    r'"(?:[^"\\]|\\.)*"'  # double-quoted string
+    r"|'(?:[^'\\]|\\.)*'"  # single-quoted string / char
+    r"|[ \t]{2,}"  # run of 2+ whitespace (outside strings)
+)
+
+
+def compact_whitespace(line: str) -> str:
+    """Collapse runs of 2+ spaces/tabs to a single space, preserving string literals."""
+    stripped = line.lstrip(" \t")
+    if not stripped:
+        return line
+    lead = line[: len(line) - len(stripped)]
+
+    def _repl(m: re.Match) -> str:
+        s = m.group()
+        if s[0] in ('"', "'"):
+            return s  # preserve string content
+        return " "
+
+    return lead + _STRING_OR_SPACES_RE.sub(_repl, stripped)
+
+
 def decompile_checked(addr: int):
     """Decompile a function and raise IDAError on failure (uses cache)"""
     if not ida_hexrays.init_hexrays_plugin():
@@ -1049,7 +1072,7 @@ def decompile_function_safe(ea: int) -> Optional[str]:
                             line_ea = int(ds[0], 16)
                         except ValueError:
                             pass
-            text = ida_lines.tag_remove(sl.line)
+            text = compact_whitespace(ida_lines.tag_remove(sl.line))
             if line_ea is not None:
                 lines.append(f"{text} /*{line_ea:#x}*/")
             else:
