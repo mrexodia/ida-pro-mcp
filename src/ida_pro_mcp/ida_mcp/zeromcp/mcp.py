@@ -385,6 +385,7 @@ class McpServer:
         self.registry.methods["resources/read"] = self._mcp_resources_read
         self.registry.methods["prompts/list"] = self._mcp_prompts_list
         self.registry.methods["prompts/get"] = self._mcp_prompts_get
+        self.registry.methods["notifications/initialized"] = self._mcp_notifications_initialized
         self.registry.methods["notifications/cancelled"] = self._mcp_notifications_cancelled
 
     def tool(self, func: Callable) -> Callable:
@@ -609,6 +610,10 @@ class McpServer:
         finally:
             if request_id is not None:
                 unregister_pending_request(request_id)
+
+    def _mcp_notifications_initialized(self) -> None:
+        """MCP notifications/initialized - client signals initialization complete"""
+        # Notifications don't return a response
 
     def _mcp_notifications_cancelled(self, requestId: int | str, reason: str | None = None) -> None:
         """MCP notifications/cancelled - cancel an in-flight request"""
