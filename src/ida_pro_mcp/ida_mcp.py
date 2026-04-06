@@ -130,7 +130,7 @@ class MCPUIHooks(ida_kernwin.UI_Hooks):
         # Skip autostart when running under idalib – the idalib_server manages
         # the MCP server lifecycle itself and would otherwise hit a port conflict
         # because unload_package creates a separate MCP_SERVER instance.
-        if self.plugin.autostart and "idapro" not in sys.modules:
+        if self.plugin.autostart and ida_kernwin.is_idaq():
             print("[MCP] Autostarting server...")
             self.plugin.run(0)
         self.unhook()
@@ -156,9 +156,9 @@ class MCP(idaapi.plugin_t):
         self.port = self.DEFAULT_PORT
         self.autostart = _get_autostart()
 
-        if self.autostart and "idapro" not in sys.modules:
+        if self.autostart and ida_kernwin.is_idaq():
             print("[MCP] Plugin loaded, server will start automatically")
-        elif "idapro" in sys.modules:
+        elif not ida_kernwin.is_idaq():
             print("[MCP] Plugin loaded (idalib mode, server managed externally)")
         else:
             print(
