@@ -17,19 +17,7 @@ from .rpc import tool
 from .sync import idasync
 from .utils import parse_address, normalize_list_input
 
-# ---------------------------------------------------------------------------
-# Lazy import of sigmaker (lives in the IDA plugins dir or sys.path)
-# ---------------------------------------------------------------------------
-_sigmaker = None
-
-
-def _get_sigmaker():
-    global _sigmaker
-    if _sigmaker is None:
-        import sigmaker as _sm
-
-        _sigmaker = _sm
-    return _sigmaker
+from . import _sigmaker as _sm
 
 
 # ---------------------------------------------------------------------------
@@ -60,9 +48,8 @@ def _make_config(
     continue_outside_function: bool = True,
     max_length: int = 1000,
 ) -> "object":
-    sm = _get_sigmaker()
-    return sm.SigMakerConfig(
-        output_format=sm.SignatureType(fmt),
+    return _sm.SigMakerConfig(
+        output_format=_sm.SignatureType(fmt),
         wildcard_operands=wildcard_operands,
         continue_outside_of_function=continue_outside_function,
         wildcard_optimized=False,
@@ -156,7 +143,7 @@ def make_signature(
     unique signature starting at each address by walking instructions and
     wildcarding operands. Useful for finding stable patterns that survive
     recompilation."""
-    sm = _get_sigmaker()
+    sm = _sm
     fmt = _resolve_format(format)
     cfg = _make_config(fmt, wildcard_operands=wildcard_operands, max_length=max_length)
     maker = sm.SignatureMaker()
@@ -212,7 +199,7 @@ def make_signature_for_function(
     """Create unique byte signatures for function entry points. Resolves each
     name/address to a function, then generates the shortest unique signature
     starting at the function start."""
-    sm = _get_sigmaker()
+    sm = _sm
     fmt = _resolve_format(format)
     cfg = _make_config(fmt, wildcard_operands=wildcard_operands, max_length=max_length)
     maker = sm.SignatureMaker()
@@ -275,7 +262,7 @@ def make_signature_for_range(
     """Create a byte signature for a specific address range (e.g. a selected
     region). Unlike make_signature, this does NOT guarantee uniqueness — it
     simply encodes the bytes in the range with optional operand wildcarding."""
-    sm = _get_sigmaker()
+    sm = _sm
     fmt = _resolve_format(format)
     cfg = _make_config(fmt, wildcard_operands=wildcard_operands)
     maker = sm.SignatureMaker()
@@ -329,10 +316,11 @@ def find_xref_signatures(
     signature at each xref site, and returns the shortest ones. Ideal for
     creating signatures for data addresses, vtable entries, or string
     references that can't be signatured directly."""
-    sm = _get_sigmaker()
+    sm = _sm
     fmt = _resolve_format(format)
     cfg = _make_config(fmt, max_length=max_length)
-    cfg = __import__("dataclasses").replace(cfg, print_top_x=top)
+    import dataclasses
+    cfg = dataclasses.replace(cfg, print_top_x=top)
     finder = sm.XrefFinder()
     addrs_list = normalize_list_input(addrs)
 
@@ -383,7 +371,7 @@ def scan_signature(
     in IDA, x64dbg, mask, bitmask, or loose hex formats. Returns all match
     addresses. Use this to verify a signature is unique or find all instances
     of a pattern."""
-    sm = _get_sigmaker()
+    sm = _sm
     sigs_list = normalize_list_input(signatures)
 
     results: list[ScanSigResult] = []

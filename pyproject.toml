@@ -21,7 +21,7 @@ classifiers = [
 dependencies = [
     "idapro>=0.0.7",
     "tomli-w>=1.0.0",
-    "sigmaker",
+
 ]
 
 [dependency-groups]
