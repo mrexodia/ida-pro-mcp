@@ -18,6 +18,7 @@ Important API modules:
 - `api_types.py`: structs, type inference, type application
 - `api_modify.py`: comments, renaming, asm patching
 - `api_stack.py`: stack frame operations
+- `api_sigmaker.py`: signature creation, scanning, xref signatures (uses sigmaker.py)
 - `api_debug.py`: debugger control, unsafe / low priority for tests
 - `api_python.py`: execute Python in IDA context
 - `api_resources.py`: `ida://` MCP resources
