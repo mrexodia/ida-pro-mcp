@@ -20,6 +20,7 @@ jobs:
     # Run on all pushes, and on fork PRs only after the approval job passes.
     if: |
       always() &&
+      github.repository == 'mrexodia/ida-pro-mcp' &&
       (
         github.event_name == 'push' ||
         needs.approval.result == 'success'
