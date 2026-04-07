@@ -101,7 +101,7 @@ def test_decompile_unknown_name():
     """decompile returns a specific error for an unknown function name."""
     result = decompile("nonexistent_function_xyz")
     assert result["code"] is None
-    assert_error(result, contains="Function not found")
+    assert_error(result, contains="Not found")
 
 
 @test()
@@ -197,7 +197,7 @@ def test_disasm_unknown_name():
     """disasm returns a specific error for an unknown function name."""
     result = disasm("nonexistent_function_xyz")
     assert result["asm"] is None
-    assert_error(result, contains="Function not found")
+    assert_error(result, contains="Not found")
 
 
 @test()
@@ -237,6 +237,21 @@ def test_xrefs_to_check_pw_from_main():
     )
     assert hit is not None, "expected call site 0x12d3 -> check_pw"
     assert hit["type"] == "code"
+    assert hit["fn"]["name"] == "main"
+
+
+@test(binary="crackme03.elf")
+def test_xrefs_to_by_name():
+    """xrefs_to accepts a function name and returns the same xrefs as by address."""
+    result = xrefs_to("check_pw")
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert_is_list(entry["xrefs"], min_length=1)
+    hit = next(
+        (xref for xref in entry["xrefs"] if xref["addr"] == CRACKME_CALL_TO_CHECK_PW),
+        None,
+    )
+    assert hit is not None, "expected call site 0x12d3 -> check_pw via name"
     assert hit["fn"]["name"] == "main"
 
 
@@ -334,6 +349,17 @@ def test_callees_main_contains_expected_targets():
     assert "check_pw" in by_name
     assert ".printf" in by_name
     assert by_name["check_pw"]["addr"] == CRACKME_CHECK_PW
+
+
+@test(binary="crackme03.elf")
+def test_callees_by_name():
+    """callees accepts a function name and returns the same callees as by address."""
+    result = callees("main")
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert_is_list(entry["callees"], min_length=1)
+    by_name = {callee["name"]: callee for callee in entry["callees"]}
+    assert "check_pw" in by_name
 
 
 @test()
@@ -435,7 +461,7 @@ def test_find_data_ref_invalid_target():
     """find(data_ref, ...) reports invalid target address parsing errors."""
     result = find("data_ref", "definitely_not_an_address")
     assert_is_list(result, min_length=1)
-    assert_error(result[0], contains="Failed to parse address")
+    assert_error(result[0], contains="Not found")
 
 
 @test()
