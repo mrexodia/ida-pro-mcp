@@ -1,4 +1,13 @@
-"""Tests for api_sigmaker API functions."""
+"""Tests for api_sigmaker API functions.
+
+Tests are structured to validate semantically meaningful behavior:
+- Round-trip: generate a signature then scan it back to verify it finds
+  the original address (proving uniqueness isn't just a boolean flag).
+- Function resolution: make_signature_for_function resolves mid-function
+  addresses to the function start and populates the name field.
+- Batch with mixed input: batching names and hex addresses together tests
+  the name-resolution path that plain hex batches don't exercise.
+"""
 
 from ..framework import (
     test,
@@ -19,6 +28,7 @@ from ..api_sigmaker import (
     make_signature_for_range,
     find_xref_signatures,
 )
+from ..api_analysis import find_bytes
 
 
 # ============================================================================
@@ -27,8 +37,9 @@ from ..api_sigmaker import (
 
 
 @test()
-def test_make_signature_produces_unique_sig():
-    """make_signature returns a unique signature for a valid code address."""
+def test_make_signature_round_trip():
+    """Generate a unique signature, then scan it back with find_bytes to prove
+    it actually matches the original address and only that address."""
     fn_addr = get_any_function()
     if not fn_addr:
         skip_test("binary has no functions")
@@ -36,12 +47,16 @@ def test_make_signature_produces_unique_sig():
     result = make_signature(fn_addr)
     assert_is_list(result, min_length=1)
     entry = result[0]
-    assert entry["query"] == fn_addr
-    assert_valid_address(entry["addr"])
     assert entry["signature"] is not None
     assert_non_empty(entry["signature"])
     assert entry["unique"] is True
-    assert entry["format"] == "ida"
+
+    # Round-trip: scan the generated signature and verify it lands back
+    # on the same address with exactly one match (proving true uniqueness).
+    scan = find_bytes(entry["signature"])
+    assert_is_list(scan, min_length=1)
+    assert scan[0]["n"] == 1, f"expected 1 match (unique), got {scan[0]['n']}"
+    assert scan[0]["matches"][0] == entry["addr"]
 
 
 @test()
@@ -85,18 +100,41 @@ def test_make_signature_by_name():
 
 
 @test()
-def test_make_signature_for_function_valid():
-    """make_signature_for_function returns a signature at the function entry."""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        skip_test("binary has no functions")
+def test_make_signature_for_function_resolves_to_start():
+    """Pass a mid-function address and verify the tool resolves it to the
+    function start.  Also verify the name field matches IDA's own function
+    name — this is the key behaviour that make_signature doesn't provide."""
+    import ida_funcs
+    import idaapi
+    import idautils
 
-    result = make_signature_for_function(fn_addr)
+    # Find a function with at least 2 bytes so we can pick a mid-function addr
+    func_ea = None
+    for ea in idautils.Functions():
+        f = ida_funcs.get_func(ea)
+        if f and f.end_ea - f.start_ea > 2:
+            func_ea = f.start_ea
+            break
+    if func_ea is None:
+        skip_test("no function with size > 2 found")
+
+    func = ida_funcs.get_func(func_ea)
+    mid_addr = hex(func.start_ea + 1)  # one byte into the function
+
+    result = make_signature_for_function(mid_addr)
     assert_is_list(result, min_length=1)
     entry = result[0]
-    assert_valid_address(entry["addr"])
+
+    # Should resolve back to function start, not the mid-function input
+    assert entry["addr"] == hex(func.start_ea), (
+        f"expected addr {hex(func.start_ea)}, got {entry['addr']}"
+    )
+    # Name field should match IDA's function name
+    expected_name = idaapi.get_func_name(func.start_ea)
+    assert entry["name"] == expected_name, (
+        f"expected name '{expected_name}', got '{entry['name']}'"
+    )
     assert entry["signature"] is not None
-    assert entry["name"] is not None
 
 
 @test(binary="crackme03.elf")
@@ -123,18 +161,38 @@ def test_make_signature_for_function_no_func():
 
 
 @test()
-def test_make_signature_for_function_batch():
-    """make_signature_for_function handles multiple inputs."""
+def test_make_signature_for_function_batch_mixed_input():
+    """Batch with a mix of hex addresses and symbolic names — exercises
+    the name-resolution path that a pure-hex batch (make_signature_batch)
+    never touches.  Also verifies each result carries a correct name."""
+    import idaapi
     import idautils
 
-    addrs = [hex(ea) for ea in list(idautils.Functions())[:3]]
-    if len(addrs) < 2:
+    # Build a mixed batch: first function as hex, second as its IDA name
+    funcs = list(idautils.Functions())[:2]
+    if len(funcs) < 2:
         skip_test("binary has fewer than two functions")
 
-    result = make_signature_for_function(addrs)
-    assert_is_list(result, min_length=len(addrs))
-    for entry in result:
-        assert entry["signature"] is not None
+    hex_addr = hex(funcs[0])
+    name_str = idaapi.get_func_name(funcs[1])
+    if not name_str:
+        skip_test("second function has no name")
+
+    result = make_signature_for_function([hex_addr, name_str])
+    assert_is_list(result, min_length=2)
+
+    # First entry: queried by hex address
+    assert result[0]["query"] == hex_addr
+    assert result[0]["signature"] is not None
+    assert result[0]["name"] is not None  # name must be populated even for hex input
+
+    # Second entry: queried by name
+    assert result[1]["query"] == name_str
+    assert result[1]["name"] == name_str
+    assert result[1]["signature"] is not None
+
+    # Both should resolve to different addresses (different functions)
+    assert result[0]["addr"] != result[1]["addr"]
 
 
 # ============================================================================
