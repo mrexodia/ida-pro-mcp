@@ -138,6 +138,8 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         # Handle output download requests
         output_match = re.match(r"^/output/([a-f0-9-]+)\.(\w+)$", path)
         if output_match:
+            if not self._check_api_request():
+                return
             self._handle_output_download(output_match.group(1), output_match.group(2))
             return
 
