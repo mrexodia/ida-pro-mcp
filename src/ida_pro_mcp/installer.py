@@ -158,6 +158,8 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
         return {"url": force_mcp_path(transport_url)}
     if client_name in ("Claude", "Claude Code"):
         return {"type": infer_http_transport_type(transport_url), "url": transport_url}
+    if client_name == "Antigravity IDE":
+        return {"type": "http", "serverUrl": force_mcp_path(transport_url)}
     return {"type": "http", "url": force_mcp_path(transport_url)}
 
 
