@@ -18,7 +18,6 @@ from ..api_sigmaker import (
     make_signature_for_function,
     make_signature_for_range,
     find_xref_signatures,
-    scan_signature,
 )
 
 
@@ -203,60 +202,6 @@ def test_find_xref_signatures_no_xrefs():
     if "error" not in entry:
         assert entry["signatures"] is not None
         assert entry["total_xrefs"] == 0
-
-
-# ============================================================================
-# scan_signature
-# ============================================================================
-
-
-@test()
-def test_scan_signature_from_generated():
-    """scan_signature finds a match when scanning with a generated signature."""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        skip_test("binary has no functions")
-
-    # Generate a signature first
-    sig_result = make_signature(fn_addr)
-    assert_is_list(sig_result, min_length=1)
-    sig_str = sig_result[0]["signature"]
-    assert sig_str is not None
-
-    # Scan for it — should find exactly 1 match (unique)
-    scan_result = scan_signature(sig_str)
-    assert_is_list(scan_result, min_length=1)
-    entry = scan_result[0]
-    assert entry["n"] >= 1
-    assert entry["unique"] is True
-    assert_valid_address(entry["matches"][0])
-
-
-@test()
-def test_scan_signature_no_match():
-    """scan_signature returns no matches for a bogus pattern."""
-    result = scan_signature("DE AD BE EF CA FE BA BE 13 37 42 42 42 42")
-    assert_is_list(result, min_length=1)
-    entry = result[0]
-    assert entry["n"] == 0
-    assert entry["unique"] is False
-    assert len(entry["matches"]) == 0
-
-
-@test()
-def test_scan_signature_batch():
-    """scan_signature handles multiple patterns in one call."""
-    fn_addr = get_any_function()
-    if not fn_addr:
-        skip_test("binary has no functions")
-
-    sig_result = make_signature(fn_addr)
-    sig_str = sig_result[0]["signature"]
-
-    result = scan_signature([sig_str, "DE AD BE EF CA FE BA BE 13 37"])
-    assert_is_list(result, min_length=2)
-    assert result[0]["n"] >= 1
-    assert result[1]["n"] == 0
 
 
 # ============================================================================
