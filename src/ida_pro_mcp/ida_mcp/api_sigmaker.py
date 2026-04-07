@@ -4,7 +4,6 @@ This module integrates sigmaker.py functionality to provide:
 - Unique signature generation for addresses/functions
 - Range-based signature generation (selection)
 - XREF-based signature discovery
-- Signature scanning/searching
 - Multiple output formats: IDA, x64dbg, mask, bitmask
 """
 
@@ -102,14 +101,6 @@ class XrefSigResult(TypedDict):
     addr: str | None
     signatures: list[dict] | None
     total_xrefs: NotRequired[int]
-    error: NotRequired[str]
-
-
-class ScanSigResult(TypedDict):
-    signature: str
-    matches: list[str]
-    n: int
-    unique: bool
     error: NotRequired[str]
 
 
@@ -351,47 +342,6 @@ def find_xref_signatures(
                 "query": addr_str,
                 "addr": hex(ea) if ea is not None else None,
                 "signatures": None,
-                "error": str(e),
-            })
-    return results
-
-
-@tool
-@idasync
-def scan_signature(
-    signatures: Annotated[
-        list[str] | str,
-        "Signature pattern(s) to scan for. Supports multiple formats: "
-        "IDA style ('48 8B ? EC'), x64dbg style ('48 8B ?? EC'), "
-        "mask style ('\\x48\\x8B\\x00\\xEC xx?x'), hex ('0x48 0x8B'), etc.",
-    ],
-    limit: Annotated[int, "Max matches per signature (default: 100)"] = 100,
-) -> list[ScanSigResult]:
-    """Scan the IDB for matches of byte signature patterns. Accepts signatures
-    in IDA, x64dbg, mask, bitmask, or loose hex formats. Returns all match
-    addresses. Use this to verify a signature is unique or find all instances
-    of a pattern."""
-    sm = _sm
-    sigs_list = normalize_list_input(signatures)
-
-    results: list[ScanSigResult] = []
-    for sig_input in sigs_list:
-        try:
-            searcher = sm.SignatureSearcher.from_signature(sig_input)
-            search_results = searcher.search()
-            matches = [hex(int(m)) for m in search_results.matches[:limit]]
-            results.append({
-                "signature": search_results.signature_str or sig_input,
-                "matches": matches,
-                "n": len(search_results.matches),
-                "unique": len(search_results.matches) == 1,
-            })
-        except Exception as e:
-            results.append({
-                "signature": sig_input,
-                "matches": [],
-                "n": 0,
-                "unique": False,
                 "error": str(e),
             })
     return results
