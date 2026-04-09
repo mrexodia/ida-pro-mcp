@@ -385,6 +385,7 @@ class McpServer:
         self.registry.methods["resources/read"] = self._mcp_resources_read
         self.registry.methods["prompts/list"] = self._mcp_prompts_list
         self.registry.methods["prompts/get"] = self._mcp_prompts_get
+        self.registry.methods["notifications/initialized"] = self._mcp_notifications_initialized
         self.registry.methods["notifications/cancelled"] = self._mcp_notifications_cancelled
 
     def tool(self, func: Callable) -> Callable:
@@ -602,13 +603,17 @@ class McpServer:
 
             result = tool_response.get("result") if tool_response else None
             return {
-                "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
+                "content": [{"type": "text", "text": json.dumps(result, separators=(",", ":"))}],
                 "structuredContent": result if isinstance(result, dict) else {"result": result},
                 "isError": False,
             }
         finally:
             if request_id is not None:
                 unregister_pending_request(request_id)
+
+    def _mcp_notifications_initialized(self) -> None:
+        """MCP notifications/initialized - client signals initialization complete"""
+        # Notifications don't return a response
 
     def _mcp_notifications_cancelled(self, requestId: int | str, reason: str | None = None) -> None:
         """MCP notifications/cancelled - cancel an in-flight request"""
@@ -683,7 +688,7 @@ class McpServer:
                         "contents": [{
                             "uri": uri,
                             "mimeType": "application/json",
-                            "text": json.dumps({"error": error.get("message", "Unknown error")}, indent=2),
+                            "text": json.dumps({"error": error.get("message", "Unknown error")}, separators=(",", ":")),
                         }],
                         "isError": True,
                     }
@@ -693,7 +698,7 @@ class McpServer:
                     "contents": [{
                         "uri": uri,
                         "mimeType": "application/json",
-                        "text": json.dumps(result, indent=2),
+                        "text": json.dumps(result, separators=(",", ":")),
                     }]
                 }
 
@@ -706,7 +711,7 @@ class McpServer:
                 "text": json.dumps({
                     "error": f"Resource not found: {uri}",
                     "available_patterns": available,
-                }, indent=2),
+                }, separators=(",", ":")),
             }],
             "isError": True,
         }
@@ -748,7 +753,7 @@ class McpServer:
 
         # Convert non-string results to JSON
         if not isinstance(result, str):
-            result = json.dumps(result, indent=2)
+            result = json.dumps(result, separators=(",", ":"))
         return {
             "messages": [
                 {
@@ -794,6 +799,9 @@ class McpServer:
 
     def _type_to_json_schema(self, py_type: Any) -> dict:
         """Convert Python type hint to JSON schema object"""
+        if py_type is Any:
+            return {}
+
         origin = get_origin(py_type)
         # Annotated[T, "description"]
         if origin is Annotated:

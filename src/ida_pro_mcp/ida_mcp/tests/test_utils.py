@@ -98,6 +98,9 @@ def test_utils_stack_frame_and_decompile_helpers():
     code = decompile_function_safe(0x1013DC0)
     assert code is not None
     assert "sum_point" in code
+    # Address annotations (/*0x....*/) are added via get_line_item; passing None
+    # for the phead/ptail output params could crash IDA via null-pointer write.
+    assert any("/*0x" in line for line in code.splitlines())
 
 
 @test(binary="typed_fixture.elf")

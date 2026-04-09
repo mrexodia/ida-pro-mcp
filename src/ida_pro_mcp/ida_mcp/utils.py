@@ -468,9 +468,10 @@ class StackFrameVariable(TypedDict):
 class DisassemblyFunction(TypedDict):
     name: str
     start_ea: str
+    segment: NotRequired[str]
     return_type: NotRequired[str]
     arguments: NotRequired[list[Argument]]
-    stack_frame: list[StackFrameVariable]
+    stack_frame: NotRequired[list[StackFrameVariable]]
     lines: list[DisassemblyLine]
 
 
@@ -768,6 +769,7 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
         "int64",
         "__int64",
         "int64_t",
+        "signed __int64",
         "long long",
         "long long int",
         "signed long long",
@@ -779,6 +781,7 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
         "__uint64",
         "uint64_t",
         "unsigned int64",
+        "unsigned __int64",
         "unsigned long long",
         "unsigned long long int",
         "qword",
@@ -819,7 +822,12 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
         return tif
     if tif.get_named_type(None, type_name, ida_typeinf.BTF_UNION):
         return tif
-    if tif := ida_typeinf.tinfo_t(type_name):
+
+    # Try parse_decl for arbitrary type expressions (works in IDA 9.0+)
+    tif = ida_typeinf.tinfo_t()
+    flags = ida_typeinf.PT_SIL | ida_typeinf.PT_TYP
+    candidate = type_name if type_name.endswith(";") else type_name + ";"
+    if ida_typeinf.parse_decl(tif, None, candidate, flags) is not None and not tif.empty():
         return tif
 
     raise IDAError(f"Unable to retrieve {type_name} type info object")
@@ -992,6 +1000,29 @@ def get_stack_frame_variables_internal(
     return members
 
 
+_STRING_OR_SPACES_RE = re.compile(
+    r'"(?:[^"\\]|\\.)*"'  # double-quoted string
+    r"|'(?:[^'\\]|\\.)*'"  # single-quoted string / char
+    r"|[ \t]{2,}"  # run of 2+ whitespace (outside strings)
+)
+
+
+def compact_whitespace(line: str) -> str:
+    """Collapse runs of 2+ spaces/tabs to a single space, preserving string literals."""
+    stripped = line.lstrip(" \t")
+    if not stripped:
+        return line
+    lead = line[: len(line) - len(stripped)]
+
+    def _repl(m: re.Match) -> str:
+        s = m.group()
+        if s[0] in ('"', "'"):
+            return s  # preserve string content
+        return " "
+
+    return lead + _STRING_OR_SPACES_RE.sub(_repl, stripped)
+
+
 def decompile_checked(addr: int):
     """Decompile a function and raise IDAError on failure (uses cache)"""
     if not ida_hexrays.init_hexrays_plugin():
@@ -1028,9 +1059,11 @@ def decompile_function_safe(ea: int) -> Optional[str]:
         lines = []
         for sl in sv:
             sl: ida_kernwin.simpleline_t
+            _head = ida_hexrays.ctree_item_t()
             item = ida_hexrays.ctree_item_t()
+            _tail = ida_hexrays.ctree_item_t()
             line_ea = None
-            if cfunc.get_line_item(sl.line, 0, False, None, item, None):
+            if cfunc.get_line_item(sl.line, 0, False, _head, item, _tail):
                 dstr: str | None = item.dstr()
                 if dstr:
                     ds = dstr.split(": ")
@@ -1039,7 +1072,7 @@ def decompile_function_safe(ea: int) -> Optional[str]:
                             line_ea = int(ds[0], 16)
                         except ValueError:
                             pass
-            text = ida_lines.tag_remove(sl.line)
+            text = compact_whitespace(ida_lines.tag_remove(sl.line))
             if line_ea is not None:
                 lines.append(f"{text} /*{line_ea:#x}*/")
             else:

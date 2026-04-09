@@ -126,7 +126,8 @@ def test_declare_stack_invalid_type_error():
         {"addr": "0x1013dc0", "name": "x", "offset": -0x18, "ty": "NoSuchType"}
     )
     assert_is_list(result, min_length=1)
-    assert_error(result[0], contains="Invalid input data")
+    # Error message may vary: "Unable to retrieve ... type info object" or similar
+    assert_error(result[0], contains="NoSuchType")
 
 
 @test(binary="typed_fixture.elf")
