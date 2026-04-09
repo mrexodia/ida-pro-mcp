@@ -533,9 +533,21 @@ def list_funcs(
         count = query.get("count", 100)
         filter_pattern = query.get("filter", "")
 
+        # Handle invalid filter types gracefully
+        if not isinstance(filter_pattern, str):
+            if isinstance(filter_pattern, dict):
+                filter_pattern = str(
+                    filter_pattern.get("name_contains")
+                    or filter_pattern.get("name_regex")
+                    or ""
+                )
+            else:
+                filter_pattern = ""
+
         # Treat empty/"*" filter as "all"
-        if filter_pattern in ("", "*"):
-            filter_pattern = ""
+        else:
+            if filter_pattern in ("", "*"):
+                filter_pattern = ""
 
         filtered = pattern_filter(all_functions, filter_pattern, "name")
         results.append(paginate(filtered, offset, count))
