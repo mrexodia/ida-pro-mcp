@@ -38,7 +38,24 @@ def test_utils_parse_address_and_detection():
         parse_address("xyz")
         assert False, "expected parse_address to fail"
     except IDAError as e:
-        assert "Failed to parse address" in str(e)
+        assert "Not found" in str(e)
+
+
+@test(binary="crackme03.elf")
+def test_utils_parse_address_resolves_names():
+    """parse_address resolves known symbol names to their addresses."""
+    assert parse_address("main") == 0x123E
+    assert parse_address("check_pw") == 0x11A9
+
+
+@test()
+def test_utils_parse_address_unknown_name():
+    """parse_address raises IDAError for names that don't exist in the IDB."""
+    try:
+        parse_address("nonexistent_symbol_xyz_42")
+        assert False, "expected parse_address to fail on unknown name"
+    except IDAError as e:
+        assert "Not found" in str(e)
 
 
 @test(binary="crackme03.elf")

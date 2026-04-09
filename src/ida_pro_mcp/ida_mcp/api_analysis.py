@@ -647,17 +647,7 @@ def decompile(
 ) -> DecompileResult:
     """Decompile function(s) at address(es); returns pseudocode and per-item errors."""
     try:
-        try:
-            start = parse_address(addr)
-        except IDAError:
-            ea = idaapi.get_name_ea(idaapi.BADADDR, addr)
-            if ea == idaapi.BADADDR:
-                return {
-                    "addr": addr,
-                    "code": None,
-                    "error": f"Function not found: {addr!r}",
-                }
-            start = ea
+        start = parse_address(addr)
         code = decompile_function_safe(start)
         if code is None:
             return {"addr": addr, "code": None, "error": "Decompilation failed"}
@@ -688,18 +678,7 @@ def disasm(
         offset = 0
 
     try:
-        try:
-            start = parse_address(addr)
-        except IDAError:
-            ea = idaapi.get_name_ea(idaapi.BADADDR, addr)
-            if ea == idaapi.BADADDR:
-                return {
-                    "addr": addr,
-                    "asm": None,
-                    "error": f"Function not found: {addr!r}",
-                    "cursor": {"done": True},
-                }
-            start = ea
+        start = parse_address(addr)
         func = idaapi.get_func(start)
 
         # Get segment info
@@ -1145,10 +1124,10 @@ def analyze_batch(
 @tool
 @idasync
 def xrefs_to(
-    addrs: Annotated[list[str] | str, "Addresses to find cross-references to"],
+    addrs: Annotated[list[str] | str, "Addresses or function names to find cross-references to (e.g. '0x11a9', 'check_pw', 'main')"],
     limit: Annotated[int, "Max xrefs per address (default: 100, max: 1000)"] = 100,
 ) -> list[XrefsToResult]:
-    """Return xrefs to address(es), capped per target with truncation flag."""
+    """Return xrefs to address(es) or named symbols, capped per target with truncation flag."""
     addrs = normalize_list_input(addrs)
 
     if limit <= 0 or limit > 1000:
@@ -1408,7 +1387,7 @@ def xrefs_to_field(
 @tool
 @idasync
 def callees(
-    addrs: Annotated[list[str] | str, "Function addresses to get callees for"],
+    addrs: Annotated[list[str] | str, "Function addresses or names to get callees for (e.g. '0x123e', 'main')"],
     limit: Annotated[int, "Max callees per function (default: 200, max: 500)"] = 200,
 ) -> list[CalleesResult]:
     """Return unique callees per function, capped by limit."""
@@ -1578,7 +1557,7 @@ def find_bytes(
 @tool
 @idasync
 def basic_blocks(
-    addrs: Annotated[list[str] | str, "Function addresses to get basic blocks for"],
+    addrs: Annotated[list[str] | str, "Function addresses or names to get basic blocks for (e.g. '0x123e', 'main')"],
     max_blocks: Annotated[
         int, "Max basic blocks per function (default: 1000, max: 10000)"
     ] = 1000,
@@ -2167,7 +2146,7 @@ def insn_query(
 @tool
 @idasync
 def export_funcs(
-    addrs: Annotated[list[str] | str, "Function addresses to export"],
+    addrs: Annotated[list[str] | str, "Function addresses or names to export (e.g. '0x123e', 'main')"],
     format: Annotated[
         str, "Export format: json (default), c_header, or prototypes"
     ] = "json",

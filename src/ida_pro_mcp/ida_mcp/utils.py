@@ -578,9 +578,18 @@ def parse_address(addr: str | int) -> int:
     try:
         return int(addr, 0)
     except ValueError:
+        # Try name-to-address resolution before failing
+        try:
+            import idaapi
+
+            ea = idaapi.get_name_ea(idaapi.BADADDR, addr.strip())
+            if ea != idaapi.BADADDR:
+                return ea
+        except ImportError:
+            pass
         for ch in addr:
             if ch not in "0123456789abcdefABCDEF":
-                raise IDAError(f"Failed to parse address: {addr}")
+                raise IDAError(f"Not found: {addr!r}")
         raise IDAError(f"Failed to parse address (missing 0x prefix): {addr}")
 
 
