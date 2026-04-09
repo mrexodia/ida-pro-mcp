@@ -201,14 +201,9 @@ class MCP(idaapi.plugin_t):
         # HACK: ensure fresh load of ida_mcp package
         unload_package("ida_mcp")
         if TYPE_CHECKING:
-            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_local_instance
+            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, set_local_instance
         else:
-            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_local_instance
-
-        try:
-            init_caches()
-        except Exception as e:
-            print(f"[MCP] Cache init failed: {e}")
+            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, set_local_instance
 
         port = self.port
         max_port = port + 100
