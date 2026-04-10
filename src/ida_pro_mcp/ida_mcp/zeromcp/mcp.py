@@ -7,6 +7,7 @@ import uuid
 import json
 import gzip
 import zlib
+import ipaddress
 import inspect
 import threading
 import traceback
@@ -63,6 +64,61 @@ class _McpSseConnection:
             self.alive = False
             return False
 
+
+def _origin_allowed_by_policy(
+    allowed: Callable[[str], bool] | list[str] | str | None,
+    origin: str,
+) -> bool:
+    if not origin or allowed is None:
+        return False
+    if callable(allowed):
+        return allowed(origin)
+    if isinstance(allowed, str):
+        allowed = [allowed]
+    return "*" in allowed or origin in allowed
+
+
+def _parse_host_header(host_header: str | None) -> str | None:
+    if not host_header:
+        return None
+
+    host_header = host_header.strip()
+    if not host_header:
+        return None
+
+    if host_header.startswith("["):
+        end = host_header.find("]")
+        if end == -1:
+            return None
+        return host_header[1:end]
+
+    if host_header.count(":") == 1:
+        return host_header.rsplit(":", 1)[0]
+
+    return host_header
+
+
+def _is_loopback_host(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host.lower() == "localhost"
+
+
+def _host_header_allowed_for_bind(bound_host: str, host_header: str | None) -> bool:
+    """Reject DNS-rebinding style Host headers when the server is loopback-bound."""
+    if host_header is None:
+        return True
+
+    host_name = _parse_host_header(host_header)
+    if host_name is None:
+        return False
+
+    if not _is_loopback_host(bound_host):
+        return True
+
+    return _is_loopback_host(host_name)
+
 class McpHttpRequestHandler(BaseHTTPRequestHandler):
     server_version = "zeromcp/1.3.0"
     error_message_format = "%(code)d - %(message)s"
@@ -86,19 +142,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
 
     def send_cors_headers(self, *, preflight = False):
         origin = self.headers.get("Origin", "")
-        if not origin:
-            return
-        def is_allowed():
-            allowed = self.mcp_server.cors_allowed_origins
-            if allowed is None:
-                return False
-            if callable(allowed):
-                return allowed(origin)
-            if isinstance(allowed, str):
-                allowed = [allowed]
-            assert isinstance(allowed, list)
-            return "*" in allowed or origin in allowed
-        if not is_allowed():
+        if not _origin_allowed_by_policy(self.mcp_server.cors_allowed_origins, origin):
             return
         self.send_header("Access-Control-Allow-Origin", origin)
         if preflight:
@@ -122,7 +166,30 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             # Client disconnected - normal, suppress traceback
             pass
 
+    def _check_api_request(self) -> bool:
+        """Block browser traffic that violates the configured origin policy.
+
+        Browsers can bypass passive CORS-only defenses during DNS rebinding
+        because same-origin requests do not need CORS. Rejecting unexpected Host
+        and Origin headers closes that gap while keeping direct clients working.
+        """
+        bound_host = self.server.server_address[0]
+        if not _host_header_allowed_for_bind(bound_host, self.headers.get("Host")):
+            self.send_error(403, "Invalid Host")
+            return False
+
+        origin = self.headers.get("Origin", "")
+        if origin and not _origin_allowed_by_policy(
+            self.mcp_server.cors_allowed_origins, origin
+        ):
+            self.send_error(403, "Invalid Origin")
+            return False
+
+        return True
+
     def do_GET(self):
+        if not self._check_api_request():
+            return
         match urlparse(self.path).path:
             case "/sse":
                 self._handle_sse_get()
@@ -132,6 +199,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(404, "Not Found")
 
     def do_POST(self):
+        if not self._check_api_request():
+            return
         body = self._read_body()
         if body is None:
             return
@@ -146,6 +215,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         """Handle CORS preflight requests"""
+        if not self._check_api_request():
+            return
         self.send_response(200)
         self.send_cors_headers(preflight=True)
         self.end_headers()
