@@ -274,7 +274,7 @@ def test_xref_query():
 
     result = xref_query(
         {
-            "query": fn_addr,
+            "addr": fn_addr,
             "direction": "both",
             "xref_type": "any",
             "offset": 0,
@@ -284,7 +284,7 @@ def test_xref_query():
     )
     assert_is_list(result, min_length=1)
     page = result[0]
-    assert_has_keys(page, "query", "resolved_addr", "data", "next_offset", "total", "error")
+    assert_has_keys(page, "target", "resolved_addr", "data", "next_offset", "total", "error")
     if page["data"]:
         assert_has_keys(page["data"][0], "direction", "addr", "from", "to", "type")
 
@@ -565,7 +565,7 @@ def test_func_profile():
     if not fn_addr:
         skip_test("binary has no functions")
 
-    result = func_profile({"query": fn_addr, "include_lists": False})
+    result = func_profile({"addr": fn_addr, "include_lists": False})
     assert_is_list(result, min_length=1)
     page = result[0]
     assert_has_keys(page, "data", "next_offset", "error")
@@ -594,7 +594,7 @@ def test_analyze_batch():
 
     result = analyze_batch(
         {
-            "query": fn_addr,
+            "addr": fn_addr,
             "include_disasm": True,
             "max_disasm_insns": 16,
             "include_strings": True,
@@ -607,7 +607,7 @@ def test_analyze_batch():
     )
     assert_is_list(result, min_length=1)
     r = result[0]
-    assert_has_keys(r, "query", "addr", "name", "analysis", "error")
+    assert_has_keys(r, "target", "addr", "name", "analysis", "error")
     if r["analysis"] is not None:
         a = r["analysis"]
         assert_has_keys(

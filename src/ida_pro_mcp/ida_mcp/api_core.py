@@ -518,14 +518,12 @@ def int_convert(
 @idasync
 def list_funcs(
     queries: Annotated[
-        list[ListQuery] | ListQuery | str,
+        list[ListQuery] | ListQuery,
         "List functions with optional filtering and pagination",
     ],
 ) -> list[Page[Function]]:
     """List functions with optional filtering and offset/count pagination."""
-    queries = normalize_dict_list(
-        queries, lambda s: {"offset": 0, "count": 50, "filter": s}
-    )
+    queries = normalize_dict_list(queries)
     all_functions = [get_function(addr) for addr in idautils.Functions()]
 
     results = []
@@ -548,21 +546,12 @@ def list_funcs(
 @idasync
 def func_query(
     queries: Annotated[
-        list[FunctionQuery] | FunctionQuery | str,
+        list[FunctionQuery] | FunctionQuery,
         "Richer function query (size/type/name filters + pagination)",
     ],
 ) -> list[FunctionQueryPage]:
     """Query functions with richer filtering than list_funcs."""
-    queries = normalize_dict_list(
-        queries,
-        lambda s: {
-            "filter": s,
-            "offset": 0,
-            "count": 50,
-            "sort_by": "addr",
-            "descending": False,
-        },
-    )
+    queries = normalize_dict_list(queries)
 
     all_functions: list[dict] = []
     for addr in idautils.Functions():
@@ -639,14 +628,12 @@ def func_query(
 @idasync
 def list_globals(
     queries: Annotated[
-        list[ListQuery] | ListQuery | str,
+        list[ListQuery] | ListQuery,
         "List global variables with optional filtering and pagination",
     ],
 ) -> list[Page[Global]]:
     """List globals with optional filtering and offset/count pagination."""
-    queries = normalize_dict_list(
-        queries, lambda s: {"offset": 0, "count": 50, "filter": s}
-    )
+    queries = normalize_dict_list(queries)
     all_globals: list[Global] = []
     for addr, name in idautils.Names():
         if not idaapi.get_func(addr) and name is not None:
@@ -672,15 +659,12 @@ def list_globals(
 @idasync
 def entity_query(
     queries: Annotated[
-        list[EntityQuery] | EntityQuery | str,
+        list[EntityQuery] | EntityQuery,
         "Generic entity query with filtering, projection, and pagination",
     ],
 ) -> list[EntityQueryPage]:
     """Query IDB entities with typed filters, projection, and pagination."""
-    queries = normalize_dict_list(
-        queries,
-        lambda s: {"kind": s, "offset": 0, "count": 100, "sort_by": "addr"},
-    )
+    queries = normalize_dict_list(queries)
     results: list[dict] = []
 
     for query in queries:
@@ -790,14 +774,12 @@ def imports(
 @idasync
 def imports_query(
     queries: Annotated[
-        list[ImportQuery] | ImportQuery | str,
+        list[ImportQuery] | ImportQuery,
         "Import query with import/module filters and pagination",
     ],
 ) -> list[ImportsQueryPage]:
     """Query imports with richer filtering than imports(offset,count)."""
-    queries = normalize_dict_list(
-        queries, lambda s: {"filter": s, "offset": 0, "count": 100}
-    )
+    queries = normalize_dict_list(queries)
     all_imports = _collect_imports()
     results = []
 

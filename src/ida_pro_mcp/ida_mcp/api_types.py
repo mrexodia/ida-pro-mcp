@@ -575,26 +575,12 @@ def _type_matches_kind(kind: str, tif: ida_typeinf.tinfo_t) -> bool:
 @idasync
 def type_query(
     queries: Annotated[
-        list[TypeQuery] | TypeQuery | str,
+        list[TypeQuery] | TypeQuery,
         "Type catalog query with filtering, pagination, and optional relationships",
     ],
 ) -> list[TypeQueryResult]:
     """Query local types with structured filters/projection-friendly output."""
-    queries = normalize_dict_list(
-        queries,
-        lambda s: {
-            "filter": s,
-            "kind": "any",
-            "offset": 0,
-            "count": 100,
-            "sort_by": "name",
-            "descending": False,
-            "include_decl": True,
-            "include_members": False,
-            "max_members": 64,
-            "include_relationships": False,
-        },
-    )
+    queries = normalize_dict_list(queries)
 
     # Build one local catalog and page/filter it per query.
     catalog: list[dict] = []
@@ -736,15 +722,12 @@ def type_query(
 @idasync
 def type_inspect(
     queries: Annotated[
-        list[TypeInspectQuery] | TypeInspectQuery | str,
+        list[TypeInspectQuery] | TypeInspectQuery,
         "Inspect named types and optionally include member layout",
     ],
 ) -> list[TypeInspectResult]:
     """Inspect named types (size/kind/declaration/members)."""
-    queries = normalize_dict_list(
-        queries,
-        lambda s: {"name": s, "include_members": False, "max_members": 128},
-    )
+    queries = normalize_dict_list(queries)
     results = []
 
     for query in queries:
@@ -1048,19 +1031,15 @@ def set_type(edits: list[TypeEdit] | TypeEdit) -> list[SetTypeResult]:
 @idasync
 def type_apply_batch(
     batch: Annotated[
-        TypeApplyBatch | list[TypeEdit] | TypeEdit,
+        TypeApplyBatch,
         "Batch type edits with optional stop_on_error behavior",
     ],
 ) -> TypeApplyBatchResult:
     """Apply multiple type edits and return aggregate status."""
-    if isinstance(batch, dict) and "edits" in batch:
-        normalized_edits = normalize_dict_list(
-            batch.get("edits", []), _parse_addr_type_shorthand
-        )
-        stop_on_error = bool(batch.get("stop_on_error", False))
-    else:
-        normalized_edits = normalize_dict_list(batch, _parse_addr_type_shorthand)
-        stop_on_error = False
+    normalized_edits = normalize_dict_list(
+        batch.get("edits", []), _parse_addr_type_shorthand
+    )
+    stop_on_error = bool(batch.get("stop_on_error", False))
 
     results: list[dict] = []
     for edit in normalized_edits:

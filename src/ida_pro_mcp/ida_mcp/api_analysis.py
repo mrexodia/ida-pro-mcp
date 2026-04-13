@@ -91,7 +91,7 @@ class FuncProfileItem(TypedDict, total=False):
 
 
 class FuncProfileResult(TypedDict, total=False):
-    query: str
+    target: str
     data: list[FuncProfileItem]
     next_offset: int | None
     error: str | None
@@ -141,7 +141,7 @@ class AnalyzeBatchDetails(TypedDict, total=False):
 
 
 class AnalyzeBatchResult(TypedDict, total=False):
-    query: str
+    target: str
     addr: str | None
     name: str | None
     analysis: AnalyzeBatchDetails | None
@@ -170,7 +170,7 @@ XrefQueryRow = TypedDict(
 
 
 class XrefQueryResult(TypedDict, total=False):
-    query: str
+    target: str
     resolved_addr: str | None
     direction: str
     xref_type: str
@@ -803,28 +803,16 @@ def disasm(
 @tool_timeout(120.0)
 def func_profile(
     queries: Annotated[
-        list[FuncProfileQuery] | FuncProfileQuery | str,
+        list[FuncProfileQuery] | FuncProfileQuery,
         "Function profiling query (supports name/address filters + pagination)",
     ],
 ) -> list[FuncProfileResult]:
     """Profile functions with summary metrics and optional sampled details."""
-    queries = normalize_dict_list(
-        queries,
-        lambda s: {
-            "query": s,
-            "offset": 0,
-            "count": 50,
-            "sort_by": "addr",
-            "descending": False,
-            "include_lists": False,
-            "max_items": 25,
-            "include_prototype": False,
-        },
-    )
+    queries = normalize_dict_list(queries)
 
     results: list[dict] = []
     for query in queries:
-        q = str(query.get("query", "*") or "*").strip()
+        q = str(query.get("addr", "*") or "*").strip()
         filter_pattern = str(query.get("filter", "") or "")
         offset = _clamp_int(query.get("offset", 0), 0, 0, 2_000_000_000)
         count = _clamp_int(query.get("count", 50), 50, 0, 1000)
@@ -841,7 +829,7 @@ def func_profile(
             if err is not None or start_ea is None:
                 results.append(
                     {
-                        "query": q,
+                        "target": q,
                         "data": [],
                         "next_offset": None,
                         "error": err or "Failed to resolve function",
@@ -901,7 +889,7 @@ def func_profile(
 
         results.append(
             {
-                "query": q,
+                "target": q,
                 "data": profiled,
                 "next_offset": page["next_offset"],
                 "error": None,
@@ -916,44 +904,24 @@ def func_profile(
 @tool_timeout(120.0)
 def analyze_batch(
     queries: Annotated[
-        list[AnalyzeBatchQuery] | AnalyzeBatchQuery | str,
+        list[AnalyzeBatchQuery] | AnalyzeBatchQuery,
         "Comprehensive per-function analysis with selectable sections",
     ],
 ) -> list[AnalyzeBatchResult]:
     """Run comprehensive analysis over one or more target functions."""
-    queries = normalize_dict_list(
-        queries,
-        lambda s: {
-            "query": s,
-            "include_decompile": True,
-            "include_disasm": False,
-            "include_xrefs": True,
-            "include_callers": True,
-            "include_callees": True,
-            "include_strings": True,
-            "include_constants": True,
-            "include_basic_blocks": True,
-            "include_proto": True,
-            "max_disasm_insns": 300,
-            "max_callers": 100,
-            "max_callees": 100,
-            "max_strings": 100,
-            "max_constants": 200,
-            "max_blocks": 500,
-        },
-    )
+    queries = normalize_dict_list(queries)
 
     results: list[dict] = []
     for query in queries:
-        q = str(query.get("query", "") or query.get("addr", "") or "").strip()
+        q = str(query.get("addr", "") or "").strip()
         if not q:
             results.append(
                 {
-                    "query": q,
+                    "target": q,
                     "addr": None,
                     "name": None,
                     "analysis": None,
-                    "error": "Function query is required",
+                    "error": "addr is required",
                 }
             )
             continue
@@ -962,7 +930,7 @@ def analyze_batch(
         if err is not None or start_ea is None:
             results.append(
                 {
-                    "query": q,
+                    "target": q,
                     "addr": None,
                     "name": None,
                     "analysis": None,
@@ -1095,7 +1063,7 @@ def analyze_batch(
 
             results.append(
                 {
-                    "query": q,
+                    "target": q,
                     "addr": hex(fn.start_ea),
                     "name": fn_name,
                     "analysis": analysis,
@@ -1105,7 +1073,7 @@ def analyze_batch(
         except Exception as e:
             results.append(
                 {
-                    "query": q,
+                    "target": q,
                     "addr": hex(start_ea),
                     "name": None,
                     "analysis": None,
@@ -1161,29 +1129,16 @@ def xrefs_to(
 @idasync
 def xref_query(
     queries: Annotated[
-        list[XrefQuery] | XrefQuery | str,
+        list[XrefQuery] | XrefQuery,
         "Generic xref query with direction/type filters and pagination",
     ],
 ) -> list[XrefQueryResult]:
     """Query xrefs with direction/type filters and pagination."""
-    queries = normalize_dict_list(
-        queries,
-        lambda s: {
-            "query": s,
-            "direction": "both",
-            "xref_type": "any",
-            "offset": 0,
-            "count": 200,
-            "include_fn": True,
-            "dedup": True,
-            "sort_by": "addr",
-            "descending": False,
-        },
-    )
+    queries = normalize_dict_list(queries)
 
     results: list[dict] = []
     for query in queries:
-        q = str(query.get("query", "")).strip()
+        q = str(query.get("addr", "")).strip()
         direction = str(query.get("direction", "both") or "both").lower()
         xref_type = str(query.get("xref_type", "any") or "any").lower()
         offset = _clamp_int(query.get("offset", 0), 0, 0, 2_000_000_000)
@@ -1200,7 +1155,7 @@ def xref_query(
 
         try:
             if not q:
-                raise ValueError("query is required")
+                raise ValueError("addr is required")
             try:
                 target = parse_address(q)
             except Exception:
@@ -1263,7 +1218,7 @@ def xref_query(
             page = paginate(rows, offset, count)
             results.append(
                 {
-                    "query": q,
+                    "target": q,
                     "resolved_addr": hex(target),
                     "direction": direction,
                     "xref_type": xref_type,
@@ -1276,7 +1231,7 @@ def xref_query(
         except Exception as e:
             results.append(
                 {
-                    "query": q,
+                    "target": q,
                     "resolved_addr": None,
                     "direction": direction,
                     "xref_type": xref_type,
@@ -2017,23 +1972,12 @@ def _scan_insn_ranges(
 @idasync
 def insn_query(
     queries: Annotated[
-        list[InsnPattern] | InsnPattern | str,
+        list[InsnPattern] | InsnPattern,
         "Instruction query with mnemonic/operand filters and scoped scan",
     ],
 ) -> list[InsnQueryResult]:
     """Query instructions with mnemonic/operand filters and scoped scans."""
-    queries = normalize_dict_list(
-        queries,
-        lambda s: {
-            "mnem": s,
-            "offset": 0,
-            "count": 100,
-            "max_scan_insns": 200000,
-            "allow_broad": False,
-            "include_fn": False,
-            "include_disasm": False,
-        },
-    )
+    queries = normalize_dict_list(queries)
 
     results: list[dict] = []
     for pattern in queries:
