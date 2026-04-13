@@ -85,6 +85,25 @@ def test_extension_tools_appear_when_enabled():
         MCP_SERVER._enabled_extensions.data = old_exts
 
 
+@test()
+def test_disasm_output_schema_allows_truncation_metadata():
+    """disasm output schema should include optional truncation download metadata fields."""
+    tools = MCP_SERVER._mcp_tools_list()["tools"]
+    disasm_tool = next(tool for tool in tools if tool["name"] == "disasm")
+    output_props = disasm_tool["outputSchema"]["properties"]
+    required = set(disasm_tool["outputSchema"].get("required", []))
+
+    for key in (
+        "_output_truncated",
+        "_total_chars",
+        "_output_id",
+        "_download_url",
+        "_download_hint",
+    ):
+        assert key in output_props, f"{key} missing from disasm outputSchema properties"
+        assert key not in required, f"{key} should be optional in disasm outputSchema"
+
+
 # ---------------------------------------------------------------------------
 # ORIGINAL_TOOLS snapshot (populated at import from real registry)
 # ---------------------------------------------------------------------------

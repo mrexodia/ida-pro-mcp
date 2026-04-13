@@ -65,6 +65,11 @@ class DisasmResult(TypedDict, total=False):
     total_instructions: int | None
     cursor: ResultCursor
     error: str
+    _output_truncated: NotRequired[bool]
+    _total_chars: NotRequired[int]
+    _output_id: NotRequired[str]
+    _download_url: NotRequired[str]
+    _download_hint: NotRequired[str]
 
 
 class FuncProfileItem(TypedDict, total=False):
