@@ -18,6 +18,7 @@ from typing import (
     overload,
 )
 
+import ida_bytes
 import ida_funcs
 import ida_hexrays
 import ida_kernwin
@@ -598,6 +599,41 @@ def parse_address(addr: str | int) -> int:
             if ch not in "0123456789abcdefABCDEF":
                 raise IDAError(f"Not found: {addr!r}")
         raise IDAError(f"Failed to parse address (missing 0x prefix): {addr}")
+
+
+def read_bytes_bss_safe(ea: int, size: int) -> bytes:
+    """Read `size` bytes starting at `ea`, substituting 0 for unloaded bytes.
+
+    Unloaded bytes in BSS-like sections are zero at runtime by every mainstream
+    loader, but ida_bytes.get_byte() returns 0xFF as a sentinel for them. Patch
+    that here so reads of globals in .bss return the real zero-initialized
+    value instead of 0xff garbage.
+    """
+    out = bytearray(size)
+    for i in range(size):
+        if ida_bytes.is_loaded(ea + i):
+            out[i] = ida_bytes.get_byte(ea + i)
+    return bytes(out)
+
+
+def read_int_bss_safe(ea: int, size: int) -> int:
+    """Read an integer of `size` bytes at `ea`, honoring IDB endianness.
+
+    Returns 0 if the byte at `ea` is not loaded (BSS / zero-initialized region).
+    Uses IDA's native sized readers (get_byte/word/dword/qword) for loaded
+    bytes so the result respects the database endianness.
+    """
+    if not ida_bytes.is_loaded(ea):
+        return 0
+    if size == 1:
+        return ida_bytes.get_byte(ea)
+    if size == 2:
+        return ida_bytes.get_word(ea)
+    if size == 4:
+        return ida_bytes.get_dword(ea)
+    if size == 8:
+        return ida_bytes.get_qword(ea)
+    raise ValueError(f"unsupported integer size: {size}")
 
 
 def normalize_list_input(value: list | str) -> list:
