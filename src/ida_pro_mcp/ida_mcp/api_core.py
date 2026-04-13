@@ -508,6 +508,7 @@ def int_convert(
                     ascii=ascii_str,
                     binary=bin(value),
                 ),
+                "error": None,
             }
         )
 
