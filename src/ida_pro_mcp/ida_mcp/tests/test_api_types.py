@@ -181,6 +181,72 @@ def test_read_struct_without_type_info_fails_cleanly():
     assert_error(result[0], contains="could not auto-detect")
 
 
+def _find_bss_addr() -> int | None:
+    """Locate an address whose byte is not loaded (BSS or similar)."""
+    import ida_bytes
+    import idaapi
+    import idautils
+
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if seg is None:
+            continue
+        if seg.type == idaapi.SEG_BSS:
+            return seg.start_ea
+
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if seg is None:
+            continue
+        if not ida_bytes.is_loaded(seg.start_ea):
+            return seg.start_ea
+
+    return None
+
+
+@test()
+def test_read_struct_bss_members_are_zero():
+    """read_struct reports zero for every member when the struct lives in BSS.
+
+    BSS bytes are unloaded in the IDB but zero-initialized at runtime. Before
+    the BSS-aware read, members would come back as 0xff-filled garbage.
+    """
+    bss_ea = _find_bss_addr()
+    if bss_ea is None:
+        skip_test("binary has no BSS / unloaded region")
+
+    if not create_test_struct(TEST_STRUCT_NAME):
+        skip_test("failed to declare test struct")
+
+    result = read_struct({"addr": hex(bss_ea), "struct": TEST_STRUCT_NAME})
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert_ok(entry, "members")
+
+    failures = []
+    for member in entry["members"]:
+        value_str = member["value"]
+        # Integer members render as "0xNN (N)"; pointer as "0xNN...";
+        # longer shapes render as "[NN NN ...]".
+        if "(" in value_str:
+            hex_part = value_str.split()[0]
+            numeric = int(hex_part, 16)
+        elif value_str.startswith("0x"):
+            numeric = int(value_str, 16)
+        elif value_str.startswith("["):
+            inner = value_str.strip("[]").replace("...", "").split()
+            numeric = sum(int(b, 16) for b in inner)
+        else:
+            failures.append(f"{member['name']}: unparseable value {value_str!r}")
+            continue
+        if numeric != 0:
+            failures.append(
+                f"{member['name']}: expected 0 at BSS, got {value_str!r}"
+            )
+
+    assert not failures, "\n".join(failures)
+
+
 @test()
 def test_search_structs_finds_declared_structs():
     """search_structs returns the previously declared deterministic struct."""

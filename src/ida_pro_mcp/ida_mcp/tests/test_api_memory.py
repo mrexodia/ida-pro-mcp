@@ -22,6 +22,7 @@ from ..api_memory import (
     patch,
     put_int,
 )
+from ..utils import read_bytes_bss_safe, read_int_bss_safe
 
 
 CRACKME_FORMAT = "0x201f"
@@ -230,3 +231,140 @@ def test_get_global_value_not_found():
     result = get_global_value("definitely_not_a_global_symbol")
     assert_is_list(result, min_length=1)
     assert_error(result[0], contains="Not found")
+
+
+# ============================================================================
+# BSS / unloaded-byte handling
+# ============================================================================
+
+
+def _find_unloaded_addr() -> int | None:
+    """Find an address whose byte is not loaded in the IDB.
+
+    Prefers SEG_BSS segments (most portable signal), falls back to any segment
+    whose starting byte reports is_loaded=False. Returns None if the binary
+    has no unloaded region - in which case BSS tests should skip.
+    """
+    import ida_bytes
+    import idaapi
+    import idautils
+
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if seg is None:
+            continue
+        if seg.type == idaapi.SEG_BSS:
+            return seg.start_ea
+
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if seg is None:
+            continue
+        if not ida_bytes.is_loaded(seg.start_ea):
+            return seg.start_ea
+
+    return None
+
+
+def _find_named_bss_symbol() -> str | None:
+    """Find a named global whose starting byte is not loaded (BSS-like)."""
+    import ida_bytes
+    import idaapi
+    import idautils
+
+    for addr, name in idautils.Names():
+        if not name:
+            continue
+        if idaapi.get_func(addr):
+            continue
+        if not ida_bytes.is_loaded(addr):
+            return name
+
+    return None
+
+
+@test()
+def test_read_bytes_bss_safe_returns_zeros_for_unloaded():
+    """read_bytes_bss_safe substitutes 0 for unloaded (BSS) bytes."""
+    ea = _find_unloaded_addr()
+    if ea is None:
+        skip_test("binary has no unloaded/BSS region")
+
+    raw = read_bytes_bss_safe(ea, 16)
+    assert isinstance(raw, bytes)
+    assert len(raw) == 16
+    assert raw == b"\x00" * 16, f"expected all zeros, got {raw.hex()}"
+
+
+@test()
+def test_read_int_bss_safe_returns_zero_for_unloaded():
+    """read_int_bss_safe returns 0 for every int width on unloaded bytes."""
+    ea = _find_unloaded_addr()
+    if ea is None:
+        skip_test("binary has no unloaded/BSS region")
+
+    for size in (1, 2, 4, 8):
+        assert read_int_bss_safe(ea, size) == 0, (
+            f"expected 0 for size {size}, got {read_int_bss_safe(ea, size):#x}"
+        )
+
+
+@test()
+def test_get_int_reads_bss_region_as_zero():
+    """get_int returns 0, not the 0xff sentinel, for unloaded (BSS) bytes."""
+    ea = _find_unloaded_addr()
+    if ea is None:
+        skip_test("binary has no unloaded/BSS region")
+
+    for ty in ("u8", "u16", "u32", "u64", "i32", "i64"):
+        result = get_int({"addr": hex(ea), "ty": ty})
+        assert_is_list(result, min_length=1)
+        entry = result[0]
+        assert "error" not in entry, (
+            f"get_int({ty}) at BSS errored: {entry.get('error')!r}"
+        )
+        assert entry["value"] == 0, (
+            f"expected 0 for {ty} at BSS, got {entry['value']!r}"
+        )
+
+
+@test()
+def test_get_bytes_reads_bss_region_as_zero():
+    """get_bytes returns zeroed bytes for an unloaded (BSS) region."""
+    ea = _find_unloaded_addr()
+    if ea is None:
+        skip_test("binary has no unloaded/BSS region")
+
+    result = get_bytes({"addr": hex(ea), "size": 8})
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert_ok(entry, "data")
+    parts = entry["data"].split()
+    assert len(parts) == 8
+    assert all(int(p, 16) == 0 for p in parts), (
+        f"expected all zeros for BSS, got {entry['data']!r}"
+    )
+
+
+@test()
+def test_get_global_value_bss_symbol_is_zero():
+    """get_global_value on a BSS-resident named global returns 0, not 0xff."""
+    import ida_bytes
+
+    name = _find_named_bss_symbol()
+    if name is None:
+        skip_test("binary has no named BSS global")
+
+    result = get_global_value(name)
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert_ok(entry, "value")
+    value_str = entry["value"]
+
+    # Integer-sized globals return a single "0x0". Larger shapes return a
+    # space-separated run of per-byte hex values.
+    parts = value_str.split()
+    assert parts, f"unexpected empty value for BSS global {name}"
+    assert all(int(p, 16) == 0 for p in parts), (
+        f"expected all zeros for BSS global {name}, got {value_str!r}"
+    )
