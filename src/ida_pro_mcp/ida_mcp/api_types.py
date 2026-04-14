@@ -19,6 +19,8 @@ from .utils import (
     get_type_by_name,
     parse_decls_ctypes,
     my_modifier_t,
+    read_bytes_bss_safe,
+    read_int_bss_safe,
     StructRead,
     TypeEdit,
     TypeInspectQuery,
@@ -420,38 +422,21 @@ def read_struct(
                 member_name = member.name
                 member_size = member.type.get_size()
 
-                # Read memory value at member address
+                # Read memory value at member address (BSS-aware: unloaded
+                # bytes resolve to zero, matching runtime zero-init).
                 member_addr = addr + offset
                 try:
                     if member.type.is_ptr():
-                        is_64bit = compat.inf_is_64bit()
-                        if is_64bit:
-                            value = idaapi.get_qword(member_addr)
-                            value_str = f"0x{value:016X}"
-                        else:
-                            value = idaapi.get_dword(member_addr)
-                            value_str = f"0x{value:08X}"
-                    elif member_size == 1:
-                        value = idaapi.get_byte(member_addr)
-                        value_str = f"0x{value:02X} ({value})"
-                    elif member_size == 2:
-                        value = idaapi.get_word(member_addr)
-                        value_str = f"0x{value:04X} ({value})"
-                    elif member_size == 4:
-                        value = idaapi.get_dword(member_addr)
-                        value_str = f"0x{value:08X} ({value})"
-                    elif member_size == 8:
-                        value = idaapi.get_qword(member_addr)
-                        value_str = f"0x{value:016X} ({value})"
+                        ptr_size = 8 if compat.inf_is_64bit() else 4
+                        value = read_int_bss_safe(member_addr, ptr_size)
+                        value_str = f"0x{value:0{ptr_size * 2}X}"
+                    elif member_size in (1, 2, 4, 8):
+                        value = read_int_bss_safe(member_addr, member_size)
+                        value_str = f"0x{value:0{member_size * 2}X} ({value})"
                     else:
-                        bytes_data = []
-                        for i in range(min(member_size, 16)):
-                            try:
-                                bytes_data.append(
-                                    f"{idaapi.get_byte(member_addr + i):02X}"
-                                )
-                            except Exception:
-                                break
+                        capped = min(member_size, 16)
+                        raw = read_bytes_bss_safe(member_addr, capped)
+                        bytes_data = [f"{b:02X}" for b in raw]
                         value_str = f"[{' '.join(bytes_data)}{'...' if member_size > 16 else ''}]"
                 except Exception:
                     value_str = "<failed to read>"
@@ -575,26 +560,12 @@ def _type_matches_kind(kind: str, tif: ida_typeinf.tinfo_t) -> bool:
 @idasync
 def type_query(
     queries: Annotated[
-        list[TypeQuery] | TypeQuery | str,
+        list[TypeQuery] | TypeQuery,
         "Type catalog query with filtering, pagination, and optional relationships",
     ],
 ) -> list[TypeQueryResult]:
     """Query local types with structured filters/projection-friendly output."""
-    queries = normalize_dict_list(
-        queries,
-        lambda s: {
-            "filter": s,
-            "kind": "any",
-            "offset": 0,
-            "count": 100,
-            "sort_by": "name",
-            "descending": False,
-            "include_decl": True,
-            "include_members": False,
-            "max_members": 64,
-            "include_relationships": False,
-        },
-    )
+    queries = normalize_dict_list(queries)
 
     # Build one local catalog and page/filter it per query.
     catalog: list[dict] = []
@@ -736,15 +707,12 @@ def type_query(
 @idasync
 def type_inspect(
     queries: Annotated[
-        list[TypeInspectQuery] | TypeInspectQuery | str,
+        list[TypeInspectQuery] | TypeInspectQuery,
         "Inspect named types and optionally include member layout",
     ],
 ) -> list[TypeInspectResult]:
     """Inspect named types (size/kind/declaration/members)."""
-    queries = normalize_dict_list(
-        queries,
-        lambda s: {"name": s, "include_members": False, "max_members": 128},
-    )
+    queries = normalize_dict_list(queries)
     results = []
 
     for query in queries:
@@ -1048,19 +1016,15 @@ def set_type(edits: list[TypeEdit] | TypeEdit) -> list[SetTypeResult]:
 @idasync
 def type_apply_batch(
     batch: Annotated[
-        TypeApplyBatch | list[TypeEdit] | TypeEdit,
+        TypeApplyBatch,
         "Batch type edits with optional stop_on_error behavior",
     ],
 ) -> TypeApplyBatchResult:
     """Apply multiple type edits and return aggregate status."""
-    if isinstance(batch, dict) and "edits" in batch:
-        normalized_edits = normalize_dict_list(
-            batch.get("edits", []), _parse_addr_type_shorthand
-        )
-        stop_on_error = bool(batch.get("stop_on_error", False))
-    else:
-        normalized_edits = normalize_dict_list(batch, _parse_addr_type_shorthand)
-        stop_on_error = False
+    normalized_edits = normalize_dict_list(
+        batch.get("edits", []), _parse_addr_type_shorthand
+    )
+    stop_on_error = bool(batch.get("stop_on_error", False))
 
     results: list[dict] = []
     for edit in normalized_edits:

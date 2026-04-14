@@ -1,4 +1,4 @@
-from typing import Any, NotRequired, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict
 
 import idaapi
 import idautils
@@ -301,11 +301,13 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[PatchAsmResult]:
 
 @tool
 @idasync
-def rename(batch: RenameBatch | dict) -> RenameResult:
+def rename(
+    batch: Annotated[
+        RenameBatch,
+        "Rename batch with func/data/local/stack fields (at least one required)",
+    ],
+) -> RenameResult:
     """Batch-rename funcs/globals/locals/stack vars with dry-run options."""
-
-    if not isinstance(batch, dict):
-        return {"error": "batch must be a dict"}
 
     stop_on_error = bool(batch.get("stop_on_error", False))
     dry_run = bool(batch.get("dry_run", False))
