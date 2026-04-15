@@ -453,12 +453,19 @@ class Segment(TypedDict):
     permissions: str
 
 
+class Ref(TypedDict):
+    addr: str
+    name: str
+    string: NotRequired[str]
+
+
 class DisassemblyLine(TypedDict):
     segment: NotRequired[str]
     addr: str
     label: NotRequired[str]
     instruction: str
     comments: NotRequired[list[str]]
+    refs: NotRequired[list[Ref]]
 
 
 class Argument(TypedDict):

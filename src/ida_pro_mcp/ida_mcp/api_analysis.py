@@ -36,6 +36,7 @@ from .utils import (
     extract_function_constants,
     Argument,
     DisassemblyFunction,
+    Ref,
     Xref,
     BasicBlock,
     StructFieldQuery,
@@ -50,6 +51,7 @@ from . import compat
 class DecompileResult(TypedDict):
     addr: str
     code: str | None
+    refs: NotRequired[list[Ref]]
     error: NotRequired[str]
 
 
@@ -494,6 +496,108 @@ def _resolve_function_start(query: object) -> tuple[int | None, str | None]:
     return func.start_ea, None
 
 
+def _collect_line_comments(ea: int) -> list[str]:
+    out: list[str] = []
+    i = 0
+    while True:
+        line = ida_lines.get_extra_cmt(ea, ida_lines.E_PREV + i)
+        if line is None:
+            break
+        out.append(ida_lines.tag_remove(line))
+        i += 1
+    cmt = ida_bytes.get_cmt(ea, False)
+    if cmt:
+        out.append(cmt)
+    rcmt = ida_bytes.get_cmt(ea, True)
+    if rcmt and rcmt != cmt:
+        out.append(rcmt)
+    i = 0
+    while True:
+        line = ida_lines.get_extra_cmt(ea, ida_lines.E_NEXT + i)
+        if line is None:
+            break
+        out.append(ida_lines.tag_remove(line))
+        i += 1
+    return out
+
+
+def _resolve_ref_name(ea: int) -> str:
+    name = ida_name.get_ea_name(ea)
+    if name:
+        return name
+    func = idaapi.get_func(ea)
+    if func and func.start_ea == ea:
+        return ida_funcs.get_func_name(ea) or ""
+    return ""
+
+
+_STR_CODECS = {0: "utf-8", 1: "utf-16-le", 2: "utf-32-le"}
+
+
+def _resolve_ref(ea: int) -> dict | None:
+    name = _resolve_ref_name(ea)
+    if not name:
+        return None
+    info: dict = {"addr": hex(ea), "name": name}
+    flags = ida_bytes.get_flags(ea)
+    if ida_bytes.is_strlit(flags):
+        strtype = ida_nalt.get_str_type(ea)
+        if strtype is None or strtype < 0:
+            strtype = ida_nalt.STRTYPE_C
+        raw = ida_bytes.get_strlit_contents(ea, -1, strtype)
+        if raw:
+            codec = _STR_CODECS.get(strtype & 3, "utf-8")
+            try:
+                info["string"] = raw.decode(codec, errors="replace")
+            except Exception:
+                pass
+    return info
+
+
+def _collect_decompile_refs(cfunc) -> list[dict]:
+    import ida_hexrays
+
+    seen: set[int] = set()
+    refs: list[dict] = []
+
+    class _Visitor(ida_hexrays.ctree_visitor_t):
+        def __init__(self):
+            ida_hexrays.ctree_visitor_t.__init__(self, ida_hexrays.CV_FAST)
+
+        def visit_expr(self, e):
+            if e.op == ida_hexrays.cot_obj:
+                ea = e.obj_ea
+                if ea != idaapi.BADADDR and ea not in seen:
+                    seen.add(ea)
+                    info = _resolve_ref(ea)
+                    if info:
+                        refs.append(info)
+            return 0
+
+    _Visitor().apply_to(cfunc.body, None)
+    return refs
+
+
+def _collect_line_refs(ea: int) -> list[dict]:
+    seen: set[int] = set()
+    refs: list[dict] = []
+    for ref_ea in idautils.CodeRefsFrom(ea, False):
+        if ref_ea == idaapi.BADADDR or ref_ea in seen:
+            continue
+        seen.add(ref_ea)
+        info = _resolve_ref(ref_ea)
+        if info:
+            refs.append(info)
+    for ref_ea in idautils.DataRefsFrom(ea):
+        if ref_ea == idaapi.BADADDR or ref_ea in seen:
+            continue
+        seen.add(ref_ea)
+        info = _resolve_ref(ref_ea)
+        if info:
+            refs.append(info)
+    return refs
+
+
 def _limit_items(items: list, limit: int) -> tuple[list, bool]:
     if limit < 0:
         limit = 0
@@ -651,7 +755,19 @@ def decompile(
         code = decompile_function_safe(start)
         if code is None:
             return {"addr": addr, "code": None, "error": "Decompilation failed"}
-        return {"addr": addr, "code": code}
+        result: DecompileResult = {"addr": addr, "code": code}
+        try:
+            import ida_hexrays
+
+            if ida_hexrays.init_hexrays_plugin():
+                cfunc = ida_hexrays.decompile(start)
+                if cfunc:
+                    refs = _collect_decompile_refs(cfunc)
+                    if refs:
+                        result["refs"] = refs
+        except Exception:
+            pass
+        return result
     except Exception as e:
         return {"addr": addr, "code": None, "error": str(e)}
 
@@ -717,7 +833,20 @@ def disasm(
             if len(lines) < max_instructions:
                 line = ida_lines.generate_disasm_line(ea, 0)
                 instruction = ida_lines.tag_remove(line) if line else ""
-                lines.append({"addr": f"{ea:x}", "instruction": compact_whitespace(instruction)})
+                entry: dict = {
+                    "addr": f"{ea:x}",
+                    "instruction": compact_whitespace(instruction),
+                }
+                name = ida_name.get_ea_name(ea)
+                if name:
+                    entry["label"] = name
+                comments = _collect_line_comments(ea)
+                if comments:
+                    entry["comments"] = comments
+                refs = _collect_line_refs(ea)
+                if refs:
+                    entry["refs"] = refs
+                lines.append(entry)
                 seen += 1
                 return True
             more = True
