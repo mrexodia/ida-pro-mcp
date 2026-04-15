@@ -17,3 +17,4 @@ from . import test_framework_helpers
 from . import test_typed_fixture
 from . import test_utils
 from . import test_api_analysis_internals
+from . import test_profile

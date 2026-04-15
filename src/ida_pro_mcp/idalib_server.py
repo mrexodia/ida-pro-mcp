@@ -17,6 +17,7 @@ from ida_pro_mcp.ida_mcp.api_core import (
     server_health,
     server_warmup,
 )
+from ida_pro_mcp.ida_mcp.profile import apply_profile, load_profile
 from ida_pro_mcp.ida_mcp.rpc import get_current_transport_session_id, tool
 from ida_pro_mcp.idalib_session_manager import get_session_manager
 
@@ -493,6 +494,17 @@ def main():
         "--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)"
     )
     parser.add_argument(
+        "--profile",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Restrict exposed tools to those listed in a profile file "
+            "(one name per line, # for comments). idalib_* management tools "
+            "are always kept."
+        ),
+    )
+    parser.add_argument(
         "input_path",
         type=Path,
         nargs="?",
@@ -563,6 +575,26 @@ def main():
             MCP_SERVER.tools.methods.pop(name, None)
         if MCP_UNSAFE:
             logger.info("Unsafe tools disabled (start with --unsafe to enable)")
+
+    if args.profile is not None:
+        try:
+            whitelist = load_profile(args.profile)
+        except (OSError, UnicodeDecodeError) as e:
+            raise SystemExit(f"Failed to read profile '{args.profile}': {e}")
+        kept, unknown = apply_profile(
+            MCP_SERVER.tools.methods,
+            whitelist,
+            protected=IDALIB_MANAGEMENT_TOOLS,
+        )
+        if unknown:
+            logger.warning(
+                "Profile references unknown tool(s) (ignored): %s", ", ".join(unknown)
+            )
+        logger.info(
+            "Profile applied: %d whitelisted + %d management tool(s) active",
+            len(kept),
+            len(IDALIB_MANAGEMENT_TOOLS),
+        )
 
     _install_context_activation_hooks()
 

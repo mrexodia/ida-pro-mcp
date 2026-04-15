@@ -6,6 +6,7 @@ from urllib.parse import urlparse, parse_qs
 from typing import TypeVar, cast
 from http.server import HTTPServer
 
+from .profile import dump_profile, parse_profile
 from .sync import idasync
 from .rpc import (
     McpRpcRegistry,
@@ -135,6 +136,12 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
             self._handle_config_get()
             return
 
+        if path == "/profile.txt":
+            if not self._check_host():
+                return
+            self._handle_profile_export()
+            return
+
         # Handle output download requests
         output_match = re.match(r"^/output/([a-f0-9-]+)\.(\w+)$", path)
         if output_match:
@@ -144,6 +151,22 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
             return
 
         super().do_GET()
+
+    def _handle_profile_export(self):
+        """Return the currently enabled tools as a profile file."""
+        enabled = sorted(self.mcp_server.tools.methods.keys())
+        body = dump_profile(
+            enabled,
+            header="ida-pro-mcp profile exported from /config.html",
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition", 'attachment; filename="ida-mcp-profile.txt"'
+        )
+        self.end_headers()
+        self.wfile.write(body)
 
     def _handle_output_download(self, output_id: str, extension: str):
         """Handle download of cached output data."""
@@ -367,6 +390,11 @@ input[type="submit"]:hover {
 </p>"""
 
         body += "<h2>Enabled Tools</h2>"
+        body += (
+            '<p style="font-size: 0.9rem; margin: 0.5rem 0;">'
+            '<a href="/profile.txt" download>Export as --profile file</a>'
+            "</p>"
+        )
         body += quick_select
         for name, func in ORIGINAL_TOOLS.items():
             description = (
@@ -378,6 +406,20 @@ input[type="submit"]:hover {
             body += f"<label><input type='checkbox' name='{html.escape(name)}' value='{html.escape(name)}'{checked}{unsafe_attr} data-tool>{unsafe_prefix}{html.escape(name)}: {html.escape(description)}</label>"
         body += quick_select
         body += "<br><input type='submit' value='Save'>"
+
+        body += "<h2>Import Profile</h2>"
+        body += (
+            "<p style='font-size: 0.9rem; margin: 0.5rem 0;'>"
+            "Paste profile contents (one tool name per line, <code>#</code> for comments) "
+            "to replace the current Enabled Tools selection."
+            "</p>"
+        )
+        body += (
+            "<textarea name='profile_text' rows='6' "
+            "style='width:100%;font-family:monospace;' "
+            "placeholder='# paste profile here'></textarea>"
+        )
+        body += "<br><input type='submit' name='apply_profile' value='Apply profile'>"
         body += "</form></body></html>"
         self._send_html(200, body)
 
@@ -400,7 +442,12 @@ input[type="submit"]:hover {
 
         # Update the server's tools (discovery tools cannot be disabled)
         from .api_discovery import _LOCAL_TOOL_NAMES as PROTECTED_TOOLS
-        enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS.keys()}
+
+        if "apply_profile" in postvars:
+            whitelist = parse_profile(postvars.get("profile_text", [""])[0])
+            enabled_tools = {name: name in whitelist for name in ORIGINAL_TOOLS.keys()}
+        else:
+            enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS.keys()}
         for name in PROTECTED_TOOLS:
             enabled_tools[name] = True
         self.mcp_server.tools.methods = {
