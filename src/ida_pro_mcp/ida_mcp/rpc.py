@@ -48,17 +48,14 @@ def _truncate_value(value: Any, depth: int = 0) -> Any:
         return value[:OUTPUT_LIMIT_PREVIEW_STR_LEN] + f"... [{len(value)} chars total]"
 
     if isinstance(value, list):
-        truncated_list = [
+        # IMPORTANT: Do not inject sentinel objects like {"_truncated": "..."} into lists.
+        # Many tool schemas constrain list item shapes (additionalProperties: false),
+        # so sentinels can break structured output validation. Truncation is reported
+        # via _meta.ida_mcp and the download_hint content.
+        return [
             _truncate_value(item, depth + 1)
             for item in value[:OUTPUT_LIMIT_PREVIEW_ITEMS]
         ]
-        if len(value) > OUTPUT_LIMIT_PREVIEW_ITEMS:
-            truncated_list.append(
-                {
-                    "_truncated": f"... and {len(value) - OUTPUT_LIMIT_PREVIEW_ITEMS} more items"
-                }
-            )
-        return truncated_list
 
     if isinstance(value, dict):
         return {k: _truncate_value(v, depth + 1) for k, v in value.items()}
