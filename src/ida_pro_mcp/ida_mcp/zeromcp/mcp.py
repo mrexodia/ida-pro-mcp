@@ -868,6 +868,18 @@ class McpServer:
 
         return schema
 
+    def _schema_is_object_like(self, schema: dict) -> bool:
+        """Check if a JSON schema always describes a dict at runtime.
+
+        Handles plain objects and anyOf unions where every variant is an object,
+        which matches the unwrapped pass-through in _mcp_tools_call.
+        """
+        if schema.get("type") == "object":
+            return True
+        if "anyOf" in schema:
+            return all(self._schema_is_object_like(s) for s in schema["anyOf"])
+        return False
+
     def _type_to_json_schema(self, py_type: Any) -> dict:
         """Convert Python type hint to JSON schema object"""
         if py_type is Any:
@@ -968,8 +980,10 @@ class McpServer:
         if return_type and return_type is not type(None):
             return_schema = self._type_to_json_schema(return_type)
 
-            # Wrap non-object returns in a "result" property
-            if return_schema.get("type") != "object":
+            # Wrap non-object returns in a "result" property.
+            # _mcp_tools_call passes dicts through unwrapped, so union-of-objects
+            # (anyOf where every variant is an object) must not be wrapped either.
+            if not self._schema_is_object_like(return_schema):
                 return_schema = {
                     "type": "object",
                     "properties": {"result": return_schema},
