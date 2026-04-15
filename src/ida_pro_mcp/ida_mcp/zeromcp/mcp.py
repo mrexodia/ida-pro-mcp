@@ -989,6 +989,11 @@ class McpServer:
                     "properties": {"result": return_schema},
                     "required": ["result"],
                 }
+            elif return_schema.get("type") != "object":
+                # anyOf-of-objects: MCP spec requires outputSchema root to be
+                # type:"object". Hoist it so validators (e.g. MCP Inspector)
+                # accept the schema while anyOf still constrains the variants.
+                return_schema = {"type": "object", **return_schema}
 
             schema["outputSchema"] = return_schema
 
