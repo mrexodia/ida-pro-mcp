@@ -5,9 +5,12 @@ import time
 from typing import Annotated, Any, NotRequired, TypedDict
 
 import ida_auto
+import ida_bytes
 import idaapi
 import ida_funcs
 import ida_hexrays
+import ida_lines
+import ida_segment
 import idautils
 import ida_loader
 import ida_nalt
@@ -109,6 +112,20 @@ class FindRegexResult(TypedDict, total=False):
     matches: list[dict[str, Any]]
     cursor: dict[str, Any]
     error: str | None
+
+
+class SearchTextMatch(TypedDict, total=False):
+    addr: str
+    text: str
+    kind: str  # "disasm" | "comment"
+    function: str
+
+
+class SearchTextResult(TypedDict, total=False):
+    n: int
+    matches: list[SearchTextMatch]
+    cursor: dict[str, Any]
+    error: str
 
 
 # Cached strings list: [(ea, text), ...]
@@ -851,6 +868,117 @@ def find_regex(
                 more = True
                 break
             matches.append({"addr": hex(ea), "string": text})
+
+    return {
+        "n": len(matches),
+        "matches": matches,
+        "cursor": {"next": offset + limit} if more else {"done": True},
+    }
+
+
+def _iter_head_comments(ea: int):
+    """Yield (kind-suffix, text) for every comment attached to ea. Order is
+    stable: anterior lines in index order, regular, repeatable, posterior."""
+    i = 0
+    while True:
+        line = ida_lines.get_extra_cmt(ea, ida_lines.E_PREV + i)
+        if line is None:
+            break
+        yield ida_lines.tag_remove(line)
+        i += 1
+    cmt = ida_bytes.get_cmt(ea, False)
+    if cmt:
+        yield cmt
+    rcmt = ida_bytes.get_cmt(ea, True)
+    if rcmt and rcmt != cmt:
+        yield rcmt
+    i = 0
+    while True:
+        line = ida_lines.get_extra_cmt(ea, ida_lines.E_NEXT + i)
+        if line is None:
+            break
+        yield ida_lines.tag_remove(line)
+        i += 1
+
+
+@tool
+@idasync
+def search_text(
+    pattern: Annotated[str, "Regex to search in disassembly text and comments"],
+    limit: Annotated[int, "Max matches (default: 30, max: 500)"] = 30,
+    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
+    include: Annotated[
+        str, "'disasm' | 'comments' | 'all' (default: all)"
+    ] = "all",
+    code_only: Annotated[
+        bool, "Restrict search to executable segments (default: true)"
+    ] = True,
+) -> SearchTextResult:
+    """Search disassembly text and comments by case-insensitive regex with pagination."""
+    if limit <= 0:
+        limit = 30
+    if limit > 500:
+        limit = 500
+
+    include = (include or "all").lower()
+    if include not in ("disasm", "comments", "all"):
+        return {"n": 0, "matches": [], "cursor": {"done": True}, "error": f"invalid include: {include!r}"}
+
+    try:
+        regex = re.compile(pattern, re.IGNORECASE)
+    except re.error as e:
+        return {"n": 0, "matches": [], "cursor": {"done": True}, "error": f"invalid regex: {e}"}
+
+    want_disasm = include in ("disasm", "all")
+    want_comments = include in ("comments", "all")
+
+    matches: list[SearchTextMatch] = []
+    skipped = 0
+    more = False
+
+    def _emit(ea: int, text: str, kind: str) -> bool:
+        """Returns True if iteration should stop (limit reached)."""
+        nonlocal skipped, more
+        if skipped < offset:
+            skipped += 1
+            return False
+        if len(matches) >= limit:
+            more = True
+            return True
+        entry: SearchTextMatch = {"addr": hex(ea), "text": text, "kind": kind}
+        func = idaapi.get_func(ea)
+        if func is not None:
+            fname = ida_funcs.get_func_name(func.start_ea)
+            if fname:
+                entry["function"] = fname
+        matches.append(entry)
+        return False
+
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if not seg:
+            continue
+        if code_only and not (seg.perm & idaapi.SEGPERM_EXEC):
+            continue
+
+        for ea in idautils.Heads(seg.start_ea, seg.end_ea):
+            if want_disasm:
+                line = ida_lines.generate_disasm_line(ea, 0)
+                text = ida_lines.tag_remove(line) if line else ""
+                if text and regex.search(text):
+                    if _emit(ea, text, "disasm"):
+                        break
+
+            if want_comments and len(matches) < limit:
+                for cmt_text in _iter_head_comments(ea):
+                    if cmt_text and regex.search(cmt_text):
+                        if _emit(ea, cmt_text, "comment"):
+                            break
+                if more:
+                    break
+
+        if more:
+            break
 
     return {
         "n": len(matches),
