@@ -1103,7 +1103,7 @@ def decompile_checked(addr: int):
     return cfunc
 
 
-def decompile_function_safe(ea: int) -> Optional[str]:
+def decompile_function_safe(ea: int, include_addresses: bool = True) -> Optional[str]:
     """Safely decompile a function, returning None on failure (uses cache)"""
     import ida_lines
     import ida_kernwin
@@ -1122,7 +1122,7 @@ def decompile_function_safe(ea: int) -> Optional[str]:
             item = ida_hexrays.ctree_item_t()
             _tail = ida_hexrays.ctree_item_t()
             line_ea = None
-            if cfunc.get_line_item(sl.line, 0, False, _head, item, _tail):
+            if include_addresses and cfunc.get_line_item(sl.line, 0, False, _head, item, _tail):
                 dstr: str | None = item.dstr()
                 if dstr:
                     ds = dstr.split(": ")
