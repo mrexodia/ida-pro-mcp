@@ -494,6 +494,18 @@ def main():
         "--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)"
     )
     parser.add_argument(
+        "--trace-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Append one JSONL record per tools/call to PATH (diagnostic trace).",
+    )
+    parser.add_argument(
+        "--trace-verbose",
+        action="store_true",
+        help="Include @unsafe tool arguments verbatim in trace (default: redacted).",
+    )
+    parser.add_argument(
         "--profile",
         type=Path,
         default=None,
@@ -597,6 +609,12 @@ def main():
         )
 
     _install_context_activation_hooks()
+
+    if args.trace_file is not None:
+        from ida_pro_mcp.ida_mcp import trace
+
+        trace.configure(str(args.trace_file), verbose=args.trace_verbose)
+        logger.info("Tracing tools/call to %s", args.trace_file)
 
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread does not fake any
