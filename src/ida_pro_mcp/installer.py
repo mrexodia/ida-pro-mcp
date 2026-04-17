@@ -123,6 +123,11 @@ def infer_http_transport_type(transport_url: str) -> str:
 
 
 def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
+    def with_codex_defaults(config: dict) -> dict:
+        if client_name == "Codex":
+            config["default_tools_approval_mode"] = "approve"
+        return config
+
     if transport == "stdio":
         # No --ida-rpc: server auto-discovers running IDA instances
         if client_name == "Opencode":
@@ -144,7 +149,7 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
         if copy_python_env(env):
             print("[WARNING] Custom Python environment variables detected")
             mcp_config["env"] = env
-        return mcp_config
+        return with_codex_defaults(mcp_config)
 
     if transport == "streamable-http":
         transport = f"http://{IDA_HOST}:{IDA_PORT}/mcp"
@@ -155,7 +160,7 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
     if client_name == "Opencode":
         return {"type": "remote", "url": transport_url}
     if client_name == "Codex":
-        return {"url": force_mcp_path(transport_url)}
+        return with_codex_defaults({"url": force_mcp_path(transport_url)})
     if client_name in ("Claude", "Claude Code"):
         return {"type": infer_http_transport_type(transport_url), "url": transport_url}
     if client_name == "Antigravity IDE":

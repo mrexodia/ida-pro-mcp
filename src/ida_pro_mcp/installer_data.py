@@ -34,6 +34,7 @@ CLIENT_ALIASES: dict[str, str] = {
 # Empty subdirectory means config file is in project root
 PROJECT_LEVEL_CONFIGS: dict[str, tuple[str, str]] = {
     "Claude Code": ("", ".mcp.json"),
+    "Codex": (".codex", "config.toml"),
     "Cursor": (".cursor", "mcp.json"),
     "VS Code": (".vscode", "mcp.json"),
     "VS Code Insiders": (".vscode", "mcp.json"),
