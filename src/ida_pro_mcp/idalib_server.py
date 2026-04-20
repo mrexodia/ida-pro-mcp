@@ -18,7 +18,7 @@ from ida_pro_mcp.ida_mcp.api_core import (
     server_warmup,
 )
 from ida_pro_mcp.ida_mcp.profile import apply_profile, load_profile
-from ida_pro_mcp.ida_mcp.rpc import get_current_transport_session_id, tool
+from ida_pro_mcp.ida_mcp.rpc import get_current_transport_session_id, set_download_base_url, tool
 from ida_pro_mcp.idalib_session_manager import get_session_manager
 
 class IdalibContextFields(TypedDict):
@@ -601,6 +601,7 @@ def main():
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread does not fake any
     # work from @idasync, so we deadlock.
+    set_download_base_url(f"http://{args.host}:{args.port}")
     MCP_SERVER.serve(host=args.host, port=args.port, background=False)
 
 
