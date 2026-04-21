@@ -478,76 +478,78 @@ def test_find_regex():
 def test_search_text_smoke():
     """search_text returns a well-formed envelope even for no matches."""
     result = search_text("___definitely_no_such_token___")
-    assert_has_keys(result, "n", "matches", "cursor")
+    assert_has_keys(result, "n", "hits", "cursor")
     assert result["n"] == 0
-    assert result["matches"] == []
+    assert result["hits"] == []
     assert result["cursor"].get("done") is True
 
 
 @test()
 def test_search_text_invalid_regex_returns_error():
     """Bad regex surfaces as `error`, not a raised exception."""
-    result = search_text("(unclosed")
+    result = search_text("(unclosed", regex=True)
     assert "error" in result
     assert result["n"] == 0
 
 
 @test()
 def test_search_text_invalid_include_returns_error():
-    result = search_text(".*", include="garbage")
+    result = search_text("call", include="garbage")
     assert "error" in result
 
 
 @test()
-def test_search_text_matches_have_required_shape():
-    """Match records carry addr/text/kind and addr is a hex literal."""
-    result = search_text(r"\w", limit=5)
+def test_search_text_hits_have_required_shape():
+    """Hit records carry addr/matches; matches carry kind/text."""
+    result = search_text("call", limit=5)
     if result["n"] == 0:
-        skip_test("binary produced no matches for \\w")
-    for m in result["matches"]:
-        assert_has_keys(m, "addr", "text", "kind")
-        assert is_hex_address(m["addr"]), f"bad addr: {m['addr']!r}"
-        assert m["kind"] in ("disasm", "comment")
-        assert isinstance(m["text"], str) and m["text"]
+        skip_test("binary produced no matches for 'call'")
+    for h in result["hits"]:
+        assert_has_keys(h, "addr", "matches")
+        assert is_hex_address(h["addr"]), f"bad addr: {h['addr']!r}"
+        assert h["matches"], f"hit at {h['addr']} has no matches"
+        for m in h["matches"]:
+            assert_has_keys(m, "kind", "text")
+            assert m["kind"] in ("disasm", "comment")
+            assert isinstance(m["text"], str) and m["text"]
 
 
 @test()
-def test_search_text_disasm_finds_call_instruction():
-    """The crackme binary has call sites; search_text('call') should match."""
-    result = search_text(r"\bcall\b", include="disasm", limit=10)
+def test_search_text_disasm_only_excludes_comments():
+    """include='disasm' should never return comment-kind lines."""
+    result = search_text("call", include="disasm", limit=10)
     if result["n"] == 0:
-        skip_test("no 'call' mnemonic in binary")
-    kinds = {m["kind"] for m in result["matches"]}
-    assert kinds == {"disasm"}, f"unexpected kinds: {kinds}"
+        skip_test("no 'call' in binary")
+    for h in result["hits"]:
+        for m in h["matches"]:
+            assert m["kind"] == "disasm", f"unexpected kind {m['kind']} at {h['addr']}"
 
 
 @test()
-def test_search_text_pagination_advances_cursor():
-    """Second page starts where first one stopped."""
-    page1 = search_text(r"\w", limit=3, offset=0)
-    if page1["n"] < 3 or page1["cursor"].get("done"):
+def test_search_text_pagination_uses_addr_cursor():
+    """Cursor is an address; the second page must not re-emit the first page's hits."""
+    page1 = search_text("call", limit=2)
+    if page1["n"] < 2 or page1["cursor"].get("done"):
         skip_test("not enough matches to paginate")
-    page2 = search_text(r"\w", limit=3, offset=page1["cursor"]["next"])
-    addrs1 = [m["addr"] for m in page1["matches"]]
-    addrs2 = [m["addr"] for m in page2["matches"]]
-    overlap = set(addrs1) & set(addrs2)
-    # Pagination is stable per-match, but the same ea can appear once in
-    # disasm and once in a comment. Overlap by exact (addr, kind) should be
-    # empty.
-    keys1 = {(m["addr"], m["kind"]) for m in page1["matches"]}
-    keys2 = {(m["addr"], m["kind"]) for m in page2["matches"]}
-    assert not (keys1 & keys2), f"duplicate pagination keys: {keys1 & keys2}"
+    next_addr = page1["cursor"]["next"]
+    assert is_hex_address(next_addr), f"cursor.next not hex: {next_addr!r}"
+    page2 = search_text("call", limit=2, start=next_addr)
+    addrs1 = {h["addr"] for h in page1["hits"]}
+    addrs2 = {h["addr"] for h in page2["hits"]}
+    assert not (addrs1 & addrs2), f"duplicate hits across pages: {addrs1 & addrs2}"
 
 
 @test()
 def test_search_text_limit_respected():
-    result = search_text(r"\w", limit=2)
-    assert len(result["matches"]) <= 2
+    result = search_text("call", limit=2)
+    assert len(result["hits"]) <= 2
 
 
 @test()
-def test_search_text_include_filter():
-    """include='disasm' excludes comment kinds; include='comments' excludes disasm."""
-    disasm_only = search_text(r"\w", include="disasm", limit=50)
-    for m in disasm_only["matches"]:
-        assert m["kind"] == "disasm"
+def test_search_text_regex_mode():
+    """regex=True accepts regex syntax and finds matches."""
+    result = search_text(r"call|jmp", regex=True, limit=5)
+    if result["n"] == 0:
+        skip_test("no call/jmp in binary")
+    for h in result["hits"]:
+        assert h["matches"]
