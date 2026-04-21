@@ -245,6 +245,64 @@ With `--isolated-contexts`, strict Streamable HTTP session semantics are enabled
 - `read_struct(queries)`: Read structure field values at specific address(es).
 - `search_structs(filter)`: Search structures by name pattern.
 
+## Bookmarks Management
+
+- `list_bookmarks(filter)`: List all bookmarks with optional filtering.
+- `add_bookmark(address, description, title)`: Add bookmark at address.
+- `remove_bookmark(addresses)`: Remove bookmarks by address(es).
+- `jump_to_bookmark(address)`: Navigate to bookmarked address.
+- `create_bookmark_folder(name)`: Create bookmark folder (IDA 7.6+).
+- `delete_bookmark_folder(name)`: Delete bookmark folder.
+
+## Function Clustering
+
+- `list_clusters(filter)`: List function clusters (e.g., "crypto", "network").
+- `create_cluster(name, description)`: Create new function cluster.
+- `add_to_cluster(cluster, functions)`: Add functions to cluster.
+- `remove_from_cluster(cluster, functions)`: Remove functions from cluster.
+- `list_cluster_functions(cluster)`: List functions in cluster.
+- `analyze_cluster(cluster)`: Analyze cluster (size, strings, imports).
+- `rename_cluster(old_name, new_name)`: Rename cluster.
+- `delete_cluster(name)`: Delete cluster.
+
+## String Deobfuscation
+
+- `find_encrypted_strings(patterns, min_length, section, encoding)`: Scan for encrypted/obfuscated strings (XOR, ADD, ROT13).
+- `decrypt_strings(addresses, algorithm, key)`: Decrypt strings using XOR/ADD/ROT13/custom.
+- `auto_detect_obfuscation(addresses)`: Auto-detect obfuscation algorithm.
+
+## VM Handler Detection
+
+- `detect_vm_handlers(function, pattern)`: Detect VM interpreter patterns.
+- `reconstruct_handler_table(function, handler_size)`: Reconstruct VM handler table.
+- `analyze_vm_instructions(handler_table_address, max_handlers)`: Analyze VM instructions.
+
+## FLIRT/Lumina Auto-tagging
+
+- `list_flirt_sigs()`: List loaded FLIRT signatures.
+- `apply_flirt_file(sig_path, timeout)`: Apply FLIRT signature file.
+- `apply_flirt_pattern(patterns)`: Apply signatures by pattern name.
+- `lumina_query(function, threshold)`: Query Lumina server for metadata.
+- `lumina_apply(functions, threshold)`: Apply Lumina metadata.
+- `lumina_backup(functions)`: Backup Lumina metadata.
+- `lumina_revert(functions)`: Revert to backed-up metadata.
+
+## Database Tagging
+
+- `get_database_tags()`: Get all custom IDB tags.
+- `set_database_tag(key, value)`: Set custom tag.
+- `delete_database_tag(key)`: Delete custom tag.
+- `list_tag_keys()`: List all tag keys.
+
+## Enhanced Rename Operations
+
+- `rename(batch)`: Batch-rename with enhanced preview:
+  - `original`: Current name before rename
+  - `would_change`: Boolean if name will change
+  - `would_apply`: Count of renames to apply
+  - `unchanged`: Count unchanged
+  - `preview`: Boolean if dry-run mode
+
 ## Debugger Operations (Extension)
 
 Debugger tools are hidden by default. Enable with `?ext=dbg` query parameter:
