@@ -64,11 +64,14 @@ class RenameSummaryResult(TypedDict, total=False):
     total: int
     ok: int
     failed: int
+    would_apply: int
+    unchanged: int
     stopped: bool
     dry_run: bool
     allow_overwrite: bool
     stop_on_error: bool
     stopped_at: str
+    preview: bool
 
 
 class RenameResult(TypedDict, total=False):
@@ -194,7 +197,9 @@ def append_comments(
         try:
             ea = parse_address(addr_str)
             if scope not in {"auto", "func", "line"}:
-                results.append({"addr": addr_str, "error": f"Unsupported scope: {scope}"})
+                results.append(
+                    {"addr": addr_str, "error": f"Unsupported scope: {scope}"}
+                )
                 continue
 
             fn = idaapi.get_func(ea)
@@ -204,11 +209,15 @@ def append_comments(
 
             if use_func_comment:
                 if fn is None:
-                    results.append({"addr": addr_str, "error": f"No function found at {hex(ea)}"})
+                    results.append(
+                        {"addr": addr_str, "error": f"No function found at {hex(ea)}"}
+                    )
                     continue
                 target_ea = fn.start_ea
                 current = idc.get_func_cmt(target_ea, False) or ""
-                new_comment, skipped = _append_comment_text(current, comment, dedupe=dedupe)
+                new_comment, skipped = _append_comment_text(
+                    current, comment, dedupe=dedupe
+                )
                 if skipped:
                     results.append({"addr": addr_str, "scope": "func", "skipped": True})
                     continue
@@ -243,7 +252,9 @@ def append_comments(
     return results
 
 
-def _append_comment_text(current: str, new_text: str, *, dedupe: bool) -> tuple[str, bool]:
+def _append_comment_text(
+    current: str, new_text: str, *, dedupe: bool
+) -> tuple[str, bool]:
     normalized_new = new_text.strip()
     if dedupe and normalized_new:
         existing_entries = [line.strip() for line in current.splitlines()]
@@ -339,11 +350,7 @@ def rename(
 
     def _set_name_checked(ea: int, new_name: str) -> tuple[bool, str | None]:
         conflict_ea = idaapi.get_name_ea(idaapi.BADADDR, new_name)
-        if (
-            conflict_ea != idaapi.BADADDR
-            and conflict_ea != ea
-            and not allow_overwrite
-        ):
+        if conflict_ea != idaapi.BADADDR and conflict_ea != ea and not allow_overwrite:
             return False, f"Name already exists at {hex(conflict_ea)}"
 
         if dry_run:
@@ -393,7 +400,9 @@ def rename(
         halted = False
         for item in items:
             try:
-                addr_text = item.get("addr") or item.get("func_addr") or item.get("func")
+                addr_text = (
+                    item.get("addr") or item.get("func_addr") or item.get("func")
+                )
                 new_name = item.get("name") or item.get("new") or item.get("new_name")
                 if not addr_text or not new_name:
                     result = {
@@ -433,8 +442,10 @@ def rename(
 
                 result = {
                     "addr": addr_text,
+                    "original": old_name,
                     "old": old_name,
                     "name": str(new_name),
+                    "would_change": old_name != str(new_name),
                 }
                 if error:
                     result["error"] = error
@@ -469,7 +480,12 @@ def rename(
                 # 2) {name, new_name} => old=name, new=new_name
                 if new_name is None and addr_text is not None and item.get("name"):
                     new_name = item.get("name")
-                if old_name is None and new_name is not None and item.get("name") and not addr_text:
+                if (
+                    old_name is None
+                    and new_name is not None
+                    and item.get("name")
+                    and not addr_text
+                ):
                     old_name = item.get("name")
 
                 if not new_name:
@@ -708,6 +724,7 @@ def rename(
                     halted = True
                     break
         return results, halted
+
     data_items = []
     data_items.extend(_normalize_items(batch.get("data")))
     data_items.extend(_normalize_items(batch.get("global")))
@@ -766,10 +783,20 @@ def rename(
         "total": total,
         "ok": ok,
         "failed": failed,
+        "would_apply": ok,
+        "unchanged": 0,
         "stopped": stopped,
+        "preview": False,
     }
     if dry_run:
         summary["dry_run"] = True
+        summary["preview"] = True
+
+    for key in ("func", "data", "global_alias", "local", "stack"):
+        items = result.get(key, [])
+        unchanged = sum(1 for r in items if r.get("would_change", False) == False)
+        summary["unchanged"] += unchanged
+
     if allow_overwrite:
         summary["allow_overwrite"] = True
     if stop_on_error:
@@ -847,9 +874,7 @@ def define_code(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
             ea = parse_address(addr_str)
             length = ida_ua.create_insn(ea)
             if length > 0:
-                results.append(
-                    {"addr": addr_str, "ea": hex(ea), "length": length}
-                )
+                results.append({"addr": addr_str, "ea": hex(ea), "length": length})
             else:
                 results.append(
                     {

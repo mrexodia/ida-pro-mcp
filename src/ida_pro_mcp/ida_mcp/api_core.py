@@ -11,6 +11,7 @@ import ida_hexrays
 import idautils
 import ida_loader
 import ida_nalt
+import ida_netnode
 import ida_typeinf
 import idc
 
@@ -232,7 +233,9 @@ def _collect_entities(kind: str) -> list[dict]:
                     "size": hex(size_int),
                     "size_int": size_int,
                     "segment": _segment_name_for_ea(fn.start_ea),
-                    "has_type": bool(ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), fn.start_ea)),
+                    "has_type": bool(
+                        ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), fn.start_ea)
+                    ),
                 }
             )
         return rows
@@ -619,7 +622,9 @@ def func_query(
             filtered.sort(key=lambda f: int(f["addr"], 16), reverse=descending)
 
         page = paginate(filtered, offset, count)
-        page["data"] = [{k: v for k, v in item.items() if k != "size_int"} for item in page["data"]]
+        page["data"] = [
+            {k: v for k, v in item.items() if k != "size_int"} for item in page["data"]
+        ]
         results.append(page)
 
     return results
@@ -692,7 +697,11 @@ def entity_query(
         if regex:
             try:
                 compiled = re.compile(regex)
-                rows = [row for row in rows if compiled.search(str(row.get(primary_key, "")))]
+                rows = [
+                    row
+                    for row in rows
+                    if compiled.search(str(row.get(primary_key, "")))
+                ]
             except re.error:
                 rows = []
 
@@ -723,19 +732,27 @@ def entity_query(
         sort_by = str(query.get("sort_by", "addr") or "addr")
         descending = bool(query.get("descending", False))
         if sort_by == "addr":
-            rows.sort(key=lambda row: int(str(row.get("addr", "0x0")), 16), reverse=descending)
+            rows.sort(
+                key=lambda row: int(str(row.get("addr", "0x0")), 16), reverse=descending
+            )
         elif sort_by in {"size", "length"}:
             rows.sort(
-                key=lambda row: row.get("size_int", _coerce_sort_number(row.get(sort_by, 0))),
+                key=lambda row: row.get(
+                    "size_int", _coerce_sort_number(row.get(sort_by, 0))
+                ),
                 reverse=descending,
             )
         else:
-            rows.sort(key=lambda row: str(row.get(sort_by, "")).lower(), reverse=descending)
+            rows.sort(
+                key=lambda row: str(row.get(sort_by, "")).lower(), reverse=descending
+            )
 
         offset = int(query.get("offset", 0) or 0)
         count = int(query.get("count", 100) or 100)
         page = paginate(rows, offset, count)
-        data = [{k: v for k, v in item.items() if k != "size_int"} for item in page["data"]]
+        data = [
+            {k: v for k, v in item.items() if k != "size_int"} for item in page["data"]
+        ]
 
         fields_raw = query.get("fields")
         fields = None
@@ -821,6 +838,170 @@ def idb_save(
         return result
     except Exception as e:
         return {"ok": False, "path": path or None, "error": str(e)}
+
+
+@tool
+@idasync
+def find_regex(
+    pattern: Annotated[str, "Regex pattern to search for in strings"],
+    limit: Annotated[int, "Max matches (default: 30, max: 500)"] = 30,
+    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
+) -> FindRegexResult:
+    """Search strings by case-insensitive regex with offset/limit pagination."""
+    if limit <= 0:
+        limit = 30
+    if limit > 500:
+        limit = 500
+
+    matches = []
+    regex = re.compile(pattern, re.IGNORECASE)
+    strings = _get_strings_cache()
+
+    skipped = 0
+    more = False
+    for ea, text in strings:
+        if regex.search(text):
+            if skipped < offset:
+                skipped += 1
+                continue
+            if len(matches) >= limit:
+                more = True
+                break
+            matches.append({"addr": hex(ea), "string": text})
+
+    return {
+        "n": len(matches),
+        "matches": matches,
+        "cursor": {"next": offset + limit} if more else {"done": True},
+    }
+
+
+# ============================================================================
+# Database Tagging (Custom Metadata)
+# ============================================================================
+# Database Tagging (Custom Metadata)
+# ============================================================================
+
+
+NETNODE_TAGS = "$ ida_mcp.tags"
+
+
+class TagResult(TypedDict):
+    """Result of a tag operation."""
+
+    key: str
+    success: bool
+    error: NotRequired[str]
+
+
+class TagsResult(TypedDict):
+    """Result of getting all tags."""
+
+    tags: dict[str, str]
+    total: int
+    error: NotRequired[str]
+
+
+def _get_tags_node() -> ida_netnode.netnode:
+    """Get or create the tags netnode."""
+    return ida_netnode.netnode(NETNODE_TAGS, 0, True)
+
+
+@tool
+@idasync
+def get_database_tags() -> TagsResult:
+    """Get all custom database tags.
+
+    Returns key-value pairs stored in the IDB.
+    Use this to see all custom metadata stored by MCP.
+    """
+    try:
+        node = _get_tags_node()
+        tags = {}
+
+        for i in range(1000):
+            key = node.svec(i)
+            if not key:
+                break
+            value = node.hashval(key)
+            if value:
+                tags[key] = value
+
+        if not tags:
+            tags = {"_note": "No tags set. Use set_database_tag() to add."}
+
+        return {"tags": tags, "total": len(tags)}
+    except Exception as e:
+        return {"tags": {}, "total": 0, "error": str(e)}
+
+
+@tool
+@idasync
+def set_database_tag(
+    key: Annotated[str, "Tag key (unique identifier)"],
+    value: Annotated[str, "Tag value to store"],
+) -> TagResult:
+    """Set a custom database tag.
+
+    Stores a key-value pair in the IDB that persists
+    with the database. Use for custom metadata.
+    """
+    try:
+        if not key.strip():
+            return {"key": key, "success": False, "error": "Key is required"}
+
+        node = _get_tags_node()
+        node.hashset(key.strip(), value)
+
+        return {"key": key, "success": True}
+    except Exception as e:
+        return {"key": key, "success": False, "error": str(e)}
+
+
+@tool
+@idasync
+def delete_database_tag(
+    key: Annotated[str, "Tag key to remove"],
+) -> TagResult:
+    """Delete a custom database tag.
+
+    Removes a tag from the IDB.
+    """
+    try:
+        if not key.strip():
+            return {"key": key, "success": False, "error": "Key is required"}
+
+        node = _get_tags_node()
+        node.hashdel(key.strip())
+
+        return {"key": key, "success": True}
+    except Exception as e:
+        return {"key": key, "success": False, "error": str(e)}
+
+
+@tool
+@idasync
+def list_tag_keys() -> list[str]:
+    """List all tag keys.
+
+    Returns just the keys for quick enumeration.
+    """
+    try:
+        node = _get_tags_node()
+        keys = []
+
+        for i in range(1000):
+            key = node.svec(i)
+            if not key:
+                break
+            keys.append(key)
+
+        if not keys:
+            keys = ["_note"]
+
+        return keys
+    except Exception:
+        return []
 
 
 @tool
