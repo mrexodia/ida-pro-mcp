@@ -144,6 +144,59 @@ ida_auto.auto_wait()  # Block until autoanalysis completes
 | Blocking main thread | Use `execute_sync()` for long ops |
 | Guessing at types | Derive from disassembly/decompilation |
 
+## MCP Tools Reference
+
+### New MCP Features (33 tools)
+
+#### Bookmarks (ida_moves)
+| Tool | Description |
+|------|-----------|
+| `list_bookmarks(filter)` | List all bookmarks |
+| `add_bookmark(address, description)` | Add bookmark |
+| `remove_bookmark(addresses)` | Remove bookmarks |
+| `jump_to_bookmark(address)` | Navigate to bookmark |
+
+#### Function Clustering (ida_dirtree)
+| Tool | Description |
+|------|-----------|
+| `list_clusters(filter)` | List function clusters |
+| `create_cluster(name)` | Create cluster |
+| `add_to_cluster(cluster, functions)` | Add functions |
+| `remove_from_cluster(cluster, functions)` | Remove functions |
+| `analyze_cluster(name)` | Cluster statistics |
+
+#### String Deobfuscation (ida_bytes, ida_segment)
+| Tool | Description |
+|------|-----------|
+| `find_encrypted_strings(min_length, section)` | Detect encrypted strings |
+| `decrypt_strings(addresses, algorithm, key)` | Decrypt (XOR, ADD, ROT13) |
+| `auto_detect_obfuscation(addresses)` | Auto-detect algorithm |
+
+#### VM Handler Detection (ida_ua, ida_funcs)
+| Tool | Description |
+|------|-----------|
+| `detect_vm_handlers(function)` | Detect VM dispatcher |
+| `reconstruct_handler_table(function)` | Reconstruct handler table |
+| `analyze_vm_instructions(handler_table)` | Decode instructions |
+
+#### FLIRT/Lumina (ida_libfuncs, ida_lumina)
+| Tool | Description |
+|------|-----------|
+| `list_flirt_sigs()` | List loaded signatures |
+| `apply_flirt_file(sig_path)` | Apply .sig file |
+| `lumina_query(function)` | Query Lumina metadata |
+| `lumina_apply(functions)` | Apply Lumina metadata |
+
+#### Database Tagging (ida_netnode)
+| Tool | Description |
+|------|-----------|
+| `get_database_tags()` | Get all tags |
+| `set_database_tag(key, value)` | Set custom tag |
+| `delete_database_tag(key)` | Delete tag |
+
+#### Enhanced Rename
+- `rename()` now supports `dry_run: true` with preview (shows `would_change`, `original`, `preview`)
+
 ## Detailed API Reference
 
 For comprehensive documentation on any module, read `docs/<module>.md`:
