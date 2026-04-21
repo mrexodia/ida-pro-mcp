@@ -16,6 +16,8 @@ import ida_name
 from .rpc import tool
 from .sync import idasync, tool_timeout, IDAError
 from .utils import (
+    _direct_call_targets,
+    _is_call_instruction,
     parse_address,
     normalize_list_input,
     normalize_dict_list,
@@ -670,7 +672,7 @@ def _collect_callers_for_function(func: ida_funcs.func_t) -> list[dict]:
 
         insn = idaapi.insn_t()
         idaapi.decode_insn(insn, caller_site)
-        if insn.itype not in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+        if not _is_call_instruction(insn):
             continue
 
         callers[caller_start] = {
@@ -1506,15 +1508,8 @@ def callees(
                         break
                     current_ea = next_ea
                     continue
-                if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
-                    op0 = insn.ops[0]
-                    if op0.type in (ida_ua.o_mem, ida_ua.o_near, ida_ua.o_far):
-                        target = op0.addr
-                    elif op0.type == ida_ua.o_imm:
-                        target = op0.value
-                    else:
-                        target = None
-                    if target is not None and target not in callees_dict:
+                for target in _direct_call_targets(current_ea, insn):
+                    if target not in callees_dict:
                         func_type = (
                             "internal"
                             if idaapi.get_func(target) is not None

@@ -143,6 +143,8 @@ def test_utils_callees_callers_and_xrefs_from_helpers():
 
     callers = get_callers("0x1013dc0")
     assert isinstance(callers, list)
+    assert callers
+    assert all("addr" in caller and "name" in caller for caller in callers)
 
     xrefs_from = get_xrefs_from_internal(0x1013F1B)
     assert any(x["addr"] == "0x1013dc0" for x in xrefs_from)

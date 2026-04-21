@@ -1202,6 +1202,42 @@ def get_all_comments(ea: int) -> dict:
     return comments
 
 
+def _decode_insn_at(ea: int):
+    """Decode the instruction at ea, returning None when decode fails."""
+    insn = idaapi.insn_t()
+    if idaapi.decode_insn(insn, ea) == 0:
+        return None
+    return insn
+
+
+def _is_call_instruction(insn: idaapi.insn_t) -> bool:
+    """Architecture-agnostic call instruction detection with legacy fallback."""
+    try:
+        return bool(idaapi.is_call_insn(insn))
+    except Exception:
+        return insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]
+
+
+def _direct_call_targets(ea: int, insn: idaapi.insn_t) -> list[int]:
+    """Return direct call targets for a decoded call instruction."""
+    if not _is_call_instruction(insn):
+        return []
+
+    targets = [
+        target
+        for target in idautils.CodeRefsFrom(ea, 0)
+        if isinstance(target, int) and target != idaapi.BADADDR
+    ]
+    if targets:
+        return list(dict.fromkeys(targets))
+
+    target = idc.get_operand_value(ea, 0)
+    target_type = idc.get_operand_type(ea, 0)
+    if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
+        return [target]
+    return []
+
+
 def get_callees(addr: str) -> list[dict]:
     """Get callees for a single function address"""
     try:
@@ -1213,12 +1249,9 @@ def get_callees(addr: str) -> list[dict]:
         callees: list[dict[str, str]] = []
         current_ea = func_start
         while current_ea < func_end:
-            insn = idaapi.insn_t()
-            idaapi.decode_insn(insn, current_ea)
-            if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
-                target = idc.get_operand_value(current_ea, 0)
-                target_type = idc.get_operand_type(current_ea, 0)
-                if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
+            insn = _decode_insn_at(current_ea)
+            if insn is not None:
+                for target in _direct_call_targets(current_ea, insn):
                     func_type = (
                         "internal"
                         if idaapi.get_func(target) is not None
@@ -1255,13 +1288,8 @@ def get_callers(addr: str, limit: int = 50) -> list[Function]:
             func = get_function(caller_addr, raise_error=False)
             if not func:
                 continue
-            insn = idaapi.insn_t()
-            idaapi.decode_insn(insn, caller_addr)
-            if insn.itype not in [
-                idaapi.NN_call,
-                idaapi.NN_callfi,
-                idaapi.NN_callni,
-            ]:
+            insn = _decode_insn_at(caller_addr)
+            if insn is None or not _is_call_instruction(insn):
                 continue
             callers[func["addr"]] = func
 
