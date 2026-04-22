@@ -76,6 +76,12 @@ With coverage:
         action="store_true",
         help="Show IDA console messages",
     )
+    parser.add_argument(
+        "--mcp-mode",
+        action="store_true",
+        help="Route every @tool call through a real MCP client/server "
+        "round-trip and validate responses against outputSchema",
+    )
     args = parser.parse_args()
 
     # Check binary exists
@@ -144,13 +150,24 @@ With coverage:
         in_ci = os.environ.get("CI", "").lower() not in ("", "0", "false", "no")
         interactive_output = sys.stdout.isatty()
         show_all_test_output = (not args.quiet) and (interactive_output or in_ci)
-        results = run_tests(
-            pattern=args.pattern,
-            category=args.category,
-            verbose=show_all_test_output,
-            stop_on_failure=args.stop_on_failure,
-            failures_only=(not args.quiet) and not show_all_test_output,
-        )
+
+        def _run():
+            return run_tests(
+                pattern=args.pattern,
+                category=args.category,
+                verbose=show_all_test_output,
+                stop_on_failure=args.stop_on_failure,
+                failures_only=(not args.quiet) and not show_all_test_output,
+            )
+
+        if args.mcp_mode:
+            from ida_pro_mcp.ida_mcp.tests.mcp_mode import mcp_mode
+
+            print("[MCP] Running tests in end-to-end MCP mode.")
+            with mcp_mode():
+                results = _run()
+        else:
+            results = _run()
 
         # No matched tests is likely a configuration/test-selection mistake
         if not results.results:
