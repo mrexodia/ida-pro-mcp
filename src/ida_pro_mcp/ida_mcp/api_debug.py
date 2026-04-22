@@ -183,7 +183,7 @@ def list_breakpoints() -> list[Breakpoint]:
             breakpoints.append(
                 Breakpoint(
                     addr=hex(bpt.ea),
-                    enabled=bpt.flags & ida_dbg.BPT_ENABLED,
+                    enabled=bool(bpt.flags & ida_dbg.BPT_ENABLED),
                     condition=str(bpt.condition) if bpt.condition else None,
                 )
             )
