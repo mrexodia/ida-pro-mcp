@@ -5,9 +5,13 @@ import time
 from typing import Annotated, Any, NotRequired, TypedDict
 
 import ida_auto
+import ida_bytes
 import idaapi
 import ida_funcs
 import ida_hexrays
+import ida_lines
+import ida_search
+import ida_segment
 import idautils
 import ida_loader
 import ida_nalt
@@ -109,6 +113,25 @@ class FindRegexResult(TypedDict, total=False):
     matches: list[dict[str, Any]]
     cursor: dict[str, Any]
     error: str | None
+
+
+class SearchTextLine(TypedDict, total=False):
+    kind: str  # "disasm" | "comment"
+    text: str
+
+
+class SearchTextHit(TypedDict, total=False):
+    addr: str
+    function: str
+    segment: str
+    matches: list[SearchTextLine]
+
+
+class SearchTextResult(TypedDict, total=False):
+    n: int
+    hits: list[SearchTextHit]
+    cursor: dict[str, Any]
+    error: str
 
 
 # Cached strings list: [(ea, text), ...]
@@ -857,3 +880,201 @@ def find_regex(
         "matches": matches,
         "cursor": {"next": offset + limit} if more else {"done": True},
     }
+
+
+_COMMENT_SCOLORS = (
+    ida_lines.SCOLOR_REGCMT,
+    ida_lines.SCOLOR_RPTCMT,
+    ida_lines.SCOLOR_AUTOCMT,
+    ida_lines.SCOLOR_COLLAPSED,
+)
+
+
+def _line_is_comment(tagged: str) -> bool:
+    """A rendered listing line is a comment if it carries any comment SCOLOR tag."""
+    if not tagged:
+        return False
+    for sc in _COMMENT_SCOLORS:
+        if ida_lines.COLOR_ON + sc in tagged:
+            return True
+    return False
+
+
+def _classify_hit_lines(
+    ea: int,
+    matcher,
+    want_disasm: bool,
+    want_comments: bool,
+    max_lines: int = 32,
+) -> list[SearchTextLine]:
+    """Render the listing for `ea` once, classify each line, return matching lines."""
+    out: list[SearchTextLine] = []
+    try:
+        result = ida_lines.generate_disassembly(ea, max_lines, False, False)
+    except Exception:
+        return out
+    # Bindings vary: (n, lineno, lines) or (lines, lineno).
+    lines = None
+    if isinstance(result, tuple):
+        for item in result:
+            if isinstance(item, (list, tuple)) and item and isinstance(item[0], str):
+                lines = list(item)
+                break
+    if lines is None:
+        return out
+
+    for tagged in lines:
+        text = ida_lines.tag_remove(tagged) or ""
+        if not text or not matcher(text):
+            continue
+        is_cmt = _line_is_comment(tagged)
+        kind = "comment" if is_cmt else "disasm"
+        if kind == "disasm" and not want_disasm:
+            continue
+        if kind == "comment" and not want_comments:
+            continue
+        out.append({"kind": kind, "text": text})
+    return out
+
+
+def _exec_segments() -> list[tuple[int, int]]:
+    """Return [(start, end)] for executable segments in address order."""
+    ranges: list[tuple[int, int]] = []
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if not seg:
+            continue
+        if not (seg.perm & idaapi.SEGPERM_EXEC):
+            continue
+        ranges.append((seg.start_ea, seg.end_ea))
+    return ranges
+
+
+def _all_segments() -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if seg:
+            ranges.append((seg.start_ea, seg.end_ea))
+    return ranges
+
+
+@tool
+@idasync
+def search_text(
+    pattern: Annotated[str, "Text to search for in the rendered listing (literal substring by default)"],
+    limit: Annotated[int, "Max hits per page (default: 30, max: 500)"] = 30,
+    start: Annotated[str, "Cursor: address to resume from (hex or symbol). Empty = first segment."] = "",
+    regex: Annotated[bool, "Treat pattern as a regex (uses IDA's SEARCH_REGEX)"] = False,
+    case_sensitive: Annotated[bool, "Case-sensitive match (default: false)"] = False,
+    include: Annotated[str, "'disasm' | 'comments' | 'all' (default: all)"] = "all",
+    code_only: Annotated[bool, "Restrict search to executable segments (default: true)"] = True,
+) -> SearchTextResult:
+    """Search the rendered listing using IDA's native text search (fast C++ scan).
+
+    Discovers candidate EAs with `ida_search.find_text()`, then renders each hit
+    once via `ida_lines.generate_disassembly()` to extract matching lines and
+    classify them as disasm or comment. Returns one hit per EA.
+    """
+    if limit <= 0:
+        limit = 30
+    if limit > 500:
+        limit = 500
+
+    include = (include or "all").lower()
+    if include not in ("disasm", "comments", "all"):
+        return {"n": 0, "hits": [], "cursor": {"done": True}, "error": f"invalid include: {include!r}"}
+
+    want_disasm = include in ("disasm", "all")
+    want_comments = include in ("comments", "all")
+
+    # Build a Python-side matcher for per-line filtering after the C++ find.
+    if regex:
+        try:
+            flags = 0 if case_sensitive else re.IGNORECASE
+            rx = re.compile(pattern, flags)
+        except re.error as e:
+            return {"n": 0, "hits": [], "cursor": {"done": True}, "error": f"invalid regex: {e}"}
+        matcher = lambda s: bool(rx.search(s))
+    else:
+        if case_sensitive:
+            needle = pattern
+            matcher = lambda s: needle in s
+        else:
+            needle = pattern.lower()
+            matcher = lambda s: needle in s.lower()
+
+    # Build IDA search flags.
+    sflag = ida_search.SEARCH_DOWN | ida_search.SEARCH_NOSHOW
+    if case_sensitive:
+        sflag |= ida_search.SEARCH_CASE
+    if regex:
+        sflag |= ida_search.SEARCH_REGEX
+
+    # Resolve cursor.
+    segments = _exec_segments() if code_only else _all_segments()
+    if not segments:
+        return {"n": 0, "hits": [], "cursor": {"done": True}}
+
+    if start:
+        try:
+            cursor_ea = parse_address(start)
+        except Exception as e:
+            return {"n": 0, "hits": [], "cursor": {"done": True}, "error": f"invalid start: {e}"}
+    else:
+        cursor_ea = segments[0][0]
+
+    hits: list[SearchTextHit] = []
+    next_cursor: int | None = None
+    seg_idx = 0
+    # Skip ahead to the segment that contains/follows cursor_ea.
+    while seg_idx < len(segments) and segments[seg_idx][1] <= cursor_ea:
+        seg_idx += 1
+    if seg_idx < len(segments) and cursor_ea < segments[seg_idx][0]:
+        cursor_ea = segments[seg_idx][0]
+
+    while seg_idx < len(segments) and len(hits) < limit:
+        seg_start, seg_end = segments[seg_idx]
+        ea = ida_search.find_text(cursor_ea, 0, 0, pattern, sflag)
+        if ea == idaapi.BADADDR or ea >= seg_end:
+            seg_idx += 1
+            if seg_idx < len(segments):
+                cursor_ea = segments[seg_idx][0]
+            continue
+        if ea < seg_start:
+            # Match landed in a segment we already passed; skip.
+            cursor_ea = ea + 1
+            continue
+
+        lines = _classify_hit_lines(ea, matcher, want_disasm, want_comments)
+        if lines:
+            entry: SearchTextHit = {"addr": hex(ea), "matches": lines}
+            func = idaapi.get_func(ea)
+            if func is not None:
+                fname = ida_funcs.get_func_name(func.start_ea)
+                if fname:
+                    entry["function"] = fname
+            seg = idaapi.getseg(ea)
+            if seg is not None:
+                sname = ida_segment.get_segm_name(seg)
+                if sname:
+                    entry["segment"] = sname
+            hits.append(entry)
+            if len(hits) >= limit:
+                # Compute resume cursor: just past this hit.
+                size = max(1, idaapi.get_item_size(ea))
+                next_cursor = ea + size
+                break
+
+        # Advance past this match. Use item size if known to avoid re-hitting
+        # the same head's listing on the next iteration.
+        size = idaapi.get_item_size(ea)
+        cursor_ea = ea + (size if size > 0 else 1)
+
+    cursor: dict[str, Any]
+    if next_cursor is not None:
+        cursor = {"next": hex(next_cursor)}
+    else:
+        cursor = {"done": True}
+
+    return {"n": len(hits), "hits": hits, "cursor": cursor}
