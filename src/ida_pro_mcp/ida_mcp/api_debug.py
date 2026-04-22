@@ -35,6 +35,7 @@ from .utils import (
 
 class DebugControlResult(TypedDict, total=False):
     ip: str
+    started: bool
     exited: bool
     error: str
 
@@ -190,6 +191,15 @@ def list_breakpoints() -> list[Breakpoint]:
     return breakpoints
 
 
+def _get_debug_start_result() -> DebugControlResult | None:
+    ip = ida_dbg.get_ip_val()
+    if ip is not None:
+        return {"started": True, "ip": hex(ip)}
+    if ida_dbg.is_debugger_on():
+        return {"started": True}
+    return None
+
+
 # ============================================================================
 # Debugger Control Operations
 # ============================================================================
@@ -208,10 +218,25 @@ def dbg_start() -> DebugControlResult:
             if addr != ida_idaapi.BADADDR:
                 ida_dbg.add_bpt(addr, 0, idaapi.BPT_SOFT)
 
-    if idaapi.start_process("", "", "") == 1:
-        ip = ida_dbg.get_ip_val()
-        if ip is not None:
-            return {"ip": hex(ip)}
+    result = idaapi.start_process("", "", "")
+    if result == -1:
+        raise IDAError("Failed to start debugger")
+    if result == 0:
+        raise IDAError("Debugger start was cancelled")
+
+    started = _get_debug_start_result()
+    if started is not None:
+        return started
+
+    for _ in range(5):
+        ida_dbg.wait_for_next_event(
+            ida_dbg.WFNE_ANY | ida_dbg.WFNE_SUSP | ida_dbg.WFNE_SILENT,
+            1,
+        )
+        started = _get_debug_start_result()
+        if started is not None:
+            return started
+
     raise IDAError("Failed to start debugger")
 
 
