@@ -8,8 +8,10 @@ _ZEROMCP_SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "ida_pro_mc
 sys.path.insert(0, str(_ZEROMCP_SRC))
 try:
     from zeromcp.mcp import (
+        EXTERNAL_BASE_HEADER,
         McpHttpRequestHandler,
         McpServer,
+        _derive_external_base_url,
         _host_header_allowed_for_bind,
         _origin_allowed_by_policy,
     )
@@ -115,6 +117,43 @@ class BrowserTransportGuardTests(unittest.TestCase):
         )
         self.assertTrue(handler._check_api_request())
         self.assertEqual(errors, [])
+
+    def test_derive_external_base_url_prefers_forwarded_headers(self):
+        base = _derive_external_base_url(
+            {
+                "Host": "127.0.0.1:13337",
+                "Forwarded": 'for=127.0.0.1;proto=https;host="mcp.example.com"',
+            },
+            bound_host="127.0.0.1",
+            bound_port=13337,
+        )
+        self.assertEqual(base, "https://mcp.example.com")
+
+    def test_derive_external_base_url_supports_forwarded_prefix(self):
+        base = _derive_external_base_url(
+            {
+                "Host": "127.0.0.1:13337",
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "mcp.example.com",
+                "X-Forwarded-Prefix": "/ida/proxy/",
+            },
+            bound_host="127.0.0.1",
+            bound_port=13337,
+        )
+        self.assertEqual(base, "https://mcp.example.com/ida/proxy")
+
+    def test_derive_external_base_url_prefers_propagated_header(self):
+        base = _derive_external_base_url(
+            {
+                "Host": "127.0.0.1:13337",
+                EXTERNAL_BASE_HEADER: "https://public.example/base/",
+                "X-Forwarded-Proto": "http",
+                "X-Forwarded-Host": "ignored.example",
+            },
+            bound_host="127.0.0.1",
+            bound_port=13337,
+        )
+        self.assertEqual(base, "https://public.example/base")
 
 
 if __name__ == "__main__":

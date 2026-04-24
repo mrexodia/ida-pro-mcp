@@ -12,9 +12,11 @@ import subprocess
 import sys
 import threading
 import time
+from collections import OrderedDict
 from typing import Annotated, NotRequired, TypedDict
 
 from .rpc import tool, MCP_SERVER
+from .zeromcp import EXTERNAL_BASE_HEADER, get_current_request_external_base_url
 from .discovery import discover_instances, probe_instance
 
 
@@ -128,6 +130,46 @@ def is_local_tool(name: str) -> bool:
 
 
 PROXY_HEADER = "X-MCP-Proxied"
+OUTPUT_PROXY_CACHE_MAX_SIZE = 100
+_output_proxy_targets: OrderedDict[str, tuple[str, int]] = OrderedDict()
+_output_proxy_lock = threading.Lock()
+
+
+def _extract_output_id(response: dict) -> str | None:
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return None
+    meta = result.get("_meta")
+    if not isinstance(meta, dict):
+        return None
+    ida_meta = meta.get("ida_mcp")
+    if not isinstance(ida_meta, dict):
+        return None
+    output_id = ida_meta.get("output_id")
+    return output_id if isinstance(output_id, str) else None
+
+
+def _remember_output_proxy_target(output_id: str, host: str, port: int) -> None:
+    with _output_proxy_lock:
+        _output_proxy_targets.pop(output_id, None)
+        _output_proxy_targets[output_id] = (host, port)
+        while len(_output_proxy_targets) > OUTPUT_PROXY_CACHE_MAX_SIZE:
+            _output_proxy_targets.popitem(last=False)
+
+
+def get_output_proxy_target(output_id: str) -> tuple[str, int] | None:
+    with _output_proxy_lock:
+        target = _output_proxy_targets.get(output_id)
+        if target is None:
+            return None
+        _output_proxy_targets.move_to_end(output_id)
+        return target
+
+
+def _remember_output_proxy_target_from_response(host: str, port: int, response: dict) -> None:
+    output_id = _extract_output_id(response)
+    if output_id:
+        _remember_output_proxy_target(output_id, host, port)
 
 
 def _get_proxy_request_path() -> str:
@@ -149,6 +191,9 @@ def _get_proxy_request_headers() -> dict[str, str]:
         session_id = transport_session_id.split(":", 1)[1]
         if session_id and session_id != "anonymous":
             headers["Mcp-Session-Id"] = session_id
+    external_base_url = get_current_request_external_base_url()
+    if external_base_url:
+        headers[EXTERNAL_BASE_HEADER] = external_base_url
     return headers
 
 
@@ -170,7 +215,22 @@ def proxy_to_instance(host: str, port: int, payload: bytes) -> dict:
         raw_data = response.read().decode()
         if response.status >= 400:
             raise RuntimeError(f"HTTP {response.status} {response.reason}: {raw_data}")
-        return json.loads(raw_data)
+        parsed = json.loads(raw_data)
+        _remember_output_proxy_target_from_response(host, port, parsed)
+        return parsed
+    finally:
+        conn.close()
+
+
+def proxy_output_to_instance(
+    host: str, port: int, path: str
+) -> tuple[int, str, list[tuple[str, str]], bytes]:
+    """Forward an output download request to another IDA instance."""
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        conn.request("GET", path, headers={PROXY_HEADER: "1"})
+        response = conn.getresponse()
+        return response.status, response.reason, response.getheaders(), response.read()
     finally:
         conn.close()
 

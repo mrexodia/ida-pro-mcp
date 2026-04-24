@@ -16,6 +16,7 @@ from jsonschema import Draft202012Validator
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from _mcp_spec_support import (
     CALL_TOOL_RESULT_SCHEMA,
+    McpHttpTestServer,
     McpServer,
     assert_schema,
     call_rpc,
@@ -36,7 +37,7 @@ class _ListResult(TypedDict):
 def _fresh_truncated_server() -> McpServer:
     """McpServer with the production truncation middleware (rpc.py) applied."""
     rpc = load_ida_rpc_module()
-    srv = McpServer("truncation-test")
+    srv = rpc.McpServer("truncation-test")
     original = srv.registry.methods["tools/call"]
     limit = rpc.OUTPUT_LIMIT_MAX_CHARS
 
@@ -130,6 +131,62 @@ class TruncationInvariantTests(unittest.TestCase):
             with self.subTest(block=block):
                 self.assertEqual(block["type"], "text")
                 self.assertIsInstance(block["text"], str)
+
+
+class DownloadUrlDerivationOverHttpTests(unittest.TestCase):
+    def test_download_url_uses_forwarded_public_base(self):
+        srv = _fresh_truncated_server()
+
+        @srv.tool
+        def big_list() -> _ListResult:
+            """Returns a huge list; forces truncation."""
+            return {
+                "items": [{"name": f"n{i}", "value": i} for i in range(5000)],
+                "count": 5000,
+            }
+
+        with McpHttpTestServer(srv) as harness:
+            status, _, response = harness.post_jsonrpc(
+                "tools/call",
+                {"name": "big_list", "arguments": {}},
+                extra_headers={
+                    "Forwarded": 'for=127.0.0.1;proto=https;host="mcp.example.com"',
+                },
+            )
+
+        self.assertEqual(status, 200)
+        meta = response["result"]["_meta"]["ida_mcp"]
+        self.assertTrue(meta["download_url"].startswith("https://mcp.example.com/output/"))
+
+    def test_download_url_uses_forwarded_prefix(self):
+        srv = _fresh_truncated_server()
+
+        @srv.tool
+        def big_list() -> _ListResult:
+            """Returns a huge list; forces truncation."""
+            return {
+                "items": [{"name": f"n{i}", "value": i} for i in range(5000)],
+                "count": 5000,
+            }
+
+        with McpHttpTestServer(srv) as harness:
+            status, _, response = harness.post_jsonrpc(
+                "tools/call",
+                {"name": "big_list", "arguments": {}},
+                extra_headers={
+                    "X-Forwarded-Proto": "https",
+                    "X-Forwarded-Host": "mcp.example.com",
+                    "X-Forwarded-Prefix": "/ida/proxy/",
+                },
+            )
+
+        self.assertEqual(status, 200)
+        meta = response["result"]["_meta"]["ida_mcp"]
+        self.assertTrue(
+            meta["download_url"].startswith(
+                "https://mcp.example.com/ida/proxy/output/"
+            )
+        )
 
 
 class NonTruncatedOutputsUnchangedTests(unittest.TestCase):
