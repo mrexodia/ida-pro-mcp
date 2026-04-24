@@ -1,7 +1,13 @@
 import json
 import os
 from typing import Any, Optional
-from .zeromcp import McpRpcRegistry, McpServer, McpToolError, McpHttpRequestHandler
+from .zeromcp import (
+    McpRpcRegistry,
+    McpServer,
+    McpToolError,
+    McpHttpRequestHandler,
+    get_current_request_external_base_url,
+)
 
 MCP_UNSAFE: set[str] = set()
 MCP_EXTENSIONS: dict[str, set[str]] = {}  # group -> set of function names
@@ -23,7 +29,7 @@ def set_download_base_url(url: str) -> None:
 
 
 def get_download_base_url() -> str:
-    return _download_base_url
+    return get_current_request_external_base_url() or _download_base_url
 
 
 def get_current_transport_session_id() -> str | None:
@@ -64,7 +70,7 @@ def _truncate_value(value: Any, depth: int = 0) -> Any:
 
 
 def _build_download_meta(output_id: str, total_chars: int) -> dict:
-    download_url = f"{_download_base_url}/output/{output_id}.json"
+    download_url = f"{get_download_base_url()}/output/{output_id}.json"
     return {
         "output_truncated": True,
         "total_chars": total_chars,

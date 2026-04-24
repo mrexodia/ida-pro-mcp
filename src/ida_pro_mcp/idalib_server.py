@@ -3,6 +3,7 @@ import json
 import logging
 import signal
 import sys
+import os
 from pathlib import Path
 from typing import Annotated, Any, Optional, TypedDict
 
@@ -602,7 +603,15 @@ def main():
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread does not fake any
     # work from @idasync, so we deadlock.
-    set_download_base_url(f"http://{args.host}:{args.port}")
+    if not "IDA_MCP_URL" in os.environ:
+        # IDA_MCP_URL is used to set download base url by environment,
+        # so we only update download base url if this env var is not
+        # present
+        #
+        # It should be noted that this url ONLY affects the literal string
+        # returned by MCP response, does NOT affect the actual socket
+        # endpoint this server listens to
+        set_download_base_url(f"http://{args.host}:{args.port}")
     MCP_SERVER.serve(host=args.host, port=args.port, background=False,
                      request_handler=IdaMcpHttpRequestHandler)
 

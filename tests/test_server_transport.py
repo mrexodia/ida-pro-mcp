@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import patch
 
@@ -57,6 +58,60 @@ class DispatchProxyTransportTests(unittest.TestCase):
         _ResponseFailureConnection.reset()
         _Http503Connection.reset()
         _ConnectFailureConnection.reset()
+
+    def test_proxy_request_forwards_external_base_header(self):
+        original_getter = server.get_current_request_external_base_url
+
+        class _RecordingConnection(_BaseFakeConnection):
+            def request(self, method, path, body, headers):
+                super().request(method, path, body, headers)
+                self.path = path
+                self.headers = headers
+
+            def getresponse(self):
+                return _FakeResponse()
+
+        _RecordingConnection.reset()
+        server.get_current_request_external_base_url = lambda: "https://mcp.example.com/base"
+        try:
+            with patch("ida_pro_mcp.server.http.client.HTTPConnection", _RecordingConnection):
+                server._proxy_to_instance("127.0.0.1", 13337, b"{}")
+        finally:
+            server.get_current_request_external_base_url = original_getter
+
+        self.assertEqual(len(_RecordingConnection.instances), 1)
+        self.assertEqual(
+            _RecordingConnection.instances[0].headers.get("X-IDA-MCP-External-Base"),
+            "https://mcp.example.com/base",
+        )
+
+    def test_proxy_response_records_output_download_target(self):
+        output_id = "12345678-1234-1234-1234-123456789abc"
+
+        class _OutputResponseConnection(_BaseFakeConnection):
+            def getresponse(self):
+                body = json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "result": {
+                            "content": [],
+                            "_meta": {
+                                "ida_mcp": {
+                                    "output_id": output_id,
+                                    "download_url": f"http://example/output/{output_id}.json",
+                                }
+                            },
+                        },
+                        "id": 1,
+                    }
+                ).encode("utf-8")
+                return _FakeResponse(body=body)
+
+        _OutputResponseConnection.reset()
+        with patch("ida_pro_mcp.server.http.client.HTTPConnection", _OutputResponseConnection):
+            server._proxy_to_instance("127.0.0.1", 13337, b"{}")
+
+        self.assertEqual(server._get_output_proxy_target(output_id), ("127.0.0.1", 13337))
 
     def test_dispatch_proxy_does_not_retry_post_send_failures(self):
         request = {"jsonrpc": "2.0", "method": "tools/call", "params": {}, "id": 1}
