@@ -19,17 +19,18 @@ MCP_SERVER = McpServer("ida-pro-mcp", extensions=MCP_EXTENSIONS)
 
 OUTPUT_LIMIT_MAX_CHARS = 50000
 OUTPUT_CACHE_MAX_SIZE = 100
+DEFAULT_DOWNLOAD_BASE_URL = "http://127.0.0.1:13337"
 _output_cache: dict[str, Any] = {}
-_download_base_url: str = os.environ.get("IDA_MCP_URL", "http://127.0.0.1:13337")
-
-
-def set_download_base_url(url: str) -> None:
-    global _download_base_url
-    _download_base_url = url.rstrip("/")
 
 
 def get_download_base_url() -> str:
-    return get_current_request_external_base_url() or _download_base_url
+    request_base = get_current_request_external_base_url()
+    if request_base:
+        return request_base
+    env_base = os.environ.get("IDA_MCP_URL")
+    if env_base:
+        return env_base.rstrip("/")
+    return DEFAULT_DOWNLOAD_BASE_URL
 
 
 def get_current_transport_session_id() -> str | None:
@@ -185,7 +186,6 @@ __all__ = [
     "ext",
     "resource",
     "get_cached_output",
-    "set_download_base_url",
     "get_download_base_url",
     "get_current_transport_session_id",
 ]

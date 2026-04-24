@@ -9,6 +9,7 @@ import json
 import sys
 import pathlib
 import unittest
+from unittest.mock import patch
 from typing import TypedDict
 
 from jsonschema import Draft202012Validator
@@ -185,6 +186,35 @@ class DownloadUrlDerivationOverHttpTests(unittest.TestCase):
         self.assertTrue(
             meta["download_url"].startswith(
                 "https://mcp.example.com/ida/proxy/output/"
+            )
+        )
+
+    def test_download_url_prefers_env_over_request_derived_base(self):
+        srv = _fresh_truncated_server()
+
+        @srv.tool
+        def big_list() -> _ListResult:
+            """Returns a huge list; forces truncation."""
+            return {
+                "items": [{"name": f"n{i}", "value": i} for i in range(5000)],
+                "count": 5000,
+            }
+
+        with patch.dict("os.environ", {"IDA_MCP_URL": "https://public.example/base/"}):
+            with McpHttpTestServer(srv) as harness:
+                status, _, response = harness.post_jsonrpc(
+                    "tools/call",
+                    {"name": "big_list", "arguments": {}},
+                    extra_headers={
+                        "Forwarded": 'for=127.0.0.1;proto=https;host="mcp.example.com"',
+                    },
+                )
+
+        self.assertEqual(status, 200)
+        meta = response["result"]["_meta"]["ida_mcp"]
+        self.assertTrue(
+            meta["download_url"].startswith(
+                "https://public.example/base/output/"
             )
         )
 

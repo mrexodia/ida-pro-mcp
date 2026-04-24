@@ -1,3 +1,4 @@
+import os
 import re
 import select
 import socket
@@ -204,6 +205,10 @@ def _derive_external_base_url(
     propagated = _normalize_external_base_url(headers.get(EXTERNAL_BASE_HEADER))
     if propagated:
         return propagated
+
+    configured = _normalize_external_base_url(os.environ.get("IDA_MCP_URL"))
+    if configured:
+        return configured
 
     forwarded = _parse_forwarded_header(headers.get("Forwarded"))
     authority = forwarded.get("host") or _first_header_value(headers.get("X-Forwarded-Host"))

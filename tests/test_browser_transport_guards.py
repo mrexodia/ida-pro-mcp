@@ -1,6 +1,7 @@
 import pathlib
 import sys
 import unittest
+from unittest.mock import patch
 import http.server  # Preload stdlib http before adding local ida_mcp paths.
 
 
@@ -129,6 +130,18 @@ class BrowserTransportGuardTests(unittest.TestCase):
         )
         self.assertEqual(base, "https://mcp.example.com")
 
+    def test_derive_external_base_url_prefers_env_over_forwarded_headers(self):
+        with patch.dict("os.environ", {"IDA_MCP_URL": "https://public.example/base/"}):
+            base = _derive_external_base_url(
+                {
+                    "Host": "127.0.0.1:13337",
+                    "Forwarded": 'for=127.0.0.1;proto=https;host="mcp.example.com"',
+                },
+                bound_host="127.0.0.1",
+                bound_port=13337,
+            )
+        self.assertEqual(base, "https://public.example/base")
+
     def test_derive_external_base_url_supports_forwarded_prefix(self):
         base = _derive_external_base_url(
             {
@@ -143,16 +156,17 @@ class BrowserTransportGuardTests(unittest.TestCase):
         self.assertEqual(base, "https://mcp.example.com/ida/proxy")
 
     def test_derive_external_base_url_prefers_propagated_header(self):
-        base = _derive_external_base_url(
-            {
-                "Host": "127.0.0.1:13337",
-                EXTERNAL_BASE_HEADER: "https://public.example/base/",
-                "X-Forwarded-Proto": "http",
-                "X-Forwarded-Host": "ignored.example",
-            },
-            bound_host="127.0.0.1",
-            bound_port=13337,
-        )
+        with patch.dict("os.environ", {"IDA_MCP_URL": "https://env.example/base/"}):
+            base = _derive_external_base_url(
+                {
+                    "Host": "127.0.0.1:13337",
+                    EXTERNAL_BASE_HEADER: "https://public.example/base/",
+                    "X-Forwarded-Proto": "http",
+                    "X-Forwarded-Host": "ignored.example",
+                },
+                bound_host="127.0.0.1",
+                bound_port=13337,
+            )
         self.assertEqual(base, "https://public.example/base")
 
 
