@@ -487,24 +487,23 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             pass
 
         mcp_session_id = self.headers.get("Mcp-Session-Id")
-        if self.mcp_server.require_streamable_http_session:
-            if request_method == "initialize":
-                if mcp_session_id is None:
-                    mcp_session_id = str(uuid.uuid4())
+        if request_method == "initialize":
+            if mcp_session_id is None:
+                mcp_session_id = str(uuid.uuid4())
+            self.mcp_server.register_http_session(mcp_session_id)
+        elif self.mcp_server.require_streamable_http_session:
+            if mcp_session_id is None:
+                self.send_error(
+                    400,
+                    "Missing Mcp-Session-Id header. Call initialize first and "
+                    "reuse the returned Mcp-Session-Id.",
+                )
+                return
+            if not self.mcp_server.has_http_session(mcp_session_id):
+                print(
+                    f"[MCP] Re-registering HTTP session {mcp_session_id} after reconnect"
+                )
                 self.mcp_server.register_http_session(mcp_session_id)
-            else:
-                if mcp_session_id is None:
-                    self.send_error(
-                        400,
-                        "Missing Mcp-Session-Id header. Call initialize first and "
-                        "reuse the returned Mcp-Session-Id.",
-                    )
-                    return
-                if not self.mcp_server.has_http_session(mcp_session_id):
-                    print(
-                        f"[MCP] Re-registering HTTP session {mcp_session_id} after reconnect"
-                    )
-                    self.mcp_server.register_http_session(mcp_session_id)
 
         # Parse extensions from query params and store in thread-local
         extensions = self._parse_extensions(self.path)
