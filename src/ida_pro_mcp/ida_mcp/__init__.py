@@ -37,7 +37,7 @@ from . import api_resources
 from . import api_survey
 from . import api_composite
 from . import api_discovery
-from . import trace as trace  # registers the trace_clear tool; must precede http import
+from . import trace as trace
 
 # Re-export key components for external use
 from .sync import idasync, IDAError, IDASyncError, CancelledError
@@ -46,9 +46,8 @@ from .http import IdaMcpHttpRequestHandler
 from .api_core import init_caches
 from .api_discovery import set_local_instance
 
-# Activate tracing if IDA_MCP_TRACE_FILE is set (env-var opt-in for the
-# in-IDA plugin, which has no CLI).
-trace.configure_from_env()
+# Tracing is always on: every tools/call is recorded into the IDB netnode.
+trace.configure_idb()
 
 __all__ = [
     # Infrastructure modules
