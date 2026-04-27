@@ -11,6 +11,7 @@ import ida_dirtree
 import ida_funcs
 import ida_ua
 
+from .compat import tinfo_get_udm
 from .rpc import tool
 from .sync import idasync, IDAError
 from .utils import (
@@ -637,7 +638,7 @@ def rename(
                         break
                     continue
 
-                idx, udm = frame_tif.get_udm(old_name)
+                idx, udm = tinfo_get_udm(frame_tif, old_name)
                 if not udm:
                     result = {
                         "func_addr": func_addr,

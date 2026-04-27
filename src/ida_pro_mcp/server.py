@@ -2,17 +2,30 @@ import argparse
 import http.client
 import json
 import os
+import re
 import sys
+import threading
 import traceback
+from collections import OrderedDict
 from typing import Annotated, Any, TYPE_CHECKING, TypedDict
 from urllib.parse import parse_qs, urlparse
 
 if TYPE_CHECKING:
-    from ida_pro_mcp.ida_mcp.zeromcp import McpServer
+    from ida_pro_mcp.ida_mcp.zeromcp import (
+        EXTERNAL_BASE_HEADER,
+        McpHttpRequestHandler,
+        McpServer,
+        get_current_request_external_base_url,
+    )
     from ida_pro_mcp.ida_mcp.zeromcp.jsonrpc import JsonRpcRequest, JsonRpcResponse
 else:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ida_mcp"))
-    from zeromcp import McpServer
+    from zeromcp import (
+        EXTERNAL_BASE_HEADER,
+        McpHttpRequestHandler,
+        McpServer,
+        get_current_request_external_base_url,
+    )
     from zeromcp.jsonrpc import JsonRpcRequest, JsonRpcResponse
 
     sys.path.pop(0)
@@ -81,6 +94,47 @@ mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
 
 LOCAL_TOOLS = {"list_instances", "select_instance", "open_file"}
+OUTPUT_PROXY_CACHE_MAX_SIZE = 100
+_OUTPUT_PATH_RE = re.compile(r"^/output/([a-f0-9-]+)\.(\w+)$")
+_output_proxy_targets: OrderedDict[str, tuple[str, int]] = OrderedDict()
+_output_proxy_lock = threading.Lock()
+
+
+def _extract_output_id(response: dict) -> str | None:
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return None
+    meta = result.get("_meta")
+    if not isinstance(meta, dict):
+        return None
+    ida_meta = meta.get("ida_mcp")
+    if not isinstance(ida_meta, dict):
+        return None
+    output_id = ida_meta.get("output_id")
+    return output_id if isinstance(output_id, str) else None
+
+
+def _remember_output_proxy_target(output_id: str, host: str, port: int) -> None:
+    with _output_proxy_lock:
+        _output_proxy_targets.pop(output_id, None)
+        _output_proxy_targets[output_id] = (host, port)
+        while len(_output_proxy_targets) > OUTPUT_PROXY_CACHE_MAX_SIZE:
+            _output_proxy_targets.popitem(last=False)
+
+
+def _get_output_proxy_target(output_id: str) -> tuple[str, int] | None:
+    with _output_proxy_lock:
+        target = _output_proxy_targets.get(output_id)
+        if target is None:
+            return None
+        _output_proxy_targets.move_to_end(output_id)
+        return target
+
+
+def _remember_output_proxy_target_from_response(host: str, port: int, response: dict) -> None:
+    output_id = _extract_output_id(response)
+    if output_id:
+        _remember_output_proxy_target(output_id, host, port)
 
 
 def _get_proxy_request_path() -> str:
@@ -99,6 +153,9 @@ def _get_proxy_request_headers() -> dict[str, str]:
         session_id = transport_session_id.split(":", 1)[1]
         if session_id and session_id != "anonymous":
             headers["Mcp-Session-Id"] = session_id
+    external_base_url = get_current_request_external_base_url()
+    if external_base_url:
+        headers[EXTERNAL_BASE_HEADER] = external_base_url
     return headers
 
 
@@ -123,7 +180,20 @@ def _proxy_to_instance(host: str, port: int, payload: bytes | str | dict) -> dic
             raise RuntimeError(
                 f"HTTP {response.status} {response.reason}: {raw_data}"
             )
-        return json.loads(raw_data)
+        parsed = json.loads(raw_data)
+        _remember_output_proxy_target_from_response(host, port, parsed)
+        return parsed
+    finally:
+        conn.close()
+
+
+def _proxy_output_download(host: str, port: int, path: str) -> tuple[int, str, list[tuple[str, str]], bytes]:
+    """Proxy a raw output download from a specific IDA instance."""
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    try:
+        conn.request("GET", path)
+        response = conn.getresponse()
+        return response.status, response.reason, response.getheaders(), response.read()
     finally:
         conn.close()
 
@@ -235,6 +305,38 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
 
 
 mcp.registry.dispatch = dispatch_proxy
+
+
+class ProxyHttpRequestHandler(McpHttpRequestHandler):
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        output_match = _OUTPUT_PATH_RE.match(parsed.path)
+        if output_match:
+            if not self._check_api_request():
+                return
+            output_id = output_match.group(1)
+            target = _get_output_proxy_target(output_id)
+            if target is None:
+                self.send_error(404, "Output not found or expired")
+                return
+            try:
+                status, _, response_headers, body = _proxy_output_download(
+                    target[0], target[1], parsed.path
+                )
+            except Exception as e:
+                self.send_error(502, f"Failed to proxy output download: {e}")
+                return
+
+            self.send_response(status)
+            for header, value in response_headers:
+                if header.lower() == "transfer-encoding":
+                    continue
+                self.send_header(header, value)
+            self.send_cors_headers()
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
 
 
 # ============================================================================
@@ -508,7 +610,7 @@ def main():
             if url.hostname is None or url.port is None:
                 raise Exception(f"Invalid transport URL: {args.transport}")
             # NOTE: npx -y @modelcontextprotocol/inspector for debugging
-            mcp.serve(url.hostname, url.port)
+            mcp.serve(url.hostname, url.port, request_handler=ProxyHttpRequestHandler)
             input("Server is running, press Enter or Ctrl+C to stop.")
     except (KeyboardInterrupt, EOFError):
         pass

@@ -104,6 +104,22 @@ def test_decompile_unknown_name():
     assert_error(result, contains="Not found")
 
 
+@test(binary="crackme03.elf")
+def test_decompile_default_includes_address_markers():
+    """Default output carries /*0xNNNN*/ markers on at least one line."""
+    result = decompile("main")
+    assert_ok(result, "code")
+    assert "/*0x" in result["code"]
+
+
+@test(binary="crackme03.elf")
+def test_decompile_include_addresses_false_strips_markers():
+    """include_addresses=False drops all /*0xNNNN*/ markers."""
+    result = decompile("main", include_addresses=False)
+    assert_ok(result, "code")
+    assert "/*0x" not in result["code"]
+
+
 @test()
 def test_disasm_valid_function():
     """disasm returns non-empty assembly for a valid function."""

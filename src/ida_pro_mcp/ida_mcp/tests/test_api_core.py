@@ -29,6 +29,7 @@ from ..api_core import (
     server_health,
     server_warmup,
     find_regex,
+    search_text,
 )
 
 
@@ -466,3 +467,89 @@ def test_find_regex():
     """find_regex can search for patterns"""
     result = find_regex(".*")
     assert_has_keys(result, "matches", "cursor")
+
+
+# ============================================================================
+# Tests for search_text
+# ============================================================================
+
+
+@test()
+def test_search_text_smoke():
+    """search_text returns a well-formed envelope even for no matches."""
+    result = search_text("___definitely_no_such_token___")
+    assert_has_keys(result, "n", "hits", "cursor")
+    assert result["n"] == 0
+    assert result["hits"] == []
+    assert result["cursor"].get("done") is True
+
+
+@test()
+def test_search_text_invalid_regex_returns_error():
+    """Bad regex surfaces as `error`, not a raised exception."""
+    result = search_text("(unclosed", regex=True)
+    assert "error" in result
+    assert result["n"] == 0
+
+
+@test()
+def test_search_text_invalid_include_returns_error():
+    result = search_text("call", include="garbage")
+    assert "error" in result
+
+
+@test()
+def test_search_text_hits_have_required_shape():
+    """Hit records carry addr/matches; matches carry kind/text."""
+    result = search_text("call", limit=5)
+    if result["n"] == 0:
+        skip_test("binary produced no matches for 'call'")
+    for h in result["hits"]:
+        assert_has_keys(h, "addr", "matches")
+        assert is_hex_address(h["addr"]), f"bad addr: {h['addr']!r}"
+        assert h["matches"], f"hit at {h['addr']} has no matches"
+        for m in h["matches"]:
+            assert_has_keys(m, "kind", "text")
+            assert m["kind"] in ("disasm", "comment")
+            assert isinstance(m["text"], str) and m["text"]
+
+
+@test()
+def test_search_text_disasm_only_excludes_comments():
+    """include='disasm' should never return comment-kind lines."""
+    result = search_text("call", include="disasm", limit=10)
+    if result["n"] == 0:
+        skip_test("no 'call' in binary")
+    for h in result["hits"]:
+        for m in h["matches"]:
+            assert m["kind"] == "disasm", f"unexpected kind {m['kind']} at {h['addr']}"
+
+
+@test()
+def test_search_text_pagination_uses_addr_cursor():
+    """Cursor is an address; the second page must not re-emit the first page's hits."""
+    page1 = search_text("call", limit=2)
+    if page1["n"] < 2 or page1["cursor"].get("done"):
+        skip_test("not enough matches to paginate")
+    next_addr = page1["cursor"]["next"]
+    assert is_hex_address(next_addr), f"cursor.next not hex: {next_addr!r}"
+    page2 = search_text("call", limit=2, start=next_addr)
+    addrs1 = {h["addr"] for h in page1["hits"]}
+    addrs2 = {h["addr"] for h in page2["hits"]}
+    assert not (addrs1 & addrs2), f"duplicate hits across pages: {addrs1 & addrs2}"
+
+
+@test()
+def test_search_text_limit_respected():
+    result = search_text("call", limit=2)
+    assert len(result["hits"]) <= 2
+
+
+@test()
+def test_search_text_regex_mode():
+    """regex=True accepts regex syntax and finds matches."""
+    result = search_text(r"call|jmp", regex=True, limit=5)
+    if result["n"] == 0:
+        skip_test("no call/jmp in binary")
+    for h in result["hits"]:
+        assert h["matches"]

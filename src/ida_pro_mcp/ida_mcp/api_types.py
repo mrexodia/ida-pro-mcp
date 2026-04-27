@@ -29,6 +29,7 @@ from .utils import (
     EnumUpsert,
 )
 from . import compat
+from .compat import tinfo_get_udm
 
 
 class DeclareTypeResult(TypedDict, total=False):
@@ -891,7 +892,7 @@ def _infer_type_edit_kind(edit: dict) -> str:
             if fn:
                 frame_tif = ida_typeinf.tinfo_t()
                 if ida_frame.get_func_frame(frame_tif, fn):
-                    _, udm = frame_tif.get_udm(str(edit["name"]))
+                    _, udm = tinfo_get_udm(frame_tif, str(edit["name"]))
                     if udm:
                         return "stack"
         except Exception:
@@ -979,7 +980,7 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             if not ida_frame.get_func_frame(frame_tif, func):
                 return {"edit": edit, "kind": kind, "error": "No frame available"}
 
-            idx, udm = frame_tif.get_udm(stack_name)
+            idx, udm = tinfo_get_udm(frame_tif, stack_name)
             if not udm:
                 return {
                     "edit": edit,

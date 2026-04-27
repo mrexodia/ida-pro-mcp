@@ -14,10 +14,14 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer, HTTPServer
 from typing import Any, Callable, Union, Annotated, BinaryIO, NotRequired, get_origin, get_args, get_type_hints, is_typeddict
 from types import UnionType
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlunparse
 from io import BufferedIOBase
 
 from .jsonrpc import JsonRpcRegistry, JsonRpcError, JsonRpcException, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
+
+EXTERNAL_BASE_HEADER = "X-IDA-MCP-External-Base"
+
+_request_context = threading.local()
 
 class McpToolError(Exception):
     def __init__(self, message: str):
@@ -118,6 +122,111 @@ def _host_header_allowed_for_bind(bound_host: str, host_header: str | None) -> b
         return True
 
     return _is_loopback_host(host_name)
+
+
+def set_current_request_external_base_url(url: str | None) -> None:
+    setattr(_request_context, "external_base_url", url.rstrip("/") if url else None)
+
+
+def get_current_request_external_base_url() -> str | None:
+    return getattr(_request_context, "external_base_url", None)
+
+
+def _strip_optional_quotes(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return value[1:-1]
+    return value
+
+
+def _first_header_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    first = value.split(",", 1)[0].strip()
+    return first or None
+
+
+def _normalize_external_base_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    path = parsed.path.rstrip("/")
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def _normalize_forwarded_prefix(prefix: str | None) -> str:
+    if not prefix:
+        return ""
+    prefix = _strip_optional_quotes(prefix).strip()
+    if not prefix or prefix == "/":
+        return ""
+    if not prefix.startswith("/"):
+        prefix = f"/{prefix}"
+    return prefix.rstrip("/")
+
+
+def _append_forwarded_port(authority: str, port: str | None) -> str:
+    if not port:
+        return authority
+    try:
+        parsed = urlparse(f"//{authority}")
+        if parsed.hostname is not None and parsed.port is None:
+            return f"{authority}:{port}"
+    except ValueError:
+        pass
+    return authority
+
+
+def _parse_forwarded_header(forwarded: str | None) -> dict[str, str]:
+    if not forwarded:
+        return {}
+    result: dict[str, str] = {}
+    first_entry = forwarded.split(",", 1)[0]
+    for item in first_entry.split(";"):
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        key = key.strip().lower()
+        value = _strip_optional_quotes(value)
+        if key and value:
+            result[key] = value
+    return result
+
+
+def _derive_external_base_url(
+    headers: dict | Any,
+    *,
+    bound_host: str | None = None,
+    bound_port: int | None = None,
+) -> str | None:
+    propagated = _normalize_external_base_url(headers.get(EXTERNAL_BASE_HEADER))
+    if propagated:
+        return propagated
+
+    forwarded = _parse_forwarded_header(headers.get("Forwarded"))
+    authority = forwarded.get("host") or _first_header_value(headers.get("X-Forwarded-Host"))
+    authority = authority or headers.get("Host")
+    if authority:
+        authority = authority.strip()
+
+    forwarded_port = _first_header_value(headers.get("X-Forwarded-Port"))
+    if authority:
+        authority = _append_forwarded_port(authority, forwarded_port)
+    elif bound_host is not None and bound_port is not None:
+        authority = f"{bound_host}:{bound_port}"
+
+    if not authority:
+        return None
+
+    scheme = (
+        forwarded.get("proto")
+        or _first_header_value(headers.get("X-Forwarded-Proto"))
+        or "http"
+    ).strip().lower()
+    prefix = _normalize_forwarded_prefix(_first_header_value(headers.get("X-Forwarded-Prefix")))
+    return _normalize_external_base_url(f"{scheme}://{authority}{prefix}")
 
 class McpHttpRequestHandler(BaseHTTPRequestHandler):
     server_version = "zeromcp/1.3.0"
@@ -335,6 +444,13 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         extensions = self._parse_extensions(self.path)
         setattr(self.mcp_server._enabled_extensions, "data", extensions)
         setattr(self.mcp_server._transport_session_id, "data", f"sse:{session_id}")
+        set_current_request_external_base_url(
+            _derive_external_base_url(
+                self.headers,
+                bound_host=self.server.server_address[0],
+                bound_port=self.server.server_address[1],
+            )
+        )
 
         try:
             # Dispatch to MCP registry
@@ -344,6 +460,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             setattr(self.mcp_server._enabled_extensions, "data", set())
             setattr(self.mcp_server._protocol_version, "data", None)
             setattr(self.mcp_server._transport_session_id, "data", None)
+            set_current_request_external_base_url(None)
 
         # Send SSE response if necessary
         if response is not None:
@@ -397,6 +514,13 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             "data",
             f"http:{mcp_session_id}" if mcp_session_id else "http:anonymous",
         )
+        set_current_request_external_base_url(
+            _derive_external_base_url(
+                self.headers,
+                bound_host=self.server.server_address[0],
+                bound_port=self.server.server_address[1],
+            )
+        )
 
         # Dispatch to MCP registry
         setattr(self.mcp_server._protocol_version, "data", "2025-06-18")
@@ -406,6 +530,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             setattr(self.mcp_server._enabled_extensions, "data", set())
             setattr(self.mcp_server._protocol_version, "data", None)
             setattr(self.mcp_server._transport_session_id, "data", None)
+            set_current_request_external_base_url(None)
 
         def send_response(status: int, body: bytes):
             self.send_response(status)

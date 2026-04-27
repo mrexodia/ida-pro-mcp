@@ -748,11 +748,14 @@ def _profile_function(
 @tool_timeout(90.0)
 def decompile(
     addr: Annotated[str, "Function address or name to decompile"],
+    include_addresses: Annotated[
+        bool, "Append /*0xNNNN*/ markers per line (default: true). Set false to save tokens."
+    ] = True,
 ) -> DecompileResult:
     """Decompile function(s) at address(es); returns pseudocode and per-item errors."""
     try:
         start = parse_address(addr)
-        code = decompile_function_safe(start)
+        code = decompile_function_safe(start, include_addresses=include_addresses)
         if code is None:
             return {"addr": addr, "code": None, "error": "Decompilation failed"}
         result: DecompileResult = {"addr": addr, "code": code}

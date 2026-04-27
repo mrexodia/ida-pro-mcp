@@ -9,6 +9,7 @@ import ida_typeinf
 import ida_frame
 import idaapi
 
+from .compat import tinfo_get_udm
 from .rpc import tool
 from .sync import idasync
 from .utils import (
@@ -133,7 +134,7 @@ def delete_stack(
                 )
                 continue
 
-            idx, udm = frame_tif.get_udm(var_name)
+            idx, udm = tinfo_get_udm(frame_tif, var_name)
             if not udm:
                 results.append(
                     {
