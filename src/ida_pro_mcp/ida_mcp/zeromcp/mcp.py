@@ -9,8 +9,8 @@ import gzip
 import zlib
 import ipaddress
 import inspect
+import logging
 import threading
-import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer, HTTPServer
 from typing import Any, Callable, Union, Annotated, BinaryIO, NotRequired, get_origin, get_args, get_type_hints, is_typeddict
 from types import UnionType
@@ -20,6 +20,8 @@ from io import BufferedIOBase
 from .jsonrpc import JsonRpcRegistry, JsonRpcError, JsonRpcException, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
 
 EXTERNAL_BASE_HEADER = "X-IDA-MCP-External-Base"
+
+logger = logging.getLogger(__name__)
 
 _request_context = threading.local()
 
@@ -501,8 +503,9 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                     )
                     return
                 if not self.mcp_server.has_http_session(mcp_session_id):
-                    print(
-                        f"[MCP] Re-registering HTTP session {mcp_session_id} after reconnect"
+                    logger.info(
+                        "[MCP] Re-registering HTTP session %s after reconnect",
+                        mcp_session_id,
                     )
                     self.mcp_server.register_http_session(mcp_session_id)
 
@@ -598,7 +601,7 @@ class McpServer:
 
     def serve(self, host: str, port: int, *, background = True, request_handler = McpHttpRequestHandler):
         if self._running:
-            print("[MCP] Server is already running")
+            logger.info("[MCP] Server is already running")
             return
 
         # Create server with deferred binding
@@ -639,16 +642,15 @@ class McpServer:
         # Only start thread after successful bind
         self._running = True
 
-        print("[MCP] Server started:")
-        print(f"  Streamable HTTP: http://{host}:{port}/mcp")
-        print(f"  SSE: http://{host}:{port}/sse")
+        logger.info("[MCP] Server started")
+        logger.info("  Streamable HTTP: http://%s:%s/mcp", host, port)
+        logger.info("  SSE: http://%s:%s/sse", host, port)
 
         def serve_forever():
             try:
                 self._http_server.serve_forever() # type: ignore
-            except Exception as e:
-                print(f"[MCP] Server error: {e}")
-                traceback.print_exc()
+            except Exception:
+                logger.exception("[MCP] Server error")
             finally:
                 self._running = False
 
@@ -681,7 +683,7 @@ class McpServer:
             self._server_thread.join()
             self._server_thread = None
 
-        print("[MCP] Server stopped")
+        logger.info("[MCP] Server stopped")
 
     def stdio(self, stdin: BinaryIO | None = None, stdout: BinaryIO | None = None):
         stdin = stdin or sys.stdin.buffer
@@ -814,7 +816,11 @@ class McpServer:
     def _mcp_notifications_cancelled(self, requestId: int | str, reason: str | None = None) -> None:
         """MCP notifications/cancelled - cancel an in-flight request"""
         if cancel_request(requestId):
-            print(f"[MCP] Cancelled request {requestId}: {reason or 'no reason'}")
+            logger.info(
+                "[MCP] Cancelled request %s: %s",
+                requestId,
+                reason or "no reason",
+            )
         # Notifications don't return a response
 
     def _mcp_resources_list(self, _meta: dict | None = None) -> dict:
