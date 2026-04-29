@@ -93,6 +93,19 @@ class _TransportMcp:
         return self.session_id
 
 
+def _patch_discovery(*, instances, probe):
+    old_discover = supmod._discovery.discover_instances
+    old_probe = supmod._discovery.probe_instance
+    supmod._discovery.discover_instances = lambda: instances
+    supmod._discovery.probe_instance = lambda *_args, **_kwargs: probe
+
+    def restore():
+        supmod._discovery.discover_instances = old_discover
+        supmod._discovery.probe_instance = old_probe
+
+    return restore
+
+
 def test_supervisor_import_does_not_import_ida_modules():
     assert "idapro" not in sys.modules
     assert "idaapi" not in sys.modules
@@ -136,3 +149,66 @@ def test_resolve_session_accepts_session_id_filename_and_context(tmp_path):
     assert sup.resolve_session("sample").session_id == "sample"
     assert sup.resolve_session("sample.bin").session_id == "sample"
     assert sup.resolve_session(None).session_id == "sample"
+
+
+def test_open_session_uses_matching_gui_instance(tmp_path):
+    sample = tmp_path / "sample.bin"
+    idb = tmp_path / "sample.bin.i64"
+    sample.write_bytes(b"x")
+    idb.write_bytes(b"idb")
+    restore = _patch_discovery(
+        instances=[
+            {
+                "host": "127.0.0.1",
+                "port": 31337,
+                "pid": 999,
+                "binary": "sample.bin",
+                "idb_path": str(idb),
+                "started_at": "now",
+            }
+        ],
+        probe=True,
+    )
+    try:
+        sup = _FakeSupervisor()
+        session = sup.open_session(str(sample), session_id="gui", context_id="ctx")
+        assert session.backend == "gui"
+        assert session.host == "127.0.0.1"
+        assert session.port == 31337
+        assert session.pid == 999
+        assert sup.resolve_session(str(sample)).session_id == "gui"
+        assert sup.resolve_session(str(idb)).session_id == "gui"
+        assert sup.opened == []
+    finally:
+        restore()
+
+
+def test_closed_gui_session_reopens_headless(tmp_path):
+    sample = tmp_path / "sample.bin"
+    idb = tmp_path / "sample.bin.i64"
+    sample.write_bytes(b"x")
+    idb.write_bytes(b"idb")
+    restore = _patch_discovery(
+        instances=[
+            {
+                "host": "127.0.0.1",
+                "port": 31337,
+                "pid": 999,
+                "binary": "sample.bin",
+                "idb_path": str(idb),
+                "started_at": "now",
+            }
+        ],
+        probe=True,
+    )
+    try:
+        sup = _FakeSupervisor()
+        session = sup.open_session(str(sample), session_id="gui", context_id="ctx")
+        assert session.backend == "gui"
+        supmod._discovery.probe_instance = lambda *_args, **_kwargs: False
+        reopened = sup.resolve_session("gui")
+        assert reopened.backend == "worker"
+        assert reopened.session_id == "gui"
+        assert sup.opened[-1][1]["input_path"] == str(idb.resolve())
+    finally:
+        restore()

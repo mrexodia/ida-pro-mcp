@@ -162,6 +162,8 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 
 `idalib-mcp` is a supervisor that keeps each open database in its own idalib worker process. Starting without an `input_path` is supported; use `idalib_open(input_path, ...)` to open databases dynamically and `idalib_close(session_id)` to close them. This allows one headless MCP server to work with arbitrary files over its lifetime.
 
+If the requested IDB is already open in a GUI IDA instance running the plugin, `idalib-mcp` will use that GUI instance instead of spawning a duplicate headless worker. If the GUI instance later disappears, the next routed request reopens the database in a headless worker when possible. Unsaved GUI-only changes must be saved first if they should be visible after fallback.
+
 Tools target either the database bound to the current MCP context or an explicit `database` argument.
 
 ```sh
@@ -210,7 +212,7 @@ With `--isolated-contexts`, strict Streamable HTTP session semantics are enabled
 - `idalib_switch(session_id)`: Rebind the active context policy to an existing session.
 - `idalib_current()`: Return the session bound to the active context policy.
 - `idalib_unbind()`: Remove the active context binding.
-- `idalib_list()`: Includes `is_active`, `is_current_context`, `bound_contexts`, and `worker_pid`.
+- `idalib_list()`: Includes `is_active`, `is_current_context`, `bound_contexts`, backend (`worker` or `gui`), and process IDs.
 
 Worker controls:
 

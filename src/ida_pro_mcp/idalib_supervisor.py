@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import copy
 import http.client
+import importlib.util
 import json
 import logging
 import os
@@ -68,6 +69,20 @@ def _import_zeromcp():
 McpServer = _import_zeromcp()
 
 
+def _import_discovery():
+    """Import pure-Python GUI instance discovery without importing ida_mcp."""
+    path = Path(__file__).resolve().parent / "ida_mcp" / "discovery.py"
+    spec = importlib.util.spec_from_file_location("ida_pro_mcp_idalib_supervisor_discovery", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not import discovery module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_discovery = _import_discovery()
+
+
 class IdalibContextFields(TypedDict):
     context_id: NotRequired[str]
     transport_context_id: NotRequired[str | None]
@@ -88,6 +103,9 @@ class IdalibSessionListInfo(IdalibSessionInfo, total=False):
     is_active: bool
     is_current_context: bool
     bound_contexts: int
+    backend: str
+    owned: bool
+    pid: int | None
     worker_pid: int | None
 
 
@@ -167,6 +185,9 @@ class WorkerSession:
     host: str = "127.0.0.1"
     port: int = 0
     process: subprocess.Popen | None = None
+    backend: str = "worker"
+    owned: bool = True
+    pid: int | None = None
 
     def to_dict(self) -> IdalibSessionInfo:
         return {
@@ -185,10 +206,18 @@ class WorkerSession:
             "is_active": self.is_alive(),
             "is_current_context": current,
             "bound_contexts": bound_contexts,
+            "backend": self.backend,
+            "owned": self.owned,
+            "pid": self.pid if self.pid is not None else (self.process.pid if self.process is not None else None),
             "worker_pid": self.process.pid if self.process is not None else None,
         }
 
     def is_alive(self) -> bool:
+        if self.backend == "gui":
+            try:
+                return bool(_discovery.probe_instance(self.host, self.port, timeout=0.5))
+            except Exception:
+                return False
         return self.process is not None and self.process.poll() is None
 
 
@@ -276,6 +305,9 @@ class IdalibSupervisor:
             host="127.0.0.1",
             port=port,
             process=process,
+            backend="worker",
+            owned=True,
+            pid=process.pid,
         )
         try:
             self._wait_worker_ready(worker)
@@ -301,6 +333,8 @@ class IdalibSupervisor:
         raise TimeoutError(f"idalib worker did not become ready: {last_error}")
 
     def _terminate_worker(self, worker: WorkerSession) -> None:
+        if worker.backend != "worker" or not worker.owned:
+            return
         proc = worker.process
         if proc is None or proc.poll() is not None:
             return
@@ -325,9 +359,8 @@ class IdalibSupervisor:
 
     def _schema_or_idle_worker(self) -> WorkerSession:
         with self._lock:
-            if self.sessions:
-                worker = next(iter(self.sessions.values()))
-                if worker.is_alive():
+            for worker in self.sessions.values():
+                if worker.backend == "worker" and worker.is_alive():
                     return worker
             if self._schema_worker is not None and self._schema_worker.is_alive():
                 return self._schema_worker
@@ -347,7 +380,12 @@ class IdalibSupervisor:
         if worker is not None:
             return worker
 
-        if self.max_workers <= 0 or len(self.sessions) < self.max_workers:
+        owned_workers = sum(
+            1
+            for session in self.sessions.values()
+            if session.backend == "worker" and session.owned
+        )
+        if self.max_workers <= 0 or owned_workers < self.max_workers:
             return self._spawn_worker()
 
         raise RuntimeError(
@@ -426,6 +464,69 @@ class IdalibSupervisor:
             raise FileNotFoundError(f"Input file not found: {input_path}")
         return str(path.resolve())
 
+    def _path_key(self, path: str) -> str:
+        return os.path.normcase(str(Path(path).resolve()))
+
+    def _candidate_idb_paths(self, resolved_path: str) -> set[str]:
+        path = Path(resolved_path)
+        candidates = {self._path_key(str(path))}
+        lower_name = path.name.lower()
+        if not lower_name.endswith((".i64", ".idb")):
+            candidates.add(self._path_key(str(path) + ".i64"))
+            candidates.add(self._path_key(str(path) + ".idb"))
+        return candidates
+
+    def _find_gui_instance_for_path(self, resolved_path: str) -> dict[str, Any] | None:
+        candidates = self._candidate_idb_paths(resolved_path)
+        try:
+            instances = _discovery.discover_instances()
+        except Exception:
+            logger.debug("GUI instance discovery failed", exc_info=True)
+            return None
+
+        matches = []
+        for instance in instances:
+            idb_path = str(instance.get("idb_path") or "")
+            if not idb_path:
+                continue
+            try:
+                idb_key = self._path_key(idb_path)
+            except Exception:
+                idb_key = os.path.normcase(idb_path)
+            if idb_key in candidates:
+                matches.append(instance)
+
+        if len(matches) > 1:
+            logger.warning(
+                "Multiple GUI IDA instances matched %s; using the first registered instance",
+                resolved_path,
+            )
+        return matches[0] if matches else None
+
+    def _register_session_locked(self, session: WorkerSession, resolved_path: str, context_id: str | None) -> None:
+        self.sessions[session.session_id] = session
+        self.path_to_session[self._path_key(resolved_path)] = session.session_id
+        for candidate in self._candidate_idb_paths(resolved_path):
+            self.path_to_session.setdefault(candidate, session.session_id)
+        if context_id is not None:
+            self.bind_context(context_id, session.session_id)
+
+    def _make_gui_session(self, resolved_path: str, session_id: str, instance: dict[str, Any]) -> WorkerSession:
+        idb_path = str(instance.get("idb_path") or resolved_path)
+        filename = Path(idb_path).name or Path(resolved_path).name
+        return WorkerSession(
+            session_id=session_id,
+            input_path=idb_path,
+            filename=filename,
+            metadata={"backend": "gui", "requested_path": resolved_path},
+            host=str(instance.get("host") or "127.0.0.1"),
+            port=int(instance.get("port") or 0),
+            process=None,
+            backend="gui",
+            owned=False,
+            pid=int(instance["pid"]) if instance.get("pid") is not None else None,
+        )
+
     def open_session(
         self,
         input_path: str,
@@ -436,7 +537,7 @@ class IdalibSupervisor:
     ) -> WorkerSession:
         resolved = self._normalize_input_path(input_path)
         with self._lock:
-            existing = self.path_to_session.get(os.path.normcase(resolved))
+            existing = self.path_to_session.get(self._path_key(resolved))
             if existing is not None:
                 if session_id is not None and session_id != existing:
                     raise ValueError(
@@ -453,6 +554,18 @@ class IdalibSupervisor:
                 session_id = str(uuid.uuid4())[:8]
             elif session_id in self.sessions:
                 raise ValueError(f"Session already exists: {session_id}")
+
+            gui_instance = self._find_gui_instance_for_path(resolved)
+            if gui_instance is not None:
+                session = self._make_gui_session(resolved, session_id, gui_instance)
+                self._register_session_locked(session, resolved, context_id)
+                logger.info(
+                    "Using GUI IDA instance %s:%s for %s",
+                    session.host,
+                    session.port,
+                    resolved,
+                )
+                return session
 
             worker = self._allocate_worker_locked()
 
@@ -482,12 +595,12 @@ class IdalibSupervisor:
             host=worker.host,
             port=worker.port,
             process=worker.process,
+            backend="worker",
+            owned=True,
+            pid=worker.process.pid if worker.process is not None else None,
         )
         with self._lock:
-            self.sessions[session_id] = session
-            self.path_to_session[os.path.normcase(resolved)] = session_id
-            if context_id is not None:
-                self.bind_context(context_id, session_id)
+            self._register_session_locked(session, resolved, context_id)
         return session
 
     def close_session(self, session_id: str) -> bool:
@@ -495,29 +608,88 @@ class IdalibSupervisor:
             session = self.sessions.pop(session_id, None)
             if session is None:
                 return False
-            self.path_to_session.pop(os.path.normcase(str(Path(session.input_path).resolve())), None)
+            stale_paths = [
+                path_key
+                for path_key, bound_session_id in self.path_to_session.items()
+                if bound_session_id == session_id
+            ]
+            for path_key in stale_paths:
+                self.path_to_session.pop(path_key, None)
             stale_contexts = [
                 context for context, bound in self.context_bindings.items() if bound == session_id
             ]
             for context in stale_contexts:
                 self.context_bindings.pop(context, None)
-        try:
-            self.call_worker_tool(session, "idalib_close", {"session_id": session_id})
-        except Exception:
-            logger.debug("Worker idalib_close failed for %s", session_id, exc_info=True)
+        if session.backend == "worker":
+            try:
+                self.call_worker_tool(session, "idalib_close", {"session_id": session_id})
+            except Exception:
+                logger.debug("Worker idalib_close failed for %s", session_id, exc_info=True)
         self._terminate_worker(session)
         return True
+
+    def _reopen_gui_session_headless(self, session: WorkerSession) -> WorkerSession:
+        logger.info(
+            "GUI IDA backend for session %s is unavailable; reopening headless",
+            session.session_id,
+        )
+        resolved = self._normalize_input_path(session.input_path)
+        with self._lock:
+            worker = self._allocate_worker_locked()
+        try:
+            opened = self.call_worker_tool(
+                worker,
+                "idalib_open",
+                {
+                    "input_path": resolved,
+                    "run_auto_analysis": False,
+                    "session_id": session.session_id,
+                },
+            )
+            if isinstance(opened, dict) and opened.get("error"):
+                raise RuntimeError(str(opened["error"]))
+        except Exception:
+            self._terminate_worker(worker)
+            raise
+
+        worker_session = opened.get("session", {}) if isinstance(opened, dict) else {}
+        replacement = WorkerSession(
+            session_id=session.session_id,
+            input_path=str(worker_session.get("input_path") or resolved),
+            filename=str(worker_session.get("filename") or Path(resolved).name),
+            is_analyzing=bool(worker_session.get("is_analyzing", False)),
+            metadata={**session.metadata, **dict(worker_session.get("metadata") or {}), "fallback_from_gui": True},
+            host=worker.host,
+            port=worker.port,
+            process=worker.process,
+            backend="worker",
+            owned=True,
+            pid=worker.process.pid if worker.process is not None else None,
+        )
+        with self._lock:
+            self.sessions[session.session_id] = replacement
+            self._register_session_locked(replacement, resolved, None)
+        return replacement
 
     def resolve_session(self, database: str | None = None) -> WorkerSession:
         with self._lock:
             session_id: str | None = None
             if database:
-                matches = [
-                    s.session_id
-                    for s in self.sessions.values()
-                    if database in {s.session_id, s.filename, s.input_path}
-                    or os.path.normcase(database) == os.path.normcase(s.input_path)
-                ]
+                matches: list[str] = [database] if database in self.sessions else []
+                if not matches:
+                    try:
+                        mapped = self.path_to_session.get(self._path_key(database))
+                    except Exception:
+                        mapped = self.path_to_session.get(os.path.normcase(database))
+                    if mapped is not None:
+                        matches = [mapped]
+                if not matches:
+                    matches = [
+                        s.session_id
+                        for s in self.sessions.values()
+                        if database in {s.session_id, s.filename, s.input_path}
+                        or os.path.normcase(database) == os.path.normcase(s.input_path)
+                    ]
                 if not matches:
                     # Try resolved path match without requiring it to exist now.
                     try:
@@ -547,10 +719,13 @@ class IdalibSupervisor:
             session = self.sessions.get(session_id)
             if session is None:
                 raise RuntimeError(f"Session is stale or missing: {session_id}")
-            if not session.is_alive():
-                raise RuntimeError(f"Worker for session '{session_id}' is not running")
             session.last_accessed = datetime.now()
+
+        if session.is_alive():
             return session
+        if session.backend == "gui":
+            return self._reopen_gui_session_headless(session)
+        raise RuntimeError(f"Worker for session '{session_id}' is not running")
 
     def list_sessions(self, context_id: str) -> list[IdalibSessionListInfo]:
         with self._lock:
@@ -767,7 +942,8 @@ def idalib_save(
         session = sup.resolve_session(session_id)
         if session_id:
             sup.bind_context(context_id, session.session_id)
-        result = sup.call_worker_tool(session, "idalib_save", {"path": path})
+        tool_name = "idb_save" if session.backend == "gui" else "idalib_save"
+        result = sup.call_worker_tool(session, tool_name, {"path": path})
         if isinstance(result, dict):
             return {**result, **sup.context_fields(context_id)}
         return {"ok": False, **sup.context_fields(context_id), "error": "Unexpected save result"}
@@ -786,6 +962,15 @@ def idalib_health(
         session = sup.resolve_session(session_id)
         if session_id:
             sup.bind_context(context_id, session.session_id)
+        if session.backend == "gui":
+            health = sup.call_worker_tool(session, "server_health", {})
+            return {
+                "ready": bool(isinstance(health, dict) and not health.get("error")),
+                **sup.context_fields(context_id),
+                "session": session.to_dict(),
+                "health": health if isinstance(health, dict) else None,
+                "error": None,
+            }
         result = sup.call_worker_tool(session, "idalib_health", {})
         if isinstance(result, dict):
             return {**result, **sup.context_fields(context_id)}
@@ -808,6 +993,23 @@ def idalib_warmup(
         session = sup.resolve_session(session_id)
         if session_id:
             sup.bind_context(context_id, session.session_id)
+        if session.backend == "gui":
+            warmup = sup.call_worker_tool(
+                session,
+                "server_warmup",
+                {
+                    "wait_auto_analysis": wait_auto_analysis,
+                    "build_caches": build_caches,
+                    "init_hexrays": init_hexrays,
+                },
+            )
+            return {
+                "ready": bool(isinstance(warmup, dict) and warmup.get("ok")),
+                **sup.context_fields(context_id),
+                "session": session.to_dict(),
+                "warmup": warmup if isinstance(warmup, dict) else None,
+                "error": None,
+            }
         result = sup.call_worker_tool(
             session,
             "idalib_warmup",
@@ -861,7 +1063,10 @@ def _handle_tools_call(request_obj: dict[str, Any]) -> dict[str, Any] | None:
 
     forwarded = copy.deepcopy(request_obj)
     forwarded.setdefault("params", {})["arguments"] = arguments
-    return sup.forward_raw(session, forwarded)
+    try:
+        return sup.forward_raw(session, forwarded)
+    except Exception as e:
+        return _jsonrpc_result(request_id, _call_tool_result({"error": str(e)}, is_error=True))
 
 
 def _handle_resources_list(request_obj: dict[str, Any]) -> dict[str, Any]:
@@ -885,9 +1090,9 @@ def _handle_resources_read(request_obj: dict[str, Any]) -> dict[str, Any] | None
         return _original_dispatch(request_obj)
     try:
         session = sup.resolve_session(None)
+        return sup.forward_raw(session, request_obj)
     except Exception as e:
         return _jsonrpc_error(request_obj.get("id"), -32001, str(e))
-    return sup.forward_raw(session, request_obj)
 
 
 def dispatch_supervisor(request: dict | str | bytes | bytearray) -> dict | None:
