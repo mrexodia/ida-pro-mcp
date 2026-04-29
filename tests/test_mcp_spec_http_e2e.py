@@ -75,7 +75,7 @@ class HttpE2EBootstrapTests(unittest.TestCase):
         cls.harness.__exit__(None, None, None)
 
     def test_initialize_returns_valid_initialize_result(self):
-        _, _, body = self.harness.post_jsonrpc(
+        _, headers, body = self.harness.post_jsonrpc(
             "initialize",
             params={
                 "protocolVersion": "2024-11-05",
@@ -87,6 +87,9 @@ class HttpE2EBootstrapTests(unittest.TestCase):
         assert_schema(body["result"], INITIALIZE_RESULT_SCHEMA)
         self.assertEqual(body["result"]["serverInfo"]["name"], "e2e-test")
         self.assertEqual(body["result"]["serverInfo"]["version"], "9.9.9")
+        session_id = headers.get("Mcp-Session-Id")
+        self.assertTrue(session_id)
+        self.assertTrue(self.harness.server.has_http_session(session_id))
 
     def test_ping_returns_empty_result(self):
         _, _, body = self.harness.post_jsonrpc("ping")
