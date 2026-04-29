@@ -36,6 +36,33 @@ class WithOptional(TypedDict):
     maybe: NotRequired[int]
 
 
+class OptionalContextFields(TypedDict):
+    context_id: NotRequired[str]
+    transport_context_id: NotRequired[str | None]
+    isolated_contexts: NotRequired[bool]
+
+
+class IdalibStyleResult(OptionalContextFields, total=False):
+    success: bool
+    error: str
+
+
+class SessionInfo(TypedDict):
+    session_id: str
+    input_path: str
+
+
+class SessionListInfo(SessionInfo, total=False):
+    is_active: bool
+    is_current_context: bool
+    bound_contexts: int
+
+
+class SessionListResult(OptionalContextFields, total=False):
+    sessions: list[SessionListInfo]
+    error: str
+
+
 class VariantA(TypedDict):
     kind: str
     value_a: int
@@ -133,6 +160,16 @@ class OutputSchemaShapeTests(unittest.TestCase):
             return {"required_field": "x"}
         self.assertEqual(self._schema_of(f).get("type"), "object")
 
+    def test_inherited_notrequired_fields_are_not_required(self):
+        def f() -> IdalibStyleResult:
+            """doc."""
+            return {"error": "bad input"}
+        schema = self._schema_of(f)
+        self.assertEqual(schema.get("type"), "object")
+        self.assertNotIn("context_id", schema.get("required", []))
+        self.assertNotIn("transport_context_id", schema.get("required", []))
+        self.assertNotIn("isolated_contexts", schema.get("required", []))
+
     def test_optional_typed_dict_root_type_is_object(self):
         def f() -> Optional[Inner]:
             """doc."""
@@ -221,6 +258,30 @@ class StructuredContentValidatesAgainstOutputSchemaTests(unittest.TestCase):
         def f() -> WithOptional:
             """doc."""
             return {"required_field": "x", "maybe": 99}
+        osch, result = self._both(f)
+        Draft202012Validator(osch).validate(result["structuredContent"])
+
+    def test_inherited_notrequired_omitted_fields_roundtrip(self):
+        def f() -> IdalibStyleResult:
+            """doc."""
+            return {"error": "bad input"}
+        osch, result = self._both(f)
+        Draft202012Validator(osch).validate(result["structuredContent"])
+
+    def test_session_list_declared_metadata_roundtrip(self):
+        def f() -> SessionListResult:
+            """doc."""
+            return {
+                "sessions": [
+                    {
+                        "session_id": "s1",
+                        "input_path": "sample.bin",
+                        "is_active": True,
+                        "is_current_context": True,
+                        "bound_contexts": 1,
+                    }
+                ]
+            }
         osch, result = self._both(f)
         Draft202012Validator(osch).validate(result["structuredContent"])
 
