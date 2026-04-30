@@ -646,13 +646,25 @@ class IdalibSupervisor:
                 existing_session = None
                 collision_error = None
 
+            session_collision_error = None
             if existing_session is None:
+                existing_by_id = self.sessions.get(session_id)
+                if existing_by_id is not None:
+                    if existing_by_id.is_alive():
+                        existing_by_id.last_accessed = datetime.now()
+                        session_collision_error = ValueError(f"Session already exists: {session_id}")
+                    else:
+                        self._unregister_session_locked(session_id)
+
+            if existing_session is None and session_collision_error is None:
                 self._register_session_locked(session, resolved, context_id)
                 return session
 
         self._discard_opened_worker_session(worker, session_id)
         if collision_error is not None:
             raise collision_error
+        if session_collision_error is not None:
+            raise session_collision_error
         return existing_session
 
     def close_session(self, session_id: str) -> bool:

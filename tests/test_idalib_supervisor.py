@@ -314,6 +314,53 @@ def test_open_session_race_rejects_different_requested_session_id(tmp_path):
         restore()
 
 
+def test_open_session_race_rejects_duplicate_session_id_for_different_path(tmp_path):
+    first = tmp_path / "first.bin"
+    second = tmp_path / "second.bin"
+    first.write_bytes(b"1")
+    second.write_bytes(b"2")
+
+    class _RaceSupervisor(_FakeSupervisor):
+        def __init__(self):
+            super().__init__()
+            self.spawned = []
+
+        def _spawn_worker(self):
+            worker = super()._spawn_worker()
+            self.spawned.append(worker)
+            return worker
+
+        def call_worker_tool(self, worker, name, arguments=None):
+            result = super().call_worker_tool(worker, name, arguments)
+            if name == "idalib_open":
+                existing = supmod.WorkerSession(
+                    session_id=arguments["session_id"],
+                    input_path=str(first.resolve()),
+                    filename="first.bin",
+                    process=_FakeProcess(),
+                )
+                with self._lock:
+                    self._register_session_locked(existing, str(first.resolve()), None)
+            return result
+
+    restore = _patch_discovery(instances=[], probe=False)
+    try:
+        sup = _RaceSupervisor()
+        try:
+            sup.open_session(str(second), session_id="shared")
+        except ValueError as e:
+            assert "Session already exists: shared" in str(e)
+        else:
+            raise AssertionError("expected ValueError")
+
+        assert set(sup.sessions) == {"shared"}
+        assert sup.sessions["shared"].input_path == str(first.resolve())
+        assert sup.path_to_session.get(sup._path_key(str(second.resolve()))) is None
+        assert sup.spawned[0].process.returncode == 0
+    finally:
+        restore()
+
+
 def test_closed_gui_session_reopens_headless(tmp_path):
     sample = tmp_path / "sample.bin"
     idb = tmp_path / "sample.bin.i64"
