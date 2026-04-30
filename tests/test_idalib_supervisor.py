@@ -299,3 +299,35 @@ def test_closed_gui_session_reopens_headless(tmp_path):
         assert sup.opened[-1][1]["input_path"] == str(idb.resolve())
     finally:
         restore()
+
+
+def test_closed_gui_session_falls_back_to_requested_binary_if_idb_is_stale(tmp_path):
+    sample = tmp_path / "sample.bin"
+    idb = tmp_path / "sample.bin.i64"
+    sample.write_bytes(b"x")
+    idb.write_bytes(b"idb")
+    restore = _patch_discovery(
+        instances=[
+            {
+                "host": "127.0.0.1",
+                "port": 31337,
+                "pid": 999,
+                "binary": "sample.bin",
+                "idb_path": str(idb),
+                "started_at": "now",
+            }
+        ],
+        probe=True,
+    )
+    try:
+        sup = _FakeSupervisor()
+        session = sup.open_session(str(sample), session_id="gui", context_id="ctx")
+        assert session.backend == "gui"
+        idb.unlink()
+        supmod._discovery.probe_instance = lambda *_args, **_kwargs: False
+        reopened = sup.resolve_session("gui")
+        assert reopened.backend == "worker"
+        assert reopened.session_id == "gui"
+        assert sup.opened[-1][1]["input_path"] == str(sample.resolve())
+    finally:
+        restore()

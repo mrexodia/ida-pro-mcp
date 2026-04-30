@@ -668,12 +668,31 @@ class IdalibSupervisor:
         self._terminate_worker(session)
         return True
 
+    def _resolve_gui_fallback_path(self, session: WorkerSession) -> str:
+        candidates = [session.input_path]
+        requested_path = session.metadata.get("requested_path")
+        if isinstance(requested_path, str) and requested_path and requested_path not in candidates:
+            candidates.append(requested_path)
+
+        errors = []
+        for candidate in candidates:
+            try:
+                return self._normalize_input_path(candidate)
+            except FileNotFoundError as e:
+                errors.append(str(e))
+
+        raise FileNotFoundError(
+            "Could not reopen GUI-backed session headlessly. Tried: "
+            + ", ".join(candidates)
+            + (f" ({'; '.join(errors)})" if errors else "")
+        )
+
     def _reopen_gui_session_headless(self, session: WorkerSession) -> WorkerSession:
         logger.info(
             "GUI IDA backend for session %s is unavailable; reopening headless",
             session.session_id,
         )
-        resolved = self._normalize_input_path(session.input_path)
+        resolved = self._resolve_gui_fallback_path(session)
         with self._lock:
             worker = self._allocate_worker_locked()
         try:
