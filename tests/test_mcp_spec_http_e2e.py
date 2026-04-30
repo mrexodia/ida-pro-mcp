@@ -2,6 +2,7 @@
 
 import sys
 import pathlib
+import time
 import unittest
 from typing import Annotated, TypedDict
 
@@ -95,6 +96,23 @@ class HttpE2EBootstrapTests(unittest.TestCase):
         _, _, body = self.harness.post_jsonrpc("ping")
         assert_schema(body, JSONRPC_RESPONSE_SCHEMA)
         self.assertEqual(body["result"], {})
+
+    def test_http_session_registry_is_bounded(self):
+        srv = McpServer("session-bounds")
+        srv.http_session_max_count = 2
+        srv.register_http_session("a")
+        srv.register_http_session("b")
+        srv.register_http_session("c")
+        self.assertFalse(srv.has_http_session("a"))
+        self.assertTrue(srv.has_http_session("b"))
+        self.assertTrue(srv.has_http_session("c"))
+
+    def test_http_session_registry_expires_stale_entries(self):
+        srv = McpServer("session-ttl")
+        srv.http_session_ttl_sec = 1
+        srv.register_http_session("expired")
+        srv._http_sessions["expired"] = time.monotonic() - 10
+        self.assertFalse(srv.has_http_session("expired"))
 
 
 class HttpE2EToolsDiscoveryTests(unittest.TestCase):
