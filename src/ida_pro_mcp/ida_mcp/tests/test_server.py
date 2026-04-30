@@ -67,6 +67,7 @@ def _saved_target():
     old_session = getattr(server.mcp._transport_session_id, "data", None)
     old_exts = getattr(server.mcp._enabled_extensions, "data", set())
     old_targets = server._session_proxy_targets.copy()
+    old_target_last_seen = server._session_proxy_last_seen.copy()
     try:
         yield
     finally:
@@ -74,6 +75,8 @@ def _saved_target():
         server.IDA_PORT = old_port
         server._session_proxy_targets.clear()
         server._session_proxy_targets.update(old_targets)
+        server._session_proxy_last_seen.clear()
+        server._session_proxy_last_seen.update(old_target_last_seen)
         server.mcp._transport_session_id.data = old_session
         server.mcp._enabled_extensions.data = old_exts
 

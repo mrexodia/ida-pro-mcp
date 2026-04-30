@@ -43,7 +43,7 @@ class _FakeSupervisor(supmod.IdalibSupervisor):
             process=_FakeProcess(),
         )
 
-    def _worker_rpc(self, worker, payload, *, timeout=300.0):
+    def _worker_rpc(self, worker, payload, *, timeout=None):
         method = payload.get("method")
         if method == "tools/list":
             return {
@@ -113,6 +113,50 @@ def _patch_discovery(*, instances, probe):
 def test_supervisor_import_does_not_import_ida_modules():
     assert "idapro" not in sys.modules
     assert "idaapi" not in sys.modules
+
+
+def test_worker_rpc_default_has_no_socket_timeout(monkeypatch):
+    class _FakeResponse:
+        status = 200
+        reason = "OK"
+
+        def read(self):
+            return b'{"jsonrpc":"2.0","result":{"ok":true},"id":1}'
+
+    class _FakeConnection:
+        instances = []
+
+        def __init__(self, host, port, timeout=None):
+            self.host = host
+            self.port = port
+            self.timeout = timeout
+            type(self).instances.append(self)
+
+        def request(self, method, path, body, headers):
+            pass
+
+        def getresponse(self):
+            return _FakeResponse()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(supmod.http.client, "HTTPConnection", _FakeConnection)
+    sup = supmod.IdalibSupervisor(supmod.McpServer("test"))
+    worker = supmod.WorkerSession(
+        session_id="worker",
+        input_path="",
+        filename="",
+        host="127.0.0.1",
+        port=12345,
+        process=_FakeProcess(),
+    )
+
+    sup._worker_rpc(worker, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
+    sup._worker_rpc(worker, {"jsonrpc": "2.0", "id": 2, "method": "ping"}, timeout=2.0)
+
+    assert _FakeConnection.instances[0].timeout is None
+    assert _FakeConnection.instances[1].timeout == 2.0
 
 
 def test_worker_tools_inject_database_and_filter_management_tools():

@@ -408,7 +408,7 @@ class IdalibSupervisor:
         worker: WorkerSession,
         payload: dict[str, Any],
         *,
-        timeout: float = 300.0,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
         conn = http.client.HTTPConnection(worker.host, worker.port, timeout=timeout)

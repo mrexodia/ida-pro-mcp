@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import threading
+import time
 import traceback
 from collections import OrderedDict
 from typing import Annotated, Any, TYPE_CHECKING, TypedDict
@@ -100,7 +101,10 @@ OUTPUT_PROXY_CACHE_MAX_SIZE = 100
 _OUTPUT_PATH_RE = re.compile(r"^/output/([a-f0-9-]+)\.(\w+)$")
 _output_proxy_targets: OrderedDict[str, tuple[str, int]] = OrderedDict()
 _output_proxy_lock = threading.Lock()
-_session_proxy_targets: dict[str, tuple[str, int]] = {}
+SESSION_PROXY_TARGET_TTL_SEC = 24 * 60 * 60
+SESSION_PROXY_TARGET_MAX_SIZE = 4096
+_session_proxy_targets: OrderedDict[str, tuple[str, int]] = OrderedDict()
+_session_proxy_last_seen: dict[str, float] = {}
 _session_proxy_lock = threading.Lock()
 
 
@@ -109,14 +113,44 @@ def _get_proxy_session_key() -> str | None:
     return mcp.get_current_transport_session_id()
 
 
+def _prune_session_proxy_targets_locked(now: float | None = None) -> None:
+    """Remove expired or excess per-session IDA target selections."""
+    now = time.monotonic() if now is None else now
+
+    # Tests and older callers may mutate _session_proxy_targets directly. Treat
+    # entries without metadata as live, then include them in normal pruning.
+    for session_key in list(_session_proxy_targets):
+        _session_proxy_last_seen.setdefault(session_key, now)
+
+    if SESSION_PROXY_TARGET_TTL_SEC > 0:
+        cutoff = now - SESSION_PROXY_TARGET_TTL_SEC
+        for session_key, last_seen in list(_session_proxy_last_seen.items()):
+            if last_seen < cutoff:
+                _session_proxy_targets.pop(session_key, None)
+                _session_proxy_last_seen.pop(session_key, None)
+
+    for session_key in list(_session_proxy_last_seen):
+        if session_key not in _session_proxy_targets:
+            _session_proxy_last_seen.pop(session_key, None)
+
+    if SESSION_PROXY_TARGET_MAX_SIZE > 0:
+        while len(_session_proxy_targets) > SESSION_PROXY_TARGET_MAX_SIZE:
+            session_key, _ = _session_proxy_targets.popitem(last=False)
+            _session_proxy_last_seen.pop(session_key, None)
+
+
 def _get_active_ida_target() -> tuple[str, int]:
     """Return the IDA target selected for this MCP transport session."""
     session_key = _get_proxy_session_key()
     if session_key is not None:
+        now = time.monotonic()
         with _session_proxy_lock:
+            _prune_session_proxy_targets_locked(now)
             target = _session_proxy_targets.get(session_key)
-        if target is not None:
-            return target
+            if target is not None:
+                _session_proxy_targets.move_to_end(session_key)
+                _session_proxy_last_seen[session_key] = now
+                return target
     return IDA_HOST, IDA_PORT
 
 
@@ -125,8 +159,12 @@ def _set_active_ida_target(host: str, port: int) -> None:
     global IDA_HOST, IDA_PORT
     session_key = _get_proxy_session_key()
     if session_key is not None:
+        now = time.monotonic()
         with _session_proxy_lock:
+            _session_proxy_targets.pop(session_key, None)
             _session_proxy_targets[session_key] = (host, port)
+            _session_proxy_last_seen[session_key] = now
+            _prune_session_proxy_targets_locked(now)
         return
     IDA_HOST = host
     IDA_PORT = port
@@ -140,6 +178,7 @@ def _clear_active_ida_target() -> tuple[str, int]:
     if session_key is not None:
         with _session_proxy_lock:
             _session_proxy_targets.pop(session_key, None)
+            _session_proxy_last_seen.pop(session_key, None)
         return IDA_HOST, IDA_PORT
     IDA_HOST = DEFAULT_IDA_HOST
     IDA_PORT = DEFAULT_IDA_PORT
