@@ -505,11 +505,33 @@ class IdalibSupervisor:
 
     def _register_session_locked(self, session: WorkerSession, resolved_path: str, context_id: str | None) -> None:
         self.sessions[session.session_id] = session
-        self.path_to_session[self._path_key(resolved_path)] = session.session_id
         for candidate in self._candidate_idb_paths(resolved_path):
-            self.path_to_session.setdefault(candidate, session.session_id)
+            self.path_to_session[candidate] = session.session_id
         if context_id is not None:
             self.bind_context(context_id, session.session_id)
+
+    def _unregister_session_locked(self, session_id: str) -> WorkerSession | None:
+        session = self.sessions.pop(session_id, None)
+        stale_paths = [
+            path_key
+            for path_key, bound_session_id in self.path_to_session.items()
+            if bound_session_id == session_id
+        ]
+        for path_key in stale_paths:
+            self.path_to_session.pop(path_key, None)
+        stale_contexts = [
+            context for context, bound in self.context_bindings.items() if bound == session_id
+        ]
+        for context in stale_contexts:
+            self.context_bindings.pop(context, None)
+        return session
+
+    def _discard_opened_worker_session(self, worker: WorkerSession, session_id: str) -> None:
+        try:
+            self.call_worker_tool(worker, "idalib_close", {"session_id": session_id})
+        except Exception:
+            logger.debug("Worker idalib_close failed for discarded session %s", session_id, exc_info=True)
+        self._terminate_worker(worker)
 
     def _make_gui_session(self, resolved_path: str, session_id: str, instance: dict[str, Any]) -> WorkerSession:
         idb_path = str(instance.get("idb_path") or resolved_path)
@@ -536,19 +558,22 @@ class IdalibSupervisor:
         context_id: str | None = None,
     ) -> WorkerSession:
         resolved = self._normalize_input_path(input_path)
+        requested_session_id = session_id
         with self._lock:
             existing = self.path_to_session.get(self._path_key(resolved))
             if existing is not None:
-                if session_id is not None and session_id != existing:
-                    raise ValueError(
-                        f"Binary already open as session '{existing}', cannot reuse "
-                        f"different session_id '{session_id}'."
-                    )
-                session = self.sessions[existing]
-                session.last_accessed = datetime.now()
-                if context_id is not None:
-                    self.bind_context(context_id, existing)
-                return session
+                session = self.sessions.get(existing)
+                if session is not None and session.is_alive():
+                    if requested_session_id is not None and requested_session_id != existing:
+                        raise ValueError(
+                            f"Binary already open as session '{existing}', cannot reuse "
+                            f"different session_id '{requested_session_id}'."
+                        )
+                    session.last_accessed = datetime.now()
+                    if context_id is not None:
+                        self.bind_context(context_id, existing)
+                    return session
+                self._unregister_session_locked(existing)
 
             if session_id is None:
                 session_id = str(uuid.uuid4())[:8]
@@ -600,26 +625,41 @@ class IdalibSupervisor:
             pid=worker.process.pid if worker.process is not None else None,
         )
         with self._lock:
-            self._register_session_locked(session, resolved, context_id)
-        return session
+            existing = self.path_to_session.get(self._path_key(resolved))
+            if existing is not None:
+                existing_session = self.sessions.get(existing)
+                if existing_session is not None and existing_session.is_alive():
+                    existing_session.last_accessed = datetime.now()
+                    if context_id is not None:
+                        self.bind_context(context_id, existing)
+                    collision_error = None
+                    if requested_session_id is not None and requested_session_id != existing:
+                        collision_error = ValueError(
+                            f"Binary already open as session '{existing}', cannot reuse "
+                            f"different session_id '{requested_session_id}'."
+                        )
+                else:
+                    self._unregister_session_locked(existing)
+                    existing_session = None
+                    collision_error = None
+            else:
+                existing_session = None
+                collision_error = None
+
+            if existing_session is None:
+                self._register_session_locked(session, resolved, context_id)
+                return session
+
+        self._discard_opened_worker_session(worker, session_id)
+        if collision_error is not None:
+            raise collision_error
+        return existing_session
 
     def close_session(self, session_id: str) -> bool:
         with self._lock:
-            session = self.sessions.pop(session_id, None)
+            session = self._unregister_session_locked(session_id)
             if session is None:
                 return False
-            stale_paths = [
-                path_key
-                for path_key, bound_session_id in self.path_to_session.items()
-                if bound_session_id == session_id
-            ]
-            for path_key in stale_paths:
-                self.path_to_session.pop(path_key, None)
-            stale_contexts = [
-                context for context, bound in self.context_bindings.items() if bound == session_id
-            ]
-            for context in stale_contexts:
-                self.context_bindings.pop(context, None)
         if session.backend == "worker":
             try:
                 self.call_worker_tool(session, "idalib_close", {"session_id": session_id})

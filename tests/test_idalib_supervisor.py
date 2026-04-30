@@ -11,7 +11,7 @@ class _FakeProcess:
     returncode = None
 
     def poll(self):
-        return None
+        return self.returncode
 
     def terminate(self):
         self.returncode = 0
@@ -21,6 +21,10 @@ class _FakeProcess:
 
     def kill(self):
         self.returncode = -9
+
+
+class _DeadProcess(_FakeProcess):
+    returncode = 1
 
 
 class _FakeSupervisor(supmod.IdalibSupervisor):
@@ -179,6 +183,89 @@ def test_open_session_uses_matching_gui_instance(tmp_path):
         assert sup.resolve_session(str(sample)).session_id == "gui"
         assert sup.resolve_session(str(idb)).session_id == "gui"
         assert sup.opened == []
+    finally:
+        restore()
+
+
+def test_open_session_removes_stale_existing_mapping(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    restore = _patch_discovery(instances=[], probe=False)
+    try:
+        sup = _FakeSupervisor()
+        stale = supmod.WorkerSession(
+            session_id="stale",
+            input_path=str(sample.resolve()),
+            filename="sample.bin",
+            process=_DeadProcess(),
+        )
+        with sup._lock:
+            sup._register_session_locked(stale, str(sample.resolve()), "ctx")
+        session = sup.open_session(str(sample), session_id="new", context_id="ctx")
+        assert session.session_id == "new"
+        assert "stale" not in sup.sessions
+        assert sup.context_bindings["ctx"] == "new"
+    finally:
+        restore()
+
+
+def test_open_session_race_discards_losing_worker_for_existing_path(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+
+    class _RaceSupervisor(_FakeSupervisor):
+        def call_worker_tool(self, worker, name, arguments=None):
+            result = super().call_worker_tool(worker, name, arguments)
+            if name == "idalib_open":
+                existing = supmod.WorkerSession(
+                    session_id="winner",
+                    input_path=str(sample.resolve()),
+                    filename="sample.bin",
+                    process=_FakeProcess(),
+                )
+                with self._lock:
+                    self._register_session_locked(existing, str(sample.resolve()), None)
+            return result
+
+    restore = _patch_discovery(instances=[], probe=False)
+    try:
+        sup = _RaceSupervisor()
+        session = sup.open_session(str(sample))
+        assert session.session_id == "winner"
+        assert set(sup.sessions) == {"winner"}
+        assert sup.opened[0][1]["session_id"] != "winner"
+    finally:
+        restore()
+
+
+def test_open_session_race_rejects_different_requested_session_id(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+
+    class _RaceSupervisor(_FakeSupervisor):
+        def call_worker_tool(self, worker, name, arguments=None):
+            result = super().call_worker_tool(worker, name, arguments)
+            if name == "idalib_open":
+                existing = supmod.WorkerSession(
+                    session_id="winner",
+                    input_path=str(sample.resolve()),
+                    filename="sample.bin",
+                    process=_FakeProcess(),
+                )
+                with self._lock:
+                    self._register_session_locked(existing, str(sample.resolve()), None)
+            return result
+
+    restore = _patch_discovery(instances=[], probe=False)
+    try:
+        sup = _RaceSupervisor()
+        try:
+            sup.open_session(str(sample), session_id="loser")
+        except ValueError as e:
+            assert "already open as session 'winner'" in str(e)
+        else:
+            raise AssertionError("expected ValueError")
+        assert set(sup.sessions) == {"winner"}
     finally:
         restore()
 
