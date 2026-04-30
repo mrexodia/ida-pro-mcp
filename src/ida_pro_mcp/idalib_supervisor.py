@@ -375,15 +375,25 @@ class IdalibSupervisor:
         self._schema_worker = None
         return None
 
+    def _prune_dead_worker_sessions_locked(self) -> None:
+        stale_session_ids = [
+            session.session_id
+            for session in self.sessions.values()
+            if session.backend == "worker" and session.owned and not session.is_alive()
+        ]
+        for session_id in stale_session_ids:
+            self._unregister_session_locked(session_id)
+
     def _allocate_worker_locked(self) -> WorkerSession:
         worker = self._take_schema_worker_for_session()
         if worker is not None:
             return worker
 
+        self._prune_dead_worker_sessions_locked()
         owned_workers = sum(
             1
             for session in self.sessions.values()
-            if session.backend == "worker" and session.owned
+            if session.backend == "worker" and session.owned and session.is_alive()
         )
         if self.max_workers <= 0 or owned_workers < self.max_workers:
             return self._spawn_worker()
@@ -738,9 +748,28 @@ class IdalibSupervisor:
             pid=worker.process.pid if worker.process is not None else None,
         )
         with self._lock:
-            self.sessions[session.session_id] = replacement
-            self._register_session_locked(replacement, resolved, None)
-        return replacement
+            current = self.sessions.get(session.session_id)
+            if current is session:
+                self._register_session_locked(replacement, resolved, None)
+                return replacement
+            if current is not None and current.is_alive():
+                current.last_accessed = datetime.now()
+                replacement_session = current
+                reopen_error = None
+            else:
+                if current is not None:
+                    self._unregister_session_locked(session.session_id)
+                replacement_session = None
+                reopen_error = RuntimeError(
+                    f"Session '{session.session_id}' was closed or replaced while reopening headlessly"
+                )
+
+        self._discard_opened_worker_session(worker, session.session_id)
+        if replacement_session is not None:
+            return replacement_session
+        if reopen_error is not None:
+            raise reopen_error
+        raise RuntimeError(f"Session '{session.session_id}' changed while reopening headlessly")
 
     def resolve_session(self, database: str | None = None) -> WorkerSession:
         with self._lock:
