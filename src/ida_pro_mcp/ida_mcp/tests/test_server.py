@@ -82,8 +82,8 @@ def _saved_target():
 
 
 @test()
-def test_tools_list_keeps_discovery_and_launch_tools_when_ida_unreachable():
-    """tools/list should still expose local discovery/recovery tools when IDA is down."""
+def test_tools_list_keeps_discovery_tools_when_ida_unreachable():
+    """tools/list should still expose local discovery tools when IDA is down."""
     with _saved_target():
         server.IDA_HOST = "127.0.0.1"
         server.IDA_PORT = 1  # unreachable
@@ -93,7 +93,7 @@ def test_tools_list_keeps_discovery_and_launch_tools_when_ida_unreachable():
         tool_names = {tool["name"] for tool in result["result"].get("tools", [])}
         assert "select_instance" in tool_names
         assert "list_instances" in tool_names
-        assert "open_file" in tool_names
+        assert "open_file" not in tool_names
 
 
 @test()

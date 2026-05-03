@@ -1,12 +1,10 @@
 """Tests for the discovery API module (api_discovery.py).
 
 Tests dispatch routing decisions, loop prevention, select_instance state
-machine, tools/list merge logic, and IDB file discovery.
+machine and tools/list merge logic.
 """
 
 import json
-import os
-import tempfile
 
 from ..framework import test
 from .. import api_discovery
@@ -106,35 +104,6 @@ class _RecordingConnection:
 
     def close(self):
         pass
-
-
-# ---------------------------------------------------------------------------
-# IDB file discovery
-# ---------------------------------------------------------------------------
-
-
-@test()
-def test_find_existing_idb_prefers_i64_over_idb():
-    """_find_existing_idb prefers .i64 over .idb when both exist."""
-    with tempfile.TemporaryDirectory() as tmp:
-        base = os.path.join(tmp, "sample")
-        binary = base + ".exe"
-        i64 = base + ".i64"
-        idb = base + ".idb"
-        for path in (binary, i64, idb):
-            with open(path, "w") as f:
-                f.write("")
-        assert api_discovery._find_existing_idb(binary) == i64
-
-
-@test()
-def test_find_existing_idb_returns_none_when_missing():
-    """_find_existing_idb returns None when no IDB exists."""
-    with tempfile.TemporaryDirectory() as tmp:
-        binary = os.path.join(tmp, "sample.exe")
-        with open(binary, "w") as f:
-            f.write("")
-        assert api_discovery._find_existing_idb(binary) is None
 
 
 # ---------------------------------------------------------------------------
@@ -379,7 +348,7 @@ def test_dispatch_tools_list_returns_local_tools_when_redirect_unreachable():
         # The local discovery tools should always be present
         assert "list_instances" in tool_names
         assert "select_instance" in tool_names
-        assert "open_file" in tool_names
+        assert "open_file" not in tool_names
 
 
 @test()

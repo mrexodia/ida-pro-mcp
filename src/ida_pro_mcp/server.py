@@ -8,7 +8,7 @@ import threading
 import time
 import traceback
 from collections import OrderedDict
-from typing import Annotated, Any, TYPE_CHECKING, TypedDict
+from typing import Annotated, TYPE_CHECKING, TypedDict
 from urllib.parse import parse_qs, urlparse
 
 if TYPE_CHECKING:
@@ -76,18 +76,6 @@ class ProxySelectResult(TypedDict, total=False):
     error: str
 
 
-class ProxyOpenFileResult(TypedDict, total=False):
-    success: bool
-    host: str
-    port: int
-    binary: str
-    pid: int
-    switched: bool
-    message: str
-    error: str
-    result: Any
-
-
 DEFAULT_IDA_HOST = "127.0.0.1"
 DEFAULT_IDA_PORT = 13337
 IDA_HOST = DEFAULT_IDA_HOST
@@ -96,7 +84,7 @@ IDA_PORT = DEFAULT_IDA_PORT
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
 
-LOCAL_TOOLS = {"list_instances", "select_instance", "open_file"}
+LOCAL_TOOLS = {"list_instances", "select_instance"}
 OUTPUT_PROXY_CACHE_MAX_SIZE = 100
 _OUTPUT_PATH_RE = re.compile(r"^/output/([a-f0-9-]+)\.(\w+)$")
 _output_proxy_targets: OrderedDict[str, tuple[str, int]] = OrderedDict()
@@ -290,33 +278,6 @@ def _proxy_to_ida(payload: bytes | str | dict) -> dict:
     return _proxy_to_instance(host, port, payload)
 
 
-def _call_ida_tool(host: str, port: int, name: str, arguments: dict[str, Any]) -> Any:
-    """Call an MCP tool on a specific IDA instance and return structured content."""
-    response = _proxy_to_instance(
-        host,
-        port,
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": name, "arguments": arguments},
-        },
-    )
-    if "error" in response:
-        raise RuntimeError(response["error"].get("message", "Unknown error"))
-
-    result = response.get("result", {})
-    if result.get("isError"):
-        content = result.get("content", [])
-        message = (
-            content[0].get("text", "Unknown tool error")
-            if content
-            else "Unknown tool error"
-        )
-        raise RuntimeError(message)
-    return result.get("structuredContent")
-
-
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
     """Dispatch JSON-RPC requests to the MCP server registry."""
     if not isinstance(request, dict):
@@ -470,77 +431,6 @@ def select_instance(
         return {"success": False, "error": f"Instance at {host}:{port} is not reachable"}
     _set_active_ida_target(host, port)
     return {"success": True, "host": host, "port": port}
-
-
-@mcp.tool
-def open_file(
-    file_path: Annotated[
-        str, "Absolute path to the binary file to open in a new IDA instance"
-    ],
-    switch: Annotated[
-        bool, "Automatically switch to the new instance once it starts"
-    ] = True,
-    autonomous: Annotated[
-        bool, "Run in autonomous mode (-A flag), suppressing all dialogs"
-    ] = False,
-    new_database: Annotated[
-        bool, "Force creating a new database even if one exists"
-    ] = False,
-    timeout: Annotated[
-        int, "Seconds to wait for the new instance to register (0 = don't wait)"
-    ] = 30,
-) -> ProxyOpenFileResult:
-    """Open a file in a new IDA Pro instance.
-
-    This proxy-side tool delegates to any reachable IDA instance's local open_file
-    implementation so discovery/launch remains available even when the currently
-    selected instance is down.
-    """
-    target_host, target_port = _get_active_ida_target()
-    if not probe_instance(target_host, target_port):
-        target_host = ""
-        target_port = 0
-        for inst in discover_instances():
-            if probe_instance(inst["host"], inst["port"]):
-                target_host = inst["host"]
-                target_port = inst["port"]
-                break
-
-    if not target_host or target_port == 0:
-        return {
-            "success": False,
-            "error": (
-                "No running IDA instance is available to launch a new file. "
-                "Start one instance first or specify --ida-rpc explicitly."
-            ),
-        }
-
-    try:
-        result = _call_ida_tool(
-            target_host,
-            target_port,
-            "open_file",
-            {
-                "file_path": file_path,
-                "switch": switch,
-                "autonomous": autonomous,
-                "new_database": new_database,
-                "timeout": timeout,
-            },
-        )
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-    if isinstance(result, dict):
-        if (
-            switch
-            and result.get("success")
-            and result.get("host")
-            and result.get("port")
-        ):
-            _set_active_ida_target(str(result["host"]), int(result["port"]))
-        return result
-    return {"success": True, "result": result}
 
 
 # ============================================================================

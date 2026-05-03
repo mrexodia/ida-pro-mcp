@@ -93,7 +93,7 @@ def test_extension_tools_appear_when_enabled():
 @test()
 def test_original_tools_contains_discovery_tools():
     """ORIGINAL_TOOLS snapshot must include discovery tools for config rendering."""
-    for name in ("list_instances", "select_instance", "open_file"):
+    for name in ("list_instances", "select_instance"):
         assert name in http_mod.ORIGINAL_TOOLS, f"{name} missing from ORIGINAL_TOOLS"
 
 

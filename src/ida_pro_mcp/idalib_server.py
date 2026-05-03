@@ -125,6 +125,7 @@ IDALIB_MANAGEMENT_TOOLS = {
     "idalib_health",
     "idalib_warmup",
 }
+IDALIB_HIDDEN_PLUGIN_TOOLS = {"list_instances", "select_instance"}
 
 _ISOLATED_CONTEXTS_ENABLED = False
 
@@ -577,6 +578,10 @@ def main():
 
     # In isolated mode we require Streamable HTTP session semantics.
     MCP_SERVER.require_streamable_http_session = _ISOLATED_CONTEXTS_ENABLED
+
+    for name in IDALIB_HIDDEN_PLUGIN_TOOLS:
+        MCP_SERVER.tools.methods.pop(name, None)
+    logger.info("GUI-plugin routing tools disabled under idalib")
 
     # Gate unsafe tools: remove them from the registry unless --unsafe is set.
     if not args.unsafe:

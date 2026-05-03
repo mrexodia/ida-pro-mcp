@@ -51,6 +51,7 @@ IDALIB_MANAGEMENT_TOOLS = {
     "idalib_health",
     "idalib_warmup",
 }
+IDALIB_HIDDEN_PLUGIN_TOOLS = {"list_instances", "select_instance"}
 
 
 def _import_zeromcp():
@@ -854,7 +855,8 @@ class IdalibSupervisor:
         worker = self._schema_or_idle_worker()
         response = self._worker_rpc(worker, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
         tools = response.get("result", {}).get("tools", [])
-        filtered = [t for t in tools if t.get("name") not in IDALIB_MANAGEMENT_TOOLS]
+        hidden_tools = IDALIB_MANAGEMENT_TOOLS | IDALIB_HIDDEN_PLUGIN_TOOLS
+        filtered = [t for t in tools if t.get("name") not in hidden_tools]
         injected = [self._inject_database_arg(t) for t in filtered]
         with self._lock:
             self._tools_cache[cache_key] = injected
@@ -1153,6 +1155,20 @@ def _handle_tools_call(request_obj: dict[str, Any]) -> dict[str, Any] | None:
 
     if tool_name in IDALIB_MANAGEMENT_TOOLS:
         return _original_dispatch(request_obj)
+    if tool_name in IDALIB_HIDDEN_PLUGIN_TOOLS:
+        return _jsonrpc_result(
+            request_id,
+            _call_tool_result(
+                {
+                    "error": (
+                        f"{tool_name} is a GUI-plugin routing tool and is not "
+                        "available through idalib-mcp. Use idalib_list or "
+                        "idalib_switch instead."
+                    )
+                },
+                is_error=True,
+            ),
+        )
 
     arguments = copy.deepcopy(params.get("arguments") or {})
     database = arguments.pop(_DATABASE_ARG, None)

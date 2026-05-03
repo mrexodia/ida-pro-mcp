@@ -7,11 +7,7 @@ This lets a single MCP endpoint reach any running IDA instance.
 
 import http.client
 import json
-import os
-import subprocess
-import sys
 import threading
-import time
 from collections import OrderedDict
 from typing import Annotated, NotRequired, TypedDict
 
@@ -39,17 +35,6 @@ class InstanceListItem(TypedDict, total=False):
     active: bool
 
 
-class OpenFileResult(TypedDict, total=False):
-    success: bool
-    host: str
-    port: int
-    binary: str
-    pid: int
-    switched: bool
-    message: str
-    error: str
-
-
 # Track which instance this server is (filled in by the plugin loader)
 _LOCAL_PORT: int | None = None
 _LOCAL_HOST: str = "127.0.0.1"
@@ -64,7 +49,7 @@ _redirect_targets: dict[str, tuple[str, int]] = {}
 _redirect_lock = threading.Lock()
 
 # Tools that are always handled locally, never proxied
-_LOCAL_TOOL_NAMES = {"list_instances", "select_instance", "open_file"}
+_LOCAL_TOOL_NAMES = {"list_instances", "select_instance"}
 
 
 def set_local_instance(host: str, port: int):
@@ -392,126 +377,3 @@ def select_instance(
     return {"success": True, "host": host, "port": port}
 
 
-def _find_existing_idb(file_path: str) -> str | None:
-    """Check if an IDB already exists for the given binary.
-
-    IDA creates .idb (32-bit) or .i64 (64-bit) files next to the binary.
-    Opening the IDB directly skips the packed/unpacked dialog.
-    """
-    base = os.path.splitext(file_path)[0]
-    # Prefer .i64 (64-bit) over .idb (32-bit)
-    for ext in (".i64", ".idb"):
-        idb_path = base + ext
-        if os.path.isfile(idb_path):
-            return idb_path
-    return None
-
-
-def _get_ida_executable() -> str:
-    """Return the executable path for the current IDA process."""
-
-    if sys.platform == "linux":
-        return os.readlink("/proc/self/exe")
-
-    return sys.executable
-
-
-@tool
-def open_file(
-    file_path: Annotated[
-        str, "Absolute path to the binary file to open in a new IDA instance"
-    ],
-    switch: Annotated[
-        bool, "Automatically switch to the new instance once it starts"
-    ] = True,
-    autonomous: Annotated[
-        bool, "Run in autonomous mode (-A flag), suppressing all dialogs"
-    ] = False,
-    new_database: Annotated[
-        bool, "Force creating a new database even if one exists"
-    ] = False,
-    timeout: Annotated[
-        int, "Seconds to wait for the new instance to register (0 = don't wait)"
-    ] = 30,
-) -> OpenFileResult:
-    """Open a file in a new IDA Pro instance.
-
-    Launches a new IDA process for the given binary. If an existing IDB/i64 database
-    is found, opens that directly (skips the packed/unpacked dialog). Use new_database=True
-    to force a fresh analysis. Use autonomous=True to suppress all IDA dialogs.
-
-    If switch=True (default), automatically routes subsequent tool calls to the new instance.
-    """
-    if not os.path.isfile(file_path):
-        return {"success": False, "error": f"File not found: {file_path}"}
-
-    # Get the IDA executable from the currently running instance
-    ida_exe = _get_ida_executable()
-    if not os.path.isfile(ida_exe):
-        return {"success": False, "error": f"Cannot find IDA executable: {ida_exe}"}
-
-    # Determine what to open: existing IDB or raw binary
-    target = file_path
-    if not new_database:
-        existing_idb = _find_existing_idb(file_path)
-        if existing_idb:
-            target = existing_idb
-
-    args = [ida_exe]
-    if autonomous:
-        args.append("-A")
-    if new_database:
-        args.append("-c")  # Force new database
-    args.append(target)
-
-    # Snapshot current instances before launch
-    before = {(i["host"], i["port"]) for i in discover_instances()}
-
-    try:
-        subprocess.Popen(
-            args,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-            if sys.platform == "win32" else 0,
-        )
-    except Exception as e:
-        return {"success": False, "error": f"Failed to launch IDA: {e}"}
-
-    if timeout == 0:
-        return {"success": True, "message": "IDA launched, not waiting for registration"}
-
-    # Poll for the new instance to register
-    deadline = time.monotonic() + timeout
-    new_instance = None
-    while time.monotonic() < deadline:
-        time.sleep(1)
-        current = discover_instances()
-        for inst in current:
-            key = (inst["host"], inst["port"])
-            if key not in before:
-                new_instance = inst
-                break
-        if new_instance:
-            break
-
-    if not new_instance:
-        return {
-            "success": True,
-            "message": (
-                f"IDA launched but did not register within {timeout}s. "
-                "Use list_instances to check later."
-            ),
-        }
-
-    result = {
-        "success": True,
-        "host": new_instance["host"],
-        "port": new_instance["port"],
-        "binary": new_instance["binary"],
-        "pid": new_instance["pid"],
-    }
-
-    if switch:
-        _set_redirect_target(new_instance["host"], new_instance["port"])
-        result["switched"] = True
-
-    return result

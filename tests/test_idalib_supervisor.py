@@ -60,6 +60,8 @@ class _FakeSupervisor(supmod.IdalibSupervisor):
                             },
                         },
                         {"name": "idalib_open", "inputSchema": {"type": "object"}},
+                        {"name": "list_instances", "inputSchema": {"type": "object"}},
+                        {"name": "select_instance", "inputSchema": {"type": "object"}},
                     ]
                 },
             }
@@ -173,6 +175,27 @@ def test_tool_error_result_omits_structured_content():
     result = supmod._call_tool_result({"error": "no database"}, is_error=True)
     assert result["isError"] is True
     assert "structuredContent" not in result
+
+
+def test_supervisor_blocks_gui_plugin_routing_tools():
+    old_supervisor = supmod.supervisor
+    supmod.supervisor = _FakeSupervisor()
+    try:
+        result = supmod._handle_tools_call(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "select_instance", "arguments": {"port": 13337}},
+            }
+        )
+        assert result is not None
+        assert result["result"]["isError"] is True
+        text = result["result"]["content"][0]["text"]
+        assert "GUI-plugin routing tool" in text
+        assert not supmod.supervisor.forwarded
+    finally:
+        supmod.supervisor = old_supervisor
 
 
 def test_open_session_reuses_schema_worker_and_binds_context(tmp_path):
