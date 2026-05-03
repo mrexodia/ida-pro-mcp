@@ -407,6 +407,15 @@ def _find_existing_idb(file_path: str) -> str | None:
     return None
 
 
+def _get_ida_executable() -> str:
+    """Return the executable path for the current IDA process."""
+
+    if sys.platform == "linux":
+        return os.readlink("/proc/self/exe")
+
+    return sys.executable
+
+
 @tool
 def open_file(
     file_path: Annotated[
@@ -437,7 +446,7 @@ def open_file(
         return {"success": False, "error": f"File not found: {file_path}"}
 
     # Get the IDA executable from the currently running instance
-    ida_exe = sys.executable
+    ida_exe = _get_ida_executable()
     if not os.path.isfile(ida_exe):
         return {"success": False, "error": f"Cannot find IDA executable: {ida_exe}"}
 
