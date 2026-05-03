@@ -130,7 +130,7 @@ Another thing to keep in mind is that LLMs will not perform well on obfuscated c
 
 You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
 
-## SSE Transport & Headless MCP
+## Transports & Headless MCP
 
 You can run an SSE server to connect to the user interface like this:
 
@@ -138,15 +138,49 @@ You can run an SSE server to connect to the user interface like this:
 uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
 ```
 
-After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can also run a headless SSE server:
+After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can also run a headless MCP server. You can start with an initial binary:
 
 ```sh
 uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
 ```
 
+Or start without a binary and open/close arbitrary files later with `idalib_open(...)` / `idalib_close(...)`:
+
+```sh
+uv run idalib-mcp --host 127.0.0.1 --port 8745
+```
+
+For stdio-based clients, use:
+
+```sh
+uv run idalib-mcp --stdio
+```
+
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
 ## Headless idalib Session Model
+
+`idalib-mcp` is a supervisor that keeps each open database in its own idalib worker process. Starting without an `input_path` is supported; use `idalib_open(input_path, ...)` to open databases dynamically and `idalib_close(session_id)` to close them. This allows one headless MCP server to work with arbitrary files over its lifetime.
+
+If the requested IDB is already open in a GUI IDA instance running the plugin, `idalib-mcp` will use that GUI instance instead of spawning a duplicate headless worker. If the GUI instance later disappears, the next routed request reopens the database in a headless worker when possible. Unsaved GUI-only changes must be saved first if they should be visible after fallback.
+
+Tools target either the database bound to the current MCP context or an explicit `database` argument.
+
+```sh
+uv run idalib-mcp --stdio --max-workers 4
+```
+
+Typical flow:
+
+```python
+idalib_open("/path/to/binary_a.exe", session_id="binary_a")
+idalib_open("/path/to/library.dll", session_id="library")
+
+decompile("main", database="binary_a")
+xrefs_to("ImportantExport", database="library")
+```
+
+`database` accepts a session ID, filename, or input path. If omitted, tools use the database bound to the active context.
 
 Use `--isolated-contexts` to enable strict per-transport isolation:
 
@@ -158,15 +192,14 @@ uv run idalib-mcp --isolated-contexts --host 127.0.0.1 --port 8745 path/to/execu
 
 Use it when multiple agents connect to the same `idalib-mcp` server and you want deterministic context isolation:
 
-- Prevent one agent from changing another agent's active session accidentally.
-- Run concurrent analyses safely (for example agent A on binary X and agent B on binary Y).
-- Still allow intentional collaboration by binding multiple agents to the same open session ID.
-- Improve reproducibility because each agent's context binding is explicit.
+- Prevent one agent from changing another agent's active database accidentally.
+- Keep each transport context's default database explicit.
+- Still allow intentional collaboration by passing `database=...` or binding multiple agents to the same session ID.
 
 When `--isolated-contexts` is enabled:
 
 - Each transport context has its own binding (`Mcp-Session-Id` for `/mcp`, `session` for `/sse`, `stdio:default` for stdio).
-- Unbound contexts fail fast for IDB-dependent tools/resources.
+- Unbound contexts fail fast for IDB-dependent tools/resources unless `database` is provided.
 - `idalib_switch(session_id)` and `idalib_open(...)` bind the caller context only.
 
 ### Streamable HTTP behavior
@@ -175,11 +208,16 @@ With `--isolated-contexts`, strict Streamable HTTP session semantics are enabled
 
 ### Context tools
 
-- `idalib_open(input_path, ...)`: Open binary and bind it to the active context policy.
+- `idalib_open(input_path, ...)`: Open binary in a worker and bind it to the active context policy.
 - `idalib_switch(session_id)`: Rebind the active context policy to an existing session.
 - `idalib_current()`: Return the session bound to the active context policy.
 - `idalib_unbind()`: Remove the active context binding.
-- `idalib_list()`: Includes `is_active`, `is_current_context`, and `bound_contexts`.
+- `idalib_list()`: Includes `is_active`, `is_current_context`, `bound_contexts`, backend (`worker` or `gui`), and process IDs.
+
+Worker controls:
+
+- `--max-workers N`: maximum simultaneous database workers (`0` = unlimited, default `4`).
+- `IDA_MCP_MAX_WORKERS`: environment default for `--max-workers`.
 
 
 ## MCP Resources

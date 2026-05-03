@@ -73,6 +73,7 @@ def dangerous_op(...):
 ```bash
 uv run ida-pro-mcp
 uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
+uv run idalib-mcp --stdio path/to/binary
 uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/binary
 uv run idalib-mcp --isolated-contexts --host 127.0.0.1 --port 8745 path/to/binary
 uv run ida-pro-mcp --unsafe

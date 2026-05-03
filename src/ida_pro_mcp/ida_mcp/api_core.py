@@ -1,5 +1,6 @@
 """Core API Functions - IDB metadata and basic queries"""
 
+import logging
 import re
 import time
 from typing import Annotated, Any, NotRequired, TypedDict
@@ -38,6 +39,9 @@ from .utils import (
     paginate,
     pattern_filter,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class ServerHealthResult(TypedDict):
@@ -158,7 +162,7 @@ def init_caches():
     t0 = time.perf_counter()
     strings = _get_strings_cache()
     t1 = time.perf_counter()
-    print(f"[MCP] Cached {len(strings)} strings in {(t1 - t0) * 1000:.0f}ms")
+    logger.info("[MCP] Cached %d strings in %.0fms", len(strings), (t1 - t0) * 1000)
 
 
 # ============================================================================

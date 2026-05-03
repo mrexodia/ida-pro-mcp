@@ -1,5 +1,6 @@
 import html
 import json
+import logging
 import re
 import ida_netnode
 from urllib.parse import urlparse, parse_qs
@@ -17,6 +18,8 @@ from .rpc import (
 )
 
 
+logger = logging.getLogger(__name__)
+
 T = TypeVar("T")
 
 
@@ -29,8 +32,11 @@ def config_json_get(key: str, default: T) -> T:
     try:
         return json.loads(json_blob)
     except Exception as e:
-        print(
-            f"[WARNING] Invalid JSON stored in netnode '{key}': '{json_blob}' from netnode: {e}"
+        logger.warning(
+            "Invalid JSON stored in netnode %r: %r from netnode: %s",
+            key,
+            json_blob,
+            e,
         )
         return default
 

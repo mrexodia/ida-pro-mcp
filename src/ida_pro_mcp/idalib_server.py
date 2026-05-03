@@ -5,7 +5,7 @@ import signal
 import sys
 import os
 from pathlib import Path
-from typing import Annotated, Any, Optional, TypedDict
+from typing import Annotated, Any, NotRequired, Optional, TypedDict
 
 # idapro must go first to initialize idalib
 import idapro
@@ -24,9 +24,10 @@ from ida_pro_mcp.ida_mcp.http import IdaMcpHttpRequestHandler
 from ida_pro_mcp.idalib_session_manager import get_session_manager
 
 class IdalibContextFields(TypedDict):
-    context_id: str
-    transport_context_id: str | None
-    isolated_contexts: bool
+    # Optional because error paths can fail before a request context is resolved.
+    context_id: NotRequired[str]
+    transport_context_id: NotRequired[str | None]
+    isolated_contexts: NotRequired[bool]
 
 
 class IdalibSessionInfo(TypedDict):
@@ -37,6 +38,12 @@ class IdalibSessionInfo(TypedDict):
     last_accessed: str
     is_analyzing: bool
     metadata: dict[str, Any]
+
+
+class IdalibSessionListInfo(IdalibSessionInfo, total=False):
+    is_active: bool
+    is_current_context: bool
+    bound_contexts: int
 
 
 class IdalibOpenResult(IdalibContextFields, total=False):
@@ -66,7 +73,7 @@ class IdalibUnbindResult(IdalibContextFields, total=False):
 
 
 class IdalibListResult(IdalibContextFields, total=False):
-    sessions: list[IdalibSessionInfo]
+    sessions: list[IdalibSessionListInfo]
     count: int
     current_context_session_id: str | None
     error: str

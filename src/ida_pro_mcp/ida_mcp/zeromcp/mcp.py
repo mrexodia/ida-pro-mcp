@@ -9,8 +9,8 @@ import gzip
 import zlib
 import ipaddress
 import inspect
+import logging
 import threading
-import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer, HTTPServer
 from typing import Any, Callable, Union, Annotated, BinaryIO, NotRequired, get_origin, get_args, get_type_hints, is_typeddict
 from types import UnionType
@@ -20,6 +20,8 @@ from io import BufferedIOBase
 from .jsonrpc import JsonRpcRegistry, JsonRpcError, JsonRpcException, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
 
 EXTERNAL_BASE_HEADER = "X-IDA-MCP-External-Base"
+
+logger = logging.getLogger(__name__)
 
 _request_context = threading.local()
 
@@ -487,24 +489,24 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             pass
 
         mcp_session_id = self.headers.get("Mcp-Session-Id")
-        if self.mcp_server.require_streamable_http_session:
-            if request_method == "initialize":
-                if mcp_session_id is None:
-                    mcp_session_id = str(uuid.uuid4())
+        if request_method == "initialize":
+            if mcp_session_id is None:
+                mcp_session_id = str(uuid.uuid4())
+            self.mcp_server.register_http_session(mcp_session_id)
+        elif self.mcp_server.require_streamable_http_session:
+            if mcp_session_id is None:
+                self.send_error(
+                    400,
+                    "Missing Mcp-Session-Id header. Call initialize first and "
+                    "reuse the returned Mcp-Session-Id.",
+                )
+                return
+            if not self.mcp_server.has_http_session(mcp_session_id):
+                logger.info(
+                    "[MCP] Re-registering HTTP session %s after reconnect",
+                    mcp_session_id,
+                )
                 self.mcp_server.register_http_session(mcp_session_id)
-            else:
-                if mcp_session_id is None:
-                    self.send_error(
-                        400,
-                        "Missing Mcp-Session-Id header. Call initialize first and "
-                        "reuse the returned Mcp-Session-Id.",
-                    )
-                    return
-                if not self.mcp_server.has_http_session(mcp_session_id):
-                    print(
-                        f"[MCP] Re-registering HTTP session {mcp_session_id} after reconnect"
-                    )
-                    self.mcp_server.register_http_session(mcp_session_id)
 
         # Parse extensions from query params and store in thread-local
         extensions = self._parse_extensions(self.path)
@@ -562,8 +564,10 @@ class McpServer:
         self._server_thread: threading.Thread | None = None
         self._running = False
         self._sse_connections: dict[str, _McpSseConnection] = {}
-        self._http_sessions: set[str] = set()
+        self._http_sessions: dict[str, float] = {}
         self._http_sessions_lock = threading.Lock()
+        self.http_session_ttl_sec = 24 * 60 * 60
+        self.http_session_max_count = 4096
         self._protocol_version = threading.local()
         self._transport_session_id = threading.local()
         self._enabled_extensions = threading.local()  # set[str] per request
@@ -598,7 +602,7 @@ class McpServer:
 
     def serve(self, host: str, port: int, *, background = True, request_handler = McpHttpRequestHandler):
         if self._running:
-            print("[MCP] Server is already running")
+            logger.info("[MCP] Server is already running")
             return
 
         # Create server with deferred binding
@@ -639,16 +643,15 @@ class McpServer:
         # Only start thread after successful bind
         self._running = True
 
-        print("[MCP] Server started:")
-        print(f"  Streamable HTTP: http://{host}:{port}/mcp")
-        print(f"  SSE: http://{host}:{port}/sse")
+        logger.info("[MCP] Server started")
+        logger.info("  Streamable HTTP: http://%s:%s/mcp", host, port)
+        logger.info("  SSE: http://%s:%s/sse", host, port)
 
         def serve_forever():
             try:
                 self._http_server.serve_forever() # type: ignore
-            except Exception as e:
-                print(f"[MCP] Server error: {e}")
-                traceback.print_exc()
+            except Exception:
+                logger.exception("[MCP] Server error")
             finally:
                 self._running = False
 
@@ -681,7 +684,7 @@ class McpServer:
             self._server_thread.join()
             self._server_thread = None
 
-        print("[MCP] Server stopped")
+        logger.info("[MCP] Server stopped")
 
     def stdio(self, stdin: BinaryIO | None = None, stdout: BinaryIO | None = None):
         stdin = stdin or sys.stdin.buffer
@@ -711,13 +714,39 @@ class McpServer:
     def get_current_transport_session_id(self) -> str | None:
         return getattr(self._transport_session_id, "data", None)
 
+    def _prune_http_sessions_locked(self, now: float) -> None:
+        if self.http_session_ttl_sec > 0:
+            cutoff = now - self.http_session_ttl_sec
+            expired = [
+                session_id
+                for session_id, last_seen in self._http_sessions.items()
+                if last_seen < cutoff
+            ]
+            for session_id in expired:
+                self._http_sessions.pop(session_id, None)
+
+        if self.http_session_max_count > 0:
+            while len(self._http_sessions) > self.http_session_max_count:
+                oldest = next(iter(self._http_sessions))
+                self._http_sessions.pop(oldest, None)
+
     def register_http_session(self, session_id: str) -> None:
+        now = time.monotonic()
         with self._http_sessions_lock:
-            self._http_sessions.add(session_id)
+            # Refresh existing IDs by moving them to the insertion-order tail.
+            self._http_sessions.pop(session_id, None)
+            self._http_sessions[session_id] = now
+            self._prune_http_sessions_locked(now)
 
     def has_http_session(self, session_id: str) -> bool:
+        now = time.monotonic()
         with self._http_sessions_lock:
-            return session_id in self._http_sessions
+            self._prune_http_sessions_locked(now)
+            if session_id not in self._http_sessions:
+                return False
+            self._http_sessions.pop(session_id, None)
+            self._http_sessions[session_id] = now
+            return True
 
     def cors_localhost(self, origin: str) -> bool:
         """Allow CORS requests from localhost on ANY port."""
@@ -814,7 +843,11 @@ class McpServer:
     def _mcp_notifications_cancelled(self, requestId: int | str, reason: str | None = None) -> None:
         """MCP notifications/cancelled - cancel an in-flight request"""
         if cancel_request(requestId):
-            print(f"[MCP] Cancelled request {requestId}: {reason or 'no reason'}")
+            logger.info(
+                "[MCP] Cancelled request %s: %s",
+                requestId,
+                reason or "no reason",
+            )
         # Notifications don't return a response
 
     def _mcp_resources_list(self, _meta: dict | None = None) -> dict:
