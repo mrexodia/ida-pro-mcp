@@ -294,6 +294,23 @@ class BreakpointOp(TypedDict):
     enabled: Annotated[bool, "Enable (true) or disable (false)"]
 
 
+class BreakpointConditionBase(TypedDict):
+    """Debugger breakpoint condition operation"""
+
+    addr: Annotated[str, "Breakpoint address (hex or decimal)"]
+
+
+class BreakpointConditionOp(BreakpointConditionBase, total=False):
+    condition: Annotated[
+        Optional[str], "Breakpoint condition expression; null/empty clears it"
+    ]
+    language: Annotated[
+        Optional[str],
+        "Condition language ('idc', 'python', or exact IDA extlang name); null preserves current/default",
+    ]
+    low_level: Annotated[bool, "Set a low-level/server-side condition when true"]
+
+
 class InsnPattern(TypedDict, total=False):
     """Instruction pattern for operand search"""
 
@@ -523,6 +540,7 @@ class Breakpoint(TypedDict):
     addr: str
     enabled: bool
     condition: Optional[str]
+    language: Optional[str]
 
 
 class FunctionAnalysis(TypedDict):
