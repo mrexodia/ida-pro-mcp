@@ -607,6 +607,10 @@ def main():
 
     _install_context_activation_hooks()
 
+    from ida_pro_mcp.ida_mcp import trace
+    trace.install_tracer()
+    logger.info("Tracing tools/call to IDB netnode %s", trace.IDB_NETNODE_NAME)
+
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread does not fake any
     # work from @idasync, so we deadlock.
