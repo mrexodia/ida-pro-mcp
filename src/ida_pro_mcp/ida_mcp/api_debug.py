@@ -36,7 +36,11 @@ from .utils import (
 class DebugControlResult(TypedDict, total=False):
     ip: str
     started: bool
+    continued: bool
+    running: bool
+    suspended: bool
     exited: bool
+    state: str
     error: str
 
 
@@ -106,12 +110,46 @@ GENERAL_PURPOSE_REGISTERS = {
 }
 
 
-def dbg_ensure_running() -> "ida_idd.debugger_t":
+def _get_process_state_name() -> str:
+    if not ida_dbg.is_debugger_on():
+        return "not_running"
+
+    state = ida_dbg.get_process_state()
+    if state == ida_dbg.DSTATE_SUSP:
+        return "suspended"
+    if state == ida_dbg.DSTATE_RUN:
+        return "running"
+    if state == ida_dbg.DSTATE_NOTASK:
+        return "not_running"
+    return f"unknown({state})"
+
+
+def _get_debug_state_result() -> DebugControlResult:
+    state = _get_process_state_name()
+    result: DebugControlResult = {"state": state}
+    if state == "running":
+        result["running"] = True
+    elif state == "suspended":
+        result["suspended"] = True
+        ip = ida_dbg.get_ip_val()
+        if ip is not None:
+            result["ip"] = hex(ip)
+    return result
+
+
+def dbg_ensure_active() -> "ida_idd.debugger_t":
     dbg = ida_idd.get_dbg()
-    if not dbg:
+    if not dbg or not ida_dbg.is_debugger_on():
         raise IDAError("Debugger not running")
-    if ida_dbg.get_ip_val() is None:
-        raise IDAError("Debugger not running")
+    return dbg
+
+
+def dbg_ensure_suspended() -> "ida_idd.debugger_t":
+    dbg = dbg_ensure_active()
+    if ida_dbg.get_process_state() != ida_dbg.DSTATE_SUSP:
+        raise IDAError(
+            "Debugger is running; wait until it suspends before inspecting state"
+        )
     return dbg
 
 
@@ -191,18 +229,17 @@ def list_breakpoints() -> list[Breakpoint]:
     return breakpoints
 
 
-def _get_debug_start_result() -> DebugControlResult | None:
-    ip = ida_dbg.get_ip_val()
-    if ip is not None:
-        return {"started": True, "ip": hex(ip)}
-    if ida_dbg.is_debugger_on():
-        return {"started": True}
-    return None
-
-
 # ============================================================================
 # Debugger Control Operations
 # ============================================================================
+
+
+def _get_debug_start_result() -> DebugControlResult | None:
+    if not ida_dbg.is_debugger_on():
+        return None
+    result = _get_debug_state_result()
+    result["started"] = True
+    return result
 
 
 @ext("dbg")
@@ -218,10 +255,10 @@ def dbg_start() -> DebugControlResult:
             if addr != ida_idaapi.BADADDR:
                 ida_dbg.add_bpt(addr, 0, idaapi.BPT_SOFT)
 
-    result = idaapi.start_process("", "", "")
-    if result == -1:
+    start_result = idaapi.start_process("", "", "")
+    if start_result == -1:
         raise IDAError("Failed to start debugger")
-    if result == 0:
+    if start_result == 0:
         raise IDAError("Debugger start was cancelled")
 
     started = _get_debug_start_result()
@@ -244,11 +281,20 @@ def dbg_start() -> DebugControlResult:
 @unsafe
 @tool
 @idasync
+def dbg_status() -> DebugControlResult:
+    """Return debugger lifecycle state and current IP if suspended."""
+    return _get_debug_state_result()
+
+
+@ext("dbg")
+@unsafe
+@tool
+@idasync
 def dbg_exit() -> DebugControlResult:
     """Terminate active debugger session."""
-    dbg_ensure_running()
+    dbg_ensure_active()
     if idaapi.exit_process():
-        return {"exited": True}
+        return {"exited": True, "state": "not_running"}
     raise IDAError("Failed to exit debugger")
 
 
@@ -258,11 +304,11 @@ def dbg_exit() -> DebugControlResult:
 @idasync
 def dbg_continue() -> DebugControlResult:
     """Resume execution in active debugger session."""
-    dbg_ensure_running()
+    dbg_ensure_suspended()
     if idaapi.continue_process():
-        ip = ida_dbg.get_ip_val()
-        if ip is not None:
-            return {"ip": hex(ip)}
+        result = _get_debug_state_result()
+        result["continued"] = True
+        return result
     raise IDAError("Failed to continue debugger")
 
 
@@ -274,12 +320,12 @@ def dbg_run_to(
     addr: Annotated[str, "Target execution address (hex or decimal)"],
 ) -> DebugControlResult:
     """Run debuggee until target address is reached."""
-    dbg_ensure_running()
+    dbg_ensure_suspended()
     ea = parse_address(addr)
     if idaapi.run_to(ea):
-        ip = ida_dbg.get_ip_val()
-        if ip is not None:
-            return {"ip": hex(ip)}
+        result = _get_debug_state_result()
+        result["continued"] = True
+        return result
     raise IDAError(f"Failed to run to address {hex(ea)}")
 
 
@@ -289,11 +335,11 @@ def dbg_run_to(
 @idasync
 def dbg_step_into() -> DebugControlResult:
     """Execute one instruction, stepping into calls."""
-    dbg_ensure_running()
+    dbg_ensure_suspended()
     if idaapi.step_into():
-        ip = ida_dbg.get_ip_val()
-        if ip is not None:
-            return {"ip": hex(ip)}
+        result = _get_debug_state_result()
+        result["continued"] = True
+        return result
     raise IDAError("Failed to step into")
 
 
@@ -303,11 +349,11 @@ def dbg_step_into() -> DebugControlResult:
 @idasync
 def dbg_step_over() -> DebugControlResult:
     """Execute one instruction, stepping over calls."""
-    dbg_ensure_running()
+    dbg_ensure_suspended()
     if idaapi.step_over():
-        ip = ida_dbg.get_ip_val()
-        if ip is not None:
-            return {"ip": hex(ip)}
+        result = _get_debug_state_result()
+        result["continued"] = True
+        return result
     raise IDAError("Failed to step over")
 
 
@@ -424,7 +470,7 @@ def dbg_toggle_bp(
 def dbg_regs_all() -> list[ThreadRegisters]:
     """Return full register sets for all debugger threads."""
     result: list[ThreadRegisters] = []
-    dbg = dbg_ensure_running()
+    dbg = dbg_ensure_suspended()
     for thread_index in range(ida_dbg.get_thread_qty()):
         tid = ida_dbg.getn_thread(thread_index)
         result.append(_get_registers_for_thread(dbg, tid))
@@ -442,7 +488,7 @@ def dbg_regs_remote(
     if isinstance(tids, int):
         tids = [tids]
 
-    dbg = dbg_ensure_running()
+    dbg = dbg_ensure_suspended()
     available_tids = [ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())]
     results = []
 
@@ -467,7 +513,7 @@ def dbg_regs_remote(
 @idasync
 def dbg_regs() -> ThreadRegisters:
     """Return full registers for current debugger thread."""
-    dbg = dbg_ensure_running()
+    dbg = dbg_ensure_suspended()
     tid = ida_dbg.get_current_thread()
     return _get_registers_for_thread(dbg, tid)
 
@@ -483,7 +529,7 @@ def dbg_gpregs_remote(
     if isinstance(tids, int):
         tids = [tids]
 
-    dbg = dbg_ensure_running()
+    dbg = dbg_ensure_suspended()
     available_tids = [ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())]
     results = []
 
@@ -508,7 +554,7 @@ def dbg_gpregs_remote(
 @idasync
 def dbg_gpregs() -> ThreadRegisters:
     """Get current thread GP registers"""
-    dbg = dbg_ensure_running()
+    dbg = dbg_ensure_suspended()
     tid = ida_dbg.get_current_thread()
     return _get_registers_general_for_thread(dbg, tid)
 
@@ -524,7 +570,7 @@ def dbg_regs_named_remote(
     ],
 ) -> ThreadRegisters:
     """Return selected registers for a specific thread ID."""
-    dbg = dbg_ensure_running()
+    dbg = dbg_ensure_suspended()
     if thread_id not in [
         ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())
     ]:
@@ -543,7 +589,7 @@ def dbg_regs_named(
     ],
 ) -> ThreadRegisters:
     """Get specific current thread registers"""
-    dbg = dbg_ensure_running()
+    dbg = dbg_ensure_suspended()
     tid = ida_dbg.get_current_thread()
     names = [name.strip() for name in register_names.split(",")]
     return _get_registers_specific_for_thread(dbg, tid, names)
@@ -616,7 +662,7 @@ def dbg_read(
     """Read debuggee memory from one or more regions."""
 
     regions = normalize_dict_list(regions)
-    dbg_ensure_running()
+    dbg_ensure_active()
     results = []
 
     for region in regions:
@@ -662,7 +708,7 @@ def dbg_write(
     """Write bytes to debuggee memory regions."""
 
     regions = normalize_dict_list(regions)
-    dbg_ensure_running()
+    dbg_ensure_active()
     results = []
 
     for region in regions:
