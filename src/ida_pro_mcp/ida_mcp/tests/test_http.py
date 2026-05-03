@@ -93,9 +93,13 @@ def test_extension_tools_appear_when_enabled():
 
 @test()
 def test_disable_group_exists_and_populated():
-    """@disable('slow') should register tools in a default-on disable group."""
+    """Disable groups should register both synthetic and real expensive tools."""
     assert "slow" in MCP_DISABLE_GROUPS, "No 'slow' disable group registered"
     assert "_test_slow_tool" in MCP_DISABLE_GROUPS["slow"]
+    assert "expensive" in MCP_DISABLE_GROUPS, "No 'expensive' disable group registered"
+    expensive = MCP_DISABLE_GROUPS["expensive"]
+    for name in ("find", "find_regex", "search_text"):
+        assert name in expensive, f"{name} missing from expensive disable group"
 
 
 @test()

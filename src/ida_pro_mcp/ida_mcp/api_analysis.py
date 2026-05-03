@@ -13,7 +13,7 @@ import ida_idaapi
 import ida_xref
 import ida_ua
 import ida_name
-from .rpc import tool
+from .rpc import tool, disable
 from .sync import idasync, tool_timeout, IDAError
 from .utils import (
     parse_address,
@@ -1722,6 +1722,7 @@ def basic_blocks(
 
 
 @tool
+@disable("expensive")
 @idasync
 def find(
     type: Annotated[

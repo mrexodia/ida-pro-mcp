@@ -18,7 +18,7 @@ import ida_nalt
 import ida_typeinf
 import idc
 
-from .rpc import tool
+from .rpc import tool, disable
 from .sync import idasync
 from .utils import (
     ConvertedNumber,
@@ -847,6 +847,7 @@ def idb_save(
 
 
 @tool
+@disable("expensive")
 @idasync
 def find_regex(
     pattern: Annotated[str, "Regex pattern to search for in strings"],
@@ -960,6 +961,7 @@ def _all_segments() -> list[tuple[int, int]]:
 
 
 @tool
+@disable("expensive")
 @idasync
 def search_text(
     pattern: Annotated[str, "Text to search for in the rendered listing (literal substring by default)"],
