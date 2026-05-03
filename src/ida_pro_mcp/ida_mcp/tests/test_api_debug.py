@@ -25,6 +25,7 @@ def test_list_breakpoints_normalizes_enabled_to_bool():
             self.ea = 0
             self.flags = 0
             self.condition = None
+            self.elang = None
 
     def getn_bpt(index, bpt):
         if index != 0:
@@ -41,7 +42,7 @@ def test_list_breakpoints_normalizes_enabled_to_bool():
     ]
     try:
         result = api_debug.list_breakpoints()
-        assert result == [{"addr": "0x401000", "enabled": True, "condition": None}]
+        assert result == [{"addr": "0x401000", "enabled": True, "condition": None, "language": None}]
         assert isinstance(result[0]["enabled"], bool)
     finally:
         for patch in reversed(patches):
@@ -135,6 +136,258 @@ def test_dbg_regs_require_suspended_state():
             assert "Debugger is running" in str(exc)
         else:
             raise AssertionError("Expected IDAError for running debugger state")
+    finally:
+        for patch in reversed(patches):
+            patch.restore()
+
+
+@test()
+def test_dbg_set_bp_condition_sets_condition():
+    """dbg_set_bp_condition should apply a condition to an existing breakpoint."""
+
+    class _FakeBpt:
+        def __init__(self):
+            self.condition = None
+            self.elang = None
+
+        def is_compiled(self):
+            return bool(self.condition)
+
+    state = {"condition": None, "language": None}
+    calls = []
+
+    def get_bpt(ea, bpt):
+        if ea != 0x401000:
+            return False
+        bpt.condition = state["condition"]
+        bpt.elang = state["language"]
+        return True
+
+    def set_bpt_cond(ea, cnd, is_lowcnd=0):
+        calls.append((ea, cnd, is_lowcnd))
+        state["condition"] = cnd or None
+        return True
+
+    patches = [
+        _SavedAttr(api_debug, "parse_address", lambda _addr: 0x401000),
+        _SavedAttr(api_debug.ida_dbg, "bpt_t", _FakeBpt),
+        _SavedAttr(api_debug.ida_dbg, "get_bpt", get_bpt),
+        _SavedAttr(api_debug.idc, "set_bpt_cond", set_bpt_cond),
+    ]
+    try:
+        result = api_debug.dbg_set_bp_condition(
+            {"addr": "0x401000", "condition": "eax == 1"}
+        )
+        assert result == [{"addr": "0x401000", "ok": True, "condition": "eax == 1", "language": None}]
+        assert calls == [(0x401000, "eax == 1", 0)]
+    finally:
+        for patch in reversed(patches):
+            patch.restore()
+
+
+@test()
+def test_dbg_set_bp_condition_can_clear_condition():
+    """dbg_set_bp_condition should clear a condition when passed null."""
+
+    class _FakeBpt:
+        def __init__(self):
+            self.condition = None
+            self.elang = "IDC"
+
+        def is_compiled(self):
+            return bool(self.condition)
+
+    state = {"condition": "eax == 1", "language": "IDC"}
+    calls = []
+
+    def get_bpt(ea, bpt):
+        if ea != 0x401000:
+            return False
+        bpt.condition = state["condition"]
+        bpt.elang = state["language"]
+        return True
+
+    def set_bpt_cond(ea, cnd, is_lowcnd=0):
+        calls.append((ea, cnd, is_lowcnd))
+        state["condition"] = cnd or None
+        return True
+
+    patches = [
+        _SavedAttr(api_debug, "parse_address", lambda _addr: 0x401000),
+        _SavedAttr(api_debug.ida_dbg, "bpt_t", _FakeBpt),
+        _SavedAttr(api_debug.ida_dbg, "get_bpt", get_bpt),
+        _SavedAttr(api_debug.idc, "set_bpt_cond", set_bpt_cond),
+    ]
+    try:
+        result = api_debug.dbg_set_bp_condition(
+            {"addr": "0x401000", "condition": None, "low_level": True}
+        )
+        assert result == [{"addr": "0x401000", "ok": True, "condition": None, "language": "IDC"}]
+        assert calls == [(0x401000, "", 1)]
+    finally:
+        for patch in reversed(patches):
+            patch.restore()
+
+
+@test()
+def test_dbg_set_bp_condition_can_set_python_language():
+    """dbg_set_bp_condition should switch language before compiling a new condition."""
+
+    class _FakeBpt:
+        def __init__(self):
+            self.condition = None
+            self.elang = "IDC"
+
+        def is_compiled(self):
+            return bool(self.condition)
+
+    state = {"condition": None, "language": "IDC"}
+    calls = []
+
+    def get_bpt(ea, bpt):
+        if ea != 0x401000:
+            return False
+        bpt.condition = state["condition"]
+        bpt.elang = state["language"]
+        return True
+
+    def set_bpt_cond(ea, cnd, is_lowcnd=0):
+        calls.append(("set", ea, cnd, is_lowcnd))
+        state["condition"] = cnd or None
+        return True
+
+    def update_bpt(bpt):
+        calls.append(("update", bpt.elang))
+        state["language"] = bpt.elang
+        return True
+
+    patches = [
+        _SavedAttr(api_debug, "parse_address", lambda _addr: 0x401000),
+        _SavedAttr(api_debug.ida_dbg, "bpt_t", _FakeBpt),
+        _SavedAttr(api_debug.ida_dbg, "get_bpt", get_bpt),
+        _SavedAttr(api_debug.ida_dbg, "update_bpt", update_bpt),
+        _SavedAttr(api_debug.idc, "set_bpt_cond", set_bpt_cond),
+    ]
+    try:
+        result = api_debug.dbg_set_bp_condition(
+            {"addr": "0x401000", "condition": "RAX == 1", "language": "python"}
+        )
+        assert result == [
+            {
+                "addr": "0x401000",
+                "ok": True,
+                "condition": "RAX == 1",
+                "language": "Python",
+            }
+        ]
+        assert calls == [("update", "Python"), ("set", 0x401000, "RAX == 1", 0)]
+    finally:
+        for patch in reversed(patches):
+            patch.restore()
+
+
+@test()
+def test_dbg_set_bp_condition_clears_old_condition_before_language_switch():
+    """Changing language with an existing condition should clear first, then switch, then set."""
+
+    class _FakeBpt:
+        def __init__(self):
+            self.condition = None
+            self.elang = "IDC"
+
+        def is_compiled(self):
+            return bool(self.condition)
+
+    state = {"condition": "R13==0x1234", "language": "IDC"}
+    calls = []
+
+    def get_bpt(ea, bpt):
+        if ea != 0x401000:
+            return False
+        bpt.condition = state["condition"]
+        bpt.elang = state["language"]
+        return True
+
+    def set_bpt_cond(ea, cnd, is_lowcnd=0):
+        calls.append(("set", ea, cnd, is_lowcnd))
+        state["condition"] = cnd or None
+        return True
+
+    def update_bpt(bpt):
+        calls.append(("update", bpt.elang))
+        state["language"] = bpt.elang
+        return True
+
+    patches = [
+        _SavedAttr(api_debug, "parse_address", lambda _addr: 0x401000),
+        _SavedAttr(api_debug.ida_dbg, "bpt_t", _FakeBpt),
+        _SavedAttr(api_debug.ida_dbg, "get_bpt", get_bpt),
+        _SavedAttr(api_debug.ida_dbg, "update_bpt", update_bpt),
+        _SavedAttr(api_debug.idc, "set_bpt_cond", set_bpt_cond),
+    ]
+    try:
+        result = api_debug.dbg_set_bp_condition(
+            {"addr": "0x401000", "condition": "True", "language": "python"}
+        )
+        assert result == [
+            {
+                "addr": "0x401000",
+                "ok": True,
+                "condition": "True",
+                "language": "Python",
+            }
+        ]
+        assert calls == [
+            ("set", 0x401000, "", 0),
+            ("update", "Python"),
+            ("set", 0x401000, "True", 0),
+        ]
+    finally:
+        for patch in reversed(patches):
+            patch.restore()
+
+
+@test()
+def test_dbg_set_bp_condition_rejects_uncompiled_condition():
+    """dbg_set_bp_condition should fail when IDA stores but does not compile the condition."""
+
+    class _FakeBpt:
+        def __init__(self):
+            self.condition = None
+            self.elang = "IDC"
+
+        def is_compiled(self):
+            return False
+
+    state = {"condition": None, "language": "IDC"}
+
+    def get_bpt(ea, bpt):
+        if ea != 0x401000:
+            return False
+        bpt.condition = state["condition"]
+        bpt.elang = state["language"]
+        return True
+
+    def set_bpt_cond(ea, cnd, is_lowcnd=0):
+        state["condition"] = cnd or None
+        return True
+
+    patches = [
+        _SavedAttr(api_debug, "parse_address", lambda _addr: 0x401000),
+        _SavedAttr(api_debug.ida_dbg, "bpt_t", _FakeBpt),
+        _SavedAttr(api_debug.ida_dbg, "get_bpt", get_bpt),
+        _SavedAttr(api_debug.idc, "set_bpt_cond", set_bpt_cond),
+    ]
+    try:
+        result = api_debug.dbg_set_bp_condition(
+            {"addr": "0x401000", "condition": "this is invalid syntax"}
+        )
+        assert result == [
+            {
+                "addr": "0x401000",
+                "error": "Breakpoint condition was stored but did not compile successfully",
+            }
+        ]
     finally:
         for patch in reversed(patches):
             patch.restore()

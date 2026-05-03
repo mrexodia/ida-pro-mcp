@@ -2,7 +2,7 @@
 
 This module provides comprehensive debugging functionality including:
 - Debugger control (start, exit, continue, step, run_to)
-- Breakpoint management (add, delete, enable/disable, list)
+- Breakpoint management (add, delete, enable/disable, conditions, list)
 - Register inspection (all registers, GP registers, specific registers)
 - Memory operations (read/write debugger memory)
 - Call stack inspection
@@ -11,6 +11,7 @@ This module provides comprehensive debugging functionality including:
 import os
 from typing import Annotated, NotRequired, TypedDict
 
+import idc
 import ida_dbg
 import ida_entry
 import ida_idd
@@ -24,6 +25,7 @@ from .utils import (
     RegisterValue,
     ThreadRegisters,
     Breakpoint,
+    BreakpointConditionOp,
     BreakpointOp,
     MemoryRead,
     MemoryPatch,
@@ -47,6 +49,8 @@ class DebugControlResult(TypedDict, total=False):
 class BreakpointResult(TypedDict, total=False):
     addr: str
     ok: bool
+    condition: str | None
+    language: str | None
     error: str
 
 
@@ -214,6 +218,42 @@ def _get_registers_specific_for_thread(
     )
 
 
+def _normalize_breakpoint_language(language: object) -> str | None:
+    if language is None:
+        return None
+    text = str(language).strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered == "idc":
+        return "IDC"
+    if lowered == "python":
+        return "Python"
+    return text
+
+
+def _get_breakpoint_language(bpt: ida_dbg.bpt_t) -> str | None:
+    language = getattr(bpt, "elang", None)
+    if language is None:
+        return None
+    text = str(language).strip()
+    return text or None
+
+
+def _set_breakpoint_language(bpt: ida_dbg.bpt_t, language: str) -> None:
+    setter = getattr(bpt, "set_cnd_elang", None)
+    if callable(setter):
+        if not setter(language):
+            raise IDAError(f"Failed to set breakpoint condition language to {language}")
+        return
+    try:
+        setattr(bpt, "elang", language)
+    except Exception as exc:
+        raise IDAError(
+            f"Failed to set breakpoint condition language to {language}"
+        ) from exc
+
+
 def list_breakpoints() -> list[Breakpoint]:
     breakpoints: list[Breakpoint] = []
     for i in range(ida_dbg.get_bpt_qty()):
@@ -224,6 +264,7 @@ def list_breakpoints() -> list[Breakpoint]:
                     addr=hex(bpt.ea),
                     enabled=bool(bpt.flags & ida_dbg.BPT_ENABLED),
                     condition=str(bpt.condition) if bpt.condition else None,
+                    language=_get_breakpoint_language(bpt),
                 )
             )
     return breakpoints
@@ -367,7 +408,7 @@ def dbg_step_over() -> DebugControlResult:
 @tool
 @idasync
 def dbg_bps() -> list[Breakpoint]:
-    """List breakpoints with address and enabled status."""
+    """List breakpoints with address, enabled status, condition, and language."""
     return list_breakpoints()
 
 
@@ -452,6 +493,104 @@ def dbg_toggle_bp(
                         "error": f"Failed to {'enable' if enable else 'disable'} breakpoint",
                     }
                 )
+        except Exception as e:
+            results.append({"addr": addr, "error": str(e)})
+
+    return results
+
+
+@ext("dbg")
+@unsafe
+@tool
+@idasync
+def dbg_set_bp_condition(
+    items: list[BreakpointConditionOp] | BreakpointConditionOp,
+) -> list[BreakpointResult]:
+    """Set or clear breakpoint conditions in batch."""
+
+    items = normalize_dict_list(items)
+
+    results = []
+    for item in items:
+        addr = item.get("addr", "")
+        condition = item.get("condition")
+        language = _normalize_breakpoint_language(item.get("language"))
+        low_level = bool(item.get("low_level", False))
+
+        try:
+            ea = parse_address(addr)
+            bpt = ida_dbg.bpt_t()
+            if not ida_dbg.get_bpt(ea, bpt):
+                results.append({"addr": addr, "error": "Breakpoint not found"})
+                continue
+
+            condition_text = "" if condition is None else str(condition)
+            current_language = _get_breakpoint_language(bpt)
+            current_condition = str(bpt.condition) if bpt.condition else None
+
+            if language is not None and language != current_language:
+                if current_condition and condition_text:
+                    if not idc.set_bpt_cond(ea, "", 1 if low_level else 0):
+                        results.append(
+                            {
+                                "addr": addr,
+                                "error": "Failed to clear existing breakpoint condition before changing its language",
+                            }
+                        )
+                        continue
+                    if not ida_dbg.get_bpt(ea, bpt):
+                        results.append(
+                            {
+                                "addr": addr,
+                                "error": "Breakpoint condition was cleared, but breakpoint could not be reloaded to update its language",
+                            }
+                        )
+                        continue
+
+                _set_breakpoint_language(bpt, language)
+                if not ida_dbg.update_bpt(bpt):
+                    results.append(
+                        {
+                            "addr": addr,
+                            "error": f"Failed to apply breakpoint condition language {language}",
+                        }
+                    )
+                    continue
+
+            if not idc.set_bpt_cond(ea, condition_text, 1 if low_level else 0):
+                results.append({"addr": addr, "error": "Failed to set breakpoint condition"})
+                continue
+
+            updated = ida_dbg.bpt_t()
+            if not ida_dbg.get_bpt(ea, updated):
+                results.append(
+                    {
+                        "addr": addr,
+                        "error": "Breakpoint condition was set, but breakpoint could not be reloaded for validation",
+                    }
+                )
+                continue
+
+            updated_condition = str(updated.condition) if updated.condition else None
+            updated_language = _get_breakpoint_language(updated)
+            is_compiled = getattr(updated, "is_compiled", None)
+            if condition_text and callable(is_compiled) and not is_compiled():
+                results.append(
+                    {
+                        "addr": addr,
+                        "error": "Breakpoint condition was stored but did not compile successfully",
+                    }
+                )
+                continue
+
+            results.append(
+                {
+                    "addr": addr,
+                    "ok": True,
+                    "condition": updated_condition,
+                    "language": updated_language,
+                }
+            )
         except Exception as e:
             results.append({"addr": addr, "error": str(e)})
 
