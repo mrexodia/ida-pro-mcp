@@ -303,6 +303,20 @@ def dbg_start() -> DebugControlResult:
         raise IDAError("Debugger start was cancelled")
 
     started = _get_debug_start_result()
+    if started is not None and started.get("running") and "ip" not in started:
+        for _ in range(5):
+            ida_dbg.wait_for_next_event(
+                ida_dbg.WFNE_ANY | ida_dbg.WFNE_SUSP | ida_dbg.WFNE_SILENT,
+                1,
+            )
+            waited = _get_debug_start_result()
+            if waited is None:
+                continue
+            started = waited
+            if started.get("suspended") or "ip" in started:
+                return started
+        return started
+
     if started is not None:
         return started
 
