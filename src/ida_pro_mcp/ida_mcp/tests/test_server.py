@@ -65,6 +65,7 @@ def _saved_target():
     old_port = server.IDA_PORT
     old_session = getattr(server.mcp._transport_session_id, "data", None)
     old_exts = getattr(server.mcp._enabled_extensions, "data", set())
+    old_disabled = getattr(server.mcp._disabled_groups, "data", set())
     try:
         yield
     finally:
@@ -72,6 +73,7 @@ def _saved_target():
         server.IDA_PORT = old_port
         server.mcp._transport_session_id.data = old_session
         server.mcp._enabled_extensions.data = old_exts
+        server.mcp._disabled_groups.data = old_disabled
 
 
 @test()
@@ -90,19 +92,20 @@ def test_tools_list_keeps_discovery_and_launch_tools_when_ida_unreachable():
 
 
 @test()
-def test_server_proxy_to_instance_forwards_session_and_extensions():
-    """Top-level proxy requests should preserve MCP session and enabled extensions."""
+def test_server_proxy_to_instance_forwards_session_extensions_and_disabled_groups():
+    """Top-level proxy requests should preserve MCP session, ext, and disable query params."""
     with _saved_target():
         original_conn = server.http.client.HTTPConnection
         _RecordingConnection.calls = []
         server.http.client.HTTPConnection = _RecordingConnection
         server.mcp._transport_session_id.data = "http:session-456"
         server.mcp._enabled_extensions.data = {"dbg"}
+        server.mcp._disabled_groups.data = {"slow"}
         try:
             server._proxy_to_instance("127.0.0.1", 13337, b"{}")
             assert len(_RecordingConnection.calls) == 1
             call = _RecordingConnection.calls[0]
-            assert call["path"] == "/mcp?ext=dbg"
+            assert call["path"] == "/mcp?ext=dbg&disable=slow"
             assert call["headers"].get("Mcp-Session-Id") == "session-456"
         finally:
             server.http.client.HTTPConnection = original_conn
@@ -132,29 +135,42 @@ def test_resolve_ida_rpc_preserves_multiple_ext_query_params():
 
 
 @test()
-def test_resolve_ida_rpc_no_ext_leaves_extensions_empty():
-    """--ida-rpc without ext param should not add spurious extensions."""
+def test_resolve_ida_rpc_preserves_disable_query_param():
+    """--ida-rpc http://host:port/mcp?disable=slow should seed disabled groups."""
     with _saved_target():
-        server.mcp._enabled_extensions.data = set()
-        args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999")
+        args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999/mcp?disable=slow")
         server._resolve_ida_rpc(args)
-        exts = getattr(server.mcp._enabled_extensions, "data", set())
-        assert len(exts) == 0, f"Expected no extensions, got: {exts}"
+        disabled = getattr(server.mcp._disabled_groups, "data", set())
+        assert "slow" in disabled, f"Expected 'slow' in disabled groups, got: {disabled}"
 
 
 @test()
-def test_ida_rpc_ext_flows_through_to_proxy_path():
-    """Extensions from --ida-rpc should appear in proxied request path."""
+def test_resolve_ida_rpc_no_ext_or_disable_leaves_filters_empty():
+    """--ida-rpc without ext/disable params should not add spurious filters."""
+    with _saved_target():
+        server.mcp._enabled_extensions.data = set()
+        server.mcp._disabled_groups.data = set()
+        args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999")
+        server._resolve_ida_rpc(args)
+        exts = getattr(server.mcp._enabled_extensions, "data", set())
+        disabled = getattr(server.mcp._disabled_groups, "data", set())
+        assert len(exts) == 0, f"Expected no extensions, got: {exts}"
+        assert len(disabled) == 0, f"Expected no disabled groups, got: {disabled}"
+
+
+@test()
+def test_ida_rpc_ext_and_disable_flow_through_to_proxy_path():
+    """Filters from --ida-rpc should appear in proxied request path."""
     with _saved_target():
         original_conn = server.http.client.HTTPConnection
         _RecordingConnection.calls = []
         server.http.client.HTTPConnection = _RecordingConnection
         try:
-            args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999/mcp?ext=dbg")
+            args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999/mcp?ext=dbg&disable=slow")
             server._resolve_ida_rpc(args)
             server._proxy_to_instance("10.0.0.1", 9999, b"{}")
             assert len(_RecordingConnection.calls) == 1
-            assert _RecordingConnection.calls[0]["path"] == "/mcp?ext=dbg"
+            assert _RecordingConnection.calls[0]["path"] == "/mcp?ext=dbg&disable=slow"
         finally:
             server.http.client.HTTPConnection = original_conn
 

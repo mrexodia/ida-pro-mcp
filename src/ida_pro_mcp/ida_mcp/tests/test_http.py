@@ -10,8 +10,14 @@ visibility, and ORIGINAL_TOOLS snapshot.
 """
 
 from ..framework import test
-from ..rpc import MCP_SERVER, MCP_UNSAFE, MCP_EXTENSIONS
+from ..rpc import MCP_SERVER, MCP_UNSAFE, MCP_EXTENSIONS, MCP_DISABLE_GROUPS, disable, tool
 from .. import http as http_mod
+
+
+@tool
+@disable("slow")
+def _test_slow_tool() -> dict:
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +89,57 @@ def test_extension_tools_appear_when_enabled():
         assert not missing, f"dbg tools in registry but hidden: {missing}"
     finally:
         MCP_SERVER._enabled_extensions.data = old_exts
+
+
+@test()
+def test_disable_group_exists_and_populated():
+    """@disable('slow') should register tools in a default-on disable group."""
+    assert "slow" in MCP_DISABLE_GROUPS, "No 'slow' disable group registered"
+    assert "_test_slow_tool" in MCP_DISABLE_GROUPS["slow"]
+
+
+@test()
+def test_disable_group_tools_visible_by_default():
+    """Disable-group tools should be listed when no ?disable is active."""
+    old_exts = getattr(MCP_SERVER._enabled_extensions, "data", set())
+    old_disabled = getattr(MCP_SERVER._disabled_groups, "data", set())
+    MCP_SERVER._enabled_extensions.data = set()
+    MCP_SERVER._disabled_groups.data = set()
+    try:
+        listed = {t["name"] for t in MCP_SERVER._mcp_tools_list()["tools"]}
+        assert "_test_slow_tool" in listed
+    finally:
+        MCP_SERVER._enabled_extensions.data = old_exts
+        MCP_SERVER._disabled_groups.data = old_disabled
+
+
+@test()
+def test_disable_group_tools_hidden_when_disabled():
+    """Disable-group tools should disappear from tools/list when ?disable is active."""
+    old_exts = getattr(MCP_SERVER._enabled_extensions, "data", set())
+    old_disabled = getattr(MCP_SERVER._disabled_groups, "data", set())
+    MCP_SERVER._enabled_extensions.data = set()
+    MCP_SERVER._disabled_groups.data = {"slow"}
+    try:
+        listed = {t["name"] for t in MCP_SERVER._mcp_tools_list()["tools"]}
+        assert "_test_slow_tool" not in listed
+    finally:
+        MCP_SERVER._enabled_extensions.data = old_exts
+        MCP_SERVER._disabled_groups.data = old_disabled
+
+
+@test()
+def test_disable_group_tool_call_rejected_when_disabled():
+    """tools/call should reject a tool hidden by ?disable."""
+    old_disabled = getattr(MCP_SERVER._disabled_groups, "data", set())
+    MCP_SERVER._disabled_groups.data = {"slow"}
+    try:
+        result = MCP_SERVER._mcp_tools_call("_test_slow_tool", {})
+        assert result.get("isError")
+        text = result["content"][0]["text"]
+        assert "disabled by group 'slow'" in text
+    finally:
+        MCP_SERVER._disabled_groups.data = old_disabled
 
 
 # ---------------------------------------------------------------------------

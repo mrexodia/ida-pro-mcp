@@ -26,6 +26,8 @@ class _SavedState:
         self._lport = api_discovery._LOCAL_PORT
         self._proxied = api_discovery.is_request_proxied()
         self._session = getattr(api_discovery.MCP_SERVER._transport_session_id, "data", None)
+        self._exts = getattr(api_discovery.MCP_SERVER._enabled_extensions, "data", set())
+        self._disabled = getattr(api_discovery.MCP_SERVER._disabled_groups, "data", set())
         return self
     def __exit__(self, *exc):
         api_discovery._redirect_host = self._host
@@ -36,6 +38,8 @@ class _SavedState:
         api_discovery._LOCAL_PORT = self._lport
         api_discovery.set_request_proxied(self._proxied)
         api_discovery.MCP_SERVER._transport_session_id.data = self._session
+        api_discovery.MCP_SERVER._enabled_extensions.data = self._exts
+        api_discovery.MCP_SERVER._disabled_groups.data = self._disabled
 
 
 def _make_jsonrpc(method, params=None, id=1):
@@ -314,24 +318,26 @@ def test_dispatch_proxy_error_preserves_request_id():
 
 
 @test()
-def test_api_discovery_proxy_to_instance_forwards_session_and_extensions():
-    """Forwarded proxy requests should preserve MCP session and enabled extensions."""
+def test_api_discovery_proxy_to_instance_forwards_session_extensions_and_disabled_groups():
+    """Forwarded proxy requests should preserve MCP session, ext, and disable query params."""
     with _SavedState():
         original_conn = api_discovery.http.client.HTTPConnection
         _RecordingConnection.calls = []
         api_discovery.http.client.HTTPConnection = _RecordingConnection
         api_discovery.MCP_SERVER._transport_session_id.data = "http:session-123"
         api_discovery.MCP_SERVER._enabled_extensions.data = {"dbg"}
+        api_discovery.MCP_SERVER._disabled_groups.data = {"slow"}
         try:
             api_discovery.proxy_to_instance("127.0.0.1", 13337, b"{}")
             assert len(_RecordingConnection.calls) == 1
             call = _RecordingConnection.calls[0]
-            assert call["path"] == "/mcp?ext=dbg"
+            assert call["path"] == "/mcp?ext=dbg&disable=slow"
             assert call["headers"].get(api_discovery.PROXY_HEADER) == "1"
             assert call["headers"].get("Mcp-Session-Id") == "session-123"
         finally:
             api_discovery.http.client.HTTPConnection = original_conn
             api_discovery.MCP_SERVER._enabled_extensions.data = set()
+            api_discovery.MCP_SERVER._disabled_groups.data = set()
 
 
 @test()

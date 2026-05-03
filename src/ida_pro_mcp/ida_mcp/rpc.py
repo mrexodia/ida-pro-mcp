@@ -11,7 +11,12 @@ from .zeromcp import (
 
 MCP_UNSAFE: set[str] = set()
 MCP_EXTENSIONS: dict[str, set[str]] = {}  # group -> set of function names
-MCP_SERVER = McpServer("ida-pro-mcp", extensions=MCP_EXTENSIONS)
+MCP_DISABLE_GROUPS: dict[str, set[str]] = {}  # group -> set of function names
+MCP_SERVER = McpServer(
+    "ida-pro-mcp",
+    extensions=MCP_EXTENSIONS,
+    disabled_groups=MCP_DISABLE_GROUPS,
+)
 
 # ============================================================================
 # Output Size Limiting
@@ -172,6 +177,23 @@ def ext(group: str):
     return decorator
 
 
+def disable(group: str):
+    """Mark a tool as belonging to a disable group.
+
+    Tools in disable groups are visible by default, but can be hidden and rejected
+    via ?disable=group query param. Example: @disable("expensive") marks tools
+    that should be excluded for latency-sensitive clients.
+    """
+
+    def decorator(func):
+        if group not in MCP_DISABLE_GROUPS:
+            MCP_DISABLE_GROUPS[group] = set()
+        MCP_DISABLE_GROUPS[group].add(func.__name__)
+        return func
+
+    return decorator
+
+
 __all__ = [
     "McpRpcRegistry",
     "McpServer",
@@ -180,9 +202,11 @@ __all__ = [
     "MCP_SERVER",
     "MCP_UNSAFE",
     "MCP_EXTENSIONS",
+    "MCP_DISABLE_GROUPS",
     "tool",
     "unsafe",
     "ext",
+    "disable",
     "resource",
     "get_cached_output",
     "set_download_base_url",

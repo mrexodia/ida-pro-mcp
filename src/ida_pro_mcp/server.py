@@ -138,10 +138,16 @@ def _remember_output_proxy_target_from_response(host: str, port: int, response: 
 
 
 def _get_proxy_request_path() -> str:
-    """Build the proxied MCP path, preserving enabled extensions."""
+    """Build the proxied MCP path, preserving ext/disable query params."""
     enabled = sorted(getattr(mcp._enabled_extensions, "data", set()))
+    disabled = sorted(getattr(mcp._disabled_groups, "data", set()))
+    parts = []
     if enabled:
-        return f"/mcp?ext={','.join(enabled)}"
+        parts.append(f"ext={','.join(enabled)}")
+    if disabled:
+        parts.append(f"disable={','.join(disabled)}")
+    if parts:
+        return f"/mcp?{'&'.join(parts)}"
     return "/mcp"
 
 
@@ -469,10 +475,14 @@ def _resolve_ida_rpc(args) -> None:
         IDA_HOST = ida_rpc.hostname
         IDA_PORT = ida_rpc.port
 
-        # Preserve ?ext= query param so proxy requests include the extensions
-        ext_value = parse_qs(ida_rpc.query).get("ext", [""])[0]
+        # Preserve ?ext= and ?disable= query params for proxied requests
+        query = parse_qs(ida_rpc.query)
+        ext_value = query.get("ext", [""])[0]
         if ext_value:
             mcp._enabled_extensions.data = set(ext_value.split(","))
+        disable_value = query.get("disable", [""])[0]
+        if disable_value:
+            mcp._disabled_groups.data = set(disable_value.split(","))
 
         set_ida_rpc(IDA_HOST, IDA_PORT)
         return

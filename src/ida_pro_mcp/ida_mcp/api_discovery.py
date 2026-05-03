@@ -173,10 +173,16 @@ def _remember_output_proxy_target_from_response(host: str, port: int, response: 
 
 
 def _get_proxy_request_path() -> str:
-    """Build the proxied MCP path, preserving enabled extensions."""
+    """Build the proxied MCP path, preserving ext/disable query params."""
     enabled = sorted(getattr(MCP_SERVER._enabled_extensions, "data", set()))
+    disabled = sorted(getattr(MCP_SERVER._disabled_groups, "data", set()))
+    parts = []
     if enabled:
-        return f"/mcp?ext={','.join(enabled)}"
+        parts.append(f"ext={','.join(enabled)}")
+    if disabled:
+        parts.append(f"disable={','.join(disabled)}")
+    if parts:
+        return f"/mcp?{'&'.join(parts)}"
     return "/mcp"
 
 

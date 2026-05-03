@@ -237,13 +237,21 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.mcp_server: "McpServer" = getattr(server, "mcp_server")
         super().__init__(request, client_address, server)
 
+    def _parse_csv_query_param(self, path: str, key: str) -> set[str]:
+        """Parse a comma-separated query param into a normalized set."""
+        query = parse_qs(urlparse(path).query)
+        value = query.get(key, [""])[0]
+        if not value:
+            return set()
+        return {item.strip() for item in value.split(",") if item.strip()}
+
     def _parse_extensions(self, path: str) -> set[str]:
         """Parse ?ext=dbg,foo query param into set of enabled extensions"""
-        query = parse_qs(urlparse(path).query)
-        ext_param = query.get("ext", [""])[0]
-        if not ext_param:
-            return set()
-        return {e.strip() for e in ext_param.split(",") if e.strip()}
+        return self._parse_csv_query_param(path, "ext")
+
+    def _parse_disabled_groups(self, path: str) -> set[str]:
+        """Parse ?disable=slow,expensive query param into set of disabled groups"""
+        return self._parse_csv_query_param(path, "disable")
 
     def log_message(self, format, *args):
         """Override to suppress default logging or customize"""
@@ -440,9 +448,11 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_error(400, f"No active SSE connection found for session {session_id}")
             return
 
-        # Parse extensions from query params and store in thread-local
+        # Parse query params and store in thread-local
         extensions = self._parse_extensions(self.path)
+        disabled_groups = self._parse_disabled_groups(self.path)
         setattr(self.mcp_server._enabled_extensions, "data", extensions)
+        setattr(self.mcp_server._disabled_groups, "data", disabled_groups)
         setattr(self.mcp_server._transport_session_id, "data", f"sse:{session_id}")
         set_current_request_external_base_url(
             _derive_external_base_url(
@@ -458,6 +468,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             response = self.mcp_server.registry.dispatch(body)
         finally:
             setattr(self.mcp_server._enabled_extensions, "data", set())
+            setattr(self.mcp_server._disabled_groups, "data", set())
             setattr(self.mcp_server._protocol_version, "data", None)
             setattr(self.mcp_server._transport_session_id, "data", None)
             set_current_request_external_base_url(None)
@@ -506,9 +517,11 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                     )
                     self.mcp_server.register_http_session(mcp_session_id)
 
-        # Parse extensions from query params and store in thread-local
+        # Parse query params and store in thread-local
         extensions = self._parse_extensions(self.path)
+        disabled_groups = self._parse_disabled_groups(self.path)
         setattr(self.mcp_server._enabled_extensions, "data", extensions)
+        setattr(self.mcp_server._disabled_groups, "data", disabled_groups)
         setattr(
             self.mcp_server._transport_session_id,
             "data",
@@ -528,6 +541,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             response = self.mcp_server.registry.dispatch(body)
         finally:
             setattr(self.mcp_server._enabled_extensions, "data", set())
+            setattr(self.mcp_server._disabled_groups, "data", set())
             setattr(self.mcp_server._protocol_version, "data", None)
             setattr(self.mcp_server._transport_session_id, "data", None)
             set_current_request_external_base_url(None)
@@ -549,7 +563,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             send_response(200, json.dumps(response).encode("utf-8"))
 
 class McpServer:
-    def __init__(self, name: str, version = "1.0.0", *, extensions: dict[str, set[str]] | None = None):
+    def __init__(self, name: str, version = "1.0.0", *, extensions: dict[str, set[str]] | None = None, disabled_groups: dict[str, set[str]] | None = None):
         self.name = name
         self.version = version
         self.cors_allowed_origins: Callable[[str], bool] | list[str] | str | None = self.cors_localhost
@@ -567,7 +581,9 @@ class McpServer:
         self._protocol_version = threading.local()
         self._transport_session_id = threading.local()
         self._enabled_extensions = threading.local()  # set[str] per request
+        self._disabled_groups = threading.local()  # set[str] per request
         self._extensions_registry = extensions if extensions is not None else {}  # group -> set of tool names
+        self._disabled_groups_registry = disabled_groups if disabled_groups is not None else {}  # group -> set of tool names
         self.require_streamable_http_session = False
 
         # Register MCP protocol methods with correct names
@@ -748,12 +764,15 @@ class McpServer:
     def _mcp_tools_list(self, _meta: dict | None = None) -> dict:
         """MCP tools/list method"""
         enabled = getattr(self._enabled_extensions, "data", set())
+        disabled = getattr(self._disabled_groups, "data", set())
         tools = []
         for func_name, func in self.tools.methods.items():
-            # Check if tool belongs to an extension group
             tool_group = self._get_tool_extension(func_name)
             if tool_group and tool_group not in enabled:
-                continue  # Skip tools from disabled extension groups
+                continue
+            disabled_group = self._get_tool_disabled_group(func_name)
+            if disabled_group and disabled_group in disabled:
+                continue
             tools.append(self._generate_tool_schema(func_name, func))
         return {"tools": tools}
 
@@ -764,14 +783,28 @@ class McpServer:
                 return group
         return None
 
+    def _get_tool_disabled_group(self, func_name: str) -> str | None:
+        """Return disable-group name if tool belongs to one, else None"""
+        for group, tools in self._disabled_groups_registry.items():
+            if func_name in tools:
+                return group
+        return None
+
     def _mcp_tools_call(self, name: str, arguments: dict | None = None, _meta: dict | None = None) -> dict:
         """MCP tools/call method"""
         # Check if tool requires an extension that isn't enabled
         enabled = getattr(self._enabled_extensions, "data", set())
+        disabled = getattr(self._disabled_groups, "data", set())
         tool_group = self._get_tool_extension(name)
         if tool_group and tool_group not in enabled:
             return {
                 "content": [{"type": "text", "text": f"Tool '{name}' requires extension '{tool_group}'. Enable with ?ext={tool_group}"}],
+                "isError": True,
+            }
+        disabled_group = self._get_tool_disabled_group(name)
+        if disabled_group and disabled_group in disabled:
+            return {
+                "content": [{"type": "text", "text": f"Tool '{name}' is disabled by group '{disabled_group}'. Remove it from ?disable={disabled_group} to call this tool"}],
                 "isError": True,
             }
 
