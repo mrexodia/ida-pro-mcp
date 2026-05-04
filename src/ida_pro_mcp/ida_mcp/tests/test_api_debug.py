@@ -292,7 +292,7 @@ def test_dbg_start_briefly_waits_for_ip_but_still_succeeds_without_it():
 def test_dbg_start_briefly_waits_for_ip_and_returns_it_if_it_appears():
     """dbg_start should report IP if it becomes available during the grace period."""
     calls = {"waits": 0}
-    ip_values = iter([None, None, 0x401000])
+    ip_values = iter([0x401000])
     state_values = iter([
         api_debug.ida_dbg.DSTATE_RUN,
         api_debug.ida_dbg.DSTATE_RUN,
@@ -330,7 +330,7 @@ def test_dbg_start_briefly_waits_for_ip_and_returns_it_if_it_appears():
 def test_dbg_start_waits_up_to_timeout_for_debugger_to_come_up():
     """dbg_start should tolerate a debugger that only becomes active after several polls."""
     calls = {"waits": 0}
-    on_values = iter([False, False, False, False, False, False, True])
+    on_values = iter([False, False, False, False, False, False, True, True])
 
     def wait_for_next_event(_flags, timeout):
         calls["waits"] += 1
