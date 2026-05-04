@@ -297,6 +297,9 @@ def _get_debug_start_result() -> DebugControlResult | None:
 # execute_sync boundary, and we need to be sure to turn it back off once the
 # debugger has actually come up (or failed to). _DbgStartBatchHook does both.
 _DBG_START_BATCH_FALLBACK_MS = 30_000  # absolute ceiling on stuck-in-batch state
+_DBG_START_WAIT_TIMEOUT_SEC = 10.0
+_DBG_START_WAIT_POLL_MS = 100
+_DBG_START_IP_GRACE_POLL_COUNT = 5
 
 
 class _DbgStartBatchHook(ida_dbg.DBG_Hooks):
@@ -408,27 +411,25 @@ def dbg_start() -> DebugControlResult:
     start_result = idaapi.start_process("", "", "")
 
     started = _get_debug_start_result()
-    if started is not None and started.get("running") and "ip" not in started:
-        for _ in range(5):
-            ida_dbg.wait_for_next_event(
-                ida_dbg.WFNE_ANY | ida_dbg.WFNE_SUSP | ida_dbg.WFNE_SILENT,
-                1,
-            )
-            waited = _get_debug_start_result()
-            if waited is None:
-                continue
-            started = waited
-            if started.get("suspended") or "ip" in started:
-                return started
-        return started
-
     if started is not None:
+        if started.get("running") and "ip" not in started:
+            for _ in range(_DBG_START_IP_GRACE_POLL_COUNT):
+                ida_dbg.wait_for_next_event(
+                    ida_dbg.WFNE_ANY | ida_dbg.WFNE_SUSP | ida_dbg.WFNE_SILENT,
+                    _DBG_START_WAIT_POLL_MS,
+                )
+                waited = _get_debug_start_result()
+                if waited is None:
+                    continue
+                started = waited
+                if started.get("suspended") or "ip" in started:
+                    break
         return started
 
-    for _ in range(5):
+    for _ in range(int(_DBG_START_WAIT_TIMEOUT_SEC * 1000 / _DBG_START_WAIT_POLL_MS)):
         ida_dbg.wait_for_next_event(
             ida_dbg.WFNE_ANY | ida_dbg.WFNE_SUSP | ida_dbg.WFNE_SILENT,
-            1,
+            _DBG_START_WAIT_POLL_MS,
         )
         started = _get_debug_start_result()
         if started is not None:
