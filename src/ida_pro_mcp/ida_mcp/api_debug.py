@@ -16,11 +16,12 @@ import ida_dbg
 import ida_entry
 import ida_idd
 import ida_idaapi
+import ida_kernwin
 import ida_name
 import idaapi
 
 from .rpc import tool, unsafe, ext
-from .sync import idasync, IDAError
+from .sync import idasync, keep_batch, get_pre_call_batch, IDAError
 from .utils import (
     RegisterValue,
     ThreadRegisters,
@@ -144,7 +145,12 @@ def _get_debug_state_result() -> DebugControlResult:
 def dbg_ensure_active() -> "ida_idd.debugger_t":
     dbg = ida_idd.get_dbg()
     if not dbg or not ida_dbg.is_debugger_on():
-        raise IDAError("Debugger not running")
+        raise IDAError(
+            "Debugger not running. Stop and ask the user to start a debugger "
+            "session (call dbg_start, or have them launch from IDA) before "
+            "retrying. If dbg_start has already been attempted and failed, "
+            "the user must first configure the debugger and target."
+        )
     return dbg
 
 
@@ -283,12 +289,94 @@ def _get_debug_start_result() -> DebugControlResult | None:
     return result
 
 
+# Batch-mode lifecycle for dbg_start.
+#
+# start_process schedules work that runs on the IDA main thread *after* our
+# execute_sync returns. That work can show modal dialogs (e.g. "matching
+# executable names"), so we need batch mode to remain on across the
+# execute_sync boundary, and we need to be sure to turn it back off once the
+# debugger has actually come up (or failed to). _DbgStartBatchHook does both.
+_DBG_START_BATCH_FALLBACK_MS = 30_000  # absolute ceiling on stuck-in-batch state
+
+
+class _DbgStartBatchHook(ida_dbg.DBG_Hooks):
+    """Restore batch mode as soon as the debugger has finished STARTUP.
+
+    "Startup" ends at dbg_process_start / dbg_process_attach — by then any
+    startup dialogs (e.g. "matching executable names") are done, but the
+    user is still inside an active debug session and should see normal
+    dialogs from here on. dbg_process_exit / dbg_process_detach also
+    restore so we don't get stuck if the process dies before fully coming
+    up.
+    """
+
+    def __init__(self, restore_batch: int):
+        super().__init__()
+        self._restore_batch = restore_batch
+        self._done = False
+
+    def dbg_process_start(self, pid, tid, ea, name, base, size):
+        self._restore()
+
+    def dbg_process_attach(self, pid, tid, ea, name, base, size):
+        self._restore()
+
+    def dbg_process_exit(self, pid, tid, ea, exit_code):
+        self._restore()
+
+    def dbg_process_detach(self, pid, tid, ea):
+        self._restore()
+
+    def fallback_restore(self):
+        """Called by the safety timer if no debugger event ever arrives."""
+        self._restore()
+
+    def _restore(self):
+        if self._done:
+            return
+        self._done = True
+        try:
+            self.unhook()
+        except Exception:
+            pass
+        idc.batch(self._restore_batch)
+
+
+_dbg_start_batch_hook: _DbgStartBatchHook | None = None
+
+
+def _arm_dbg_start_batch_hook(restore_batch: int) -> None:
+    """Install the batch-restore hook before start_process is invoked."""
+    global _dbg_start_batch_hook
+    if _dbg_start_batch_hook is not None:
+        _dbg_start_batch_hook.fallback_restore()
+    hook = _DbgStartBatchHook(restore_batch)
+    hook.hook()
+    _dbg_start_batch_hook = hook
+
+    def _fallback():
+        if _dbg_start_batch_hook is hook and not hook._done:
+            hook.fallback_restore()
+        return -1  # don't repeat
+
+    ida_kernwin.register_timer(_DBG_START_BATCH_FALLBACK_MS, _fallback)
+
+
 @ext("dbg")
 @unsafe
 @tool
 @idasync
+@keep_batch
 def dbg_start() -> DebugControlResult:
-    """Start debugger session for current target."""
+    """Start debugger session for current target.
+
+    Requires the user to have selected a debugger (Debugger -> Select debugger)
+    and configured the target (executable path, arguments, attach process,
+    remote host, etc.). If this call fails, do not retry repeatedly. Stop,
+    explain to the user that debugging is not yet configured, and ask them
+    to set up the debugger and dismiss any IDA dialogs (e.g. "matching
+    executable names") before trying again.
+    """
     if len(list_breakpoints()) == 0:
         for i in range(ida_entry.get_entry_qty()):
             ordinal = ida_entry.get_entry_ordinal(i)
@@ -296,11 +384,28 @@ def dbg_start() -> DebugControlResult:
             if addr != ida_idaapi.BADADDR:
                 ida_dbg.add_bpt(addr, 0, idaapi.BPT_SOFT)
 
+    # Arm a DBG_Hooks instance to switch IDA back to its pre-call batch
+    # state once the debugger has actually started. Combined with
+    # @keep_batch on this function, batch mode stays on across the
+    # execute_sync boundary so dialogs the debugger plugin shows during
+    # initialization (e.g. "matching executable names") are auto-handled.
+    # The hook restores on dbg_process_start / _attach / _exit / _detach,
+    # with a register_timer fallback so we never get stuck in batch mode.
+    # Capture the pre-call batch (what the caller had set before the
+    # sync wrapper bumped it to 1) so headless / batch-mode workflows
+    # aren't silently flipped to interactive after dbg_start.
+    pre_call_batch = get_pre_call_batch()
+    if pre_call_batch is None:
+        pre_call_batch = 0
+    _arm_dbg_start_batch_hook(restore_batch=pre_call_batch)
+
+    # start_process is documented as asynchronous; when invoked from the
+    # IDA main thread inside execute_sync the return code is unreliable
+    # (often -1 even on success, because the dbg_process_start event has
+    # not yet been dispatched). Trust the actual debugger state instead,
+    # and only consult the return code as a tiebreaker for the error
+    # message when nothing ever comes up.
     start_result = idaapi.start_process("", "", "")
-    if start_result == -1:
-        raise IDAError("Failed to start debugger")
-    if start_result == 0:
-        raise IDAError("Debugger start was cancelled")
 
     started = _get_debug_start_result()
     if started is not None and started.get("running") and "ip" not in started:
@@ -329,7 +434,19 @@ def dbg_start() -> DebugControlResult:
         if started is not None:
             return started
 
-    raise IDAError("Failed to start debugger")
+    if start_result == 0:
+        raise IDAError(
+            "Debugger start was cancelled. Stop and ask the user to configure "
+            "the debugger (Debugger -> Select debugger, set the target path / "
+            "arguments) and dismiss any IDA dialogs before retrying."
+        )
+    raise IDAError(
+        "Failed to start debugger. Stop and ask the user to verify that a "
+        "debugger is selected (Debugger -> Select debugger), the target is "
+        "configured (executable path / arguments / remote host), and any "
+        "pending IDA dialogs (e.g. \"matching executable names\") have been "
+        "dismissed before retrying."
+    )
 
 
 @ext("dbg")

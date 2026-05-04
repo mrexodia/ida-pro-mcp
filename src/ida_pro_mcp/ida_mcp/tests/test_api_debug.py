@@ -68,6 +68,196 @@ def test_dbg_start_reports_success_when_debugger_is_running_without_ip():
 
 
 @test()
+def test_dbg_start_trusts_debugger_state_over_start_process_return():
+    """start_process is asynchronous and may return -1 from inside execute_sync
+    even when the process actually started; outcome must be decided by the
+    actual debugger state, not the return code."""
+    patches = [
+        _SavedAttr(api_debug, "list_breakpoints", lambda: [object()]),
+        _SavedAttr(api_debug.idaapi, "start_process", lambda *_args: -1),
+        _SavedAttr(api_debug.ida_dbg, "is_debugger_on", lambda: True),
+        _SavedAttr(api_debug.ida_dbg, "get_process_state", lambda: api_debug.ida_dbg.DSTATE_SUSP),
+        _SavedAttr(api_debug.ida_dbg, "get_ip_val", lambda: 0x401000),
+    ]
+    try:
+        result = api_debug.dbg_start()
+        assert result == {
+            "started": True,
+            "state": "suspended",
+            "suspended": True,
+            "ip": "0x401000",
+        }
+    finally:
+        for patch in reversed(patches):
+            patch.restore()
+
+
+@test()
+def test_dbg_start_arms_batch_restore_hook_before_start_process():
+    """dbg_start must arm the batch-mode restore hook BEFORE invoking
+    start_process, so dialogs that fire on the main thread after we exit
+    execute_sync are still suppressed by batch mode. The hook then turns
+    batch mode back off via dbg_process_start / dbg_process_attach /
+    dbg_process_exit / dbg_process_detach."""
+
+    sequence = []
+
+    def fake_arm(restore_batch=0):
+        sequence.append(("arm", restore_batch))
+
+    def fake_start_process(*_args):
+        sequence.append(("start_process",))
+        return 1
+
+    patches = [
+        _SavedAttr(api_debug, "list_breakpoints", lambda: [object()]),
+        _SavedAttr(api_debug, "_arm_dbg_start_batch_hook", fake_arm),
+        _SavedAttr(api_debug.idaapi, "start_process", fake_start_process),
+        _SavedAttr(api_debug.ida_dbg, "is_debugger_on", lambda: True),
+        _SavedAttr(api_debug.ida_dbg, "get_process_state", lambda: api_debug.ida_dbg.DSTATE_SUSP),
+        _SavedAttr(api_debug.ida_dbg, "get_ip_val", lambda: 0x401000),
+    ]
+    try:
+        api_debug.dbg_start()
+        assert sequence[0][0] == "arm", f"hook must arm first, got {sequence}"
+        assert sequence[1] == ("start_process",), (
+            f"start_process must run after the hook is armed, got {sequence}"
+        )
+    finally:
+        for patch in reversed(patches):
+            patch.restore()
+
+
+@test()
+def test_dbg_start_arms_batch_restore_hook_with_pre_call_batch_value():
+    """The batch-restore hook must capture the *pre-call* batch state
+    (what the caller had before the sync wrapper bumped it to 1), so
+    headless / batch-mode workflows aren't silently flipped to
+    interactive after dbg_start. Hard-coding 0 would regress that."""
+
+    captured = []
+
+    def fake_arm(restore_batch=0):
+        captured.append(restore_batch)
+
+    for pre_call in [0, 1]:
+        captured.clear()
+
+        def fake_get_pre_call_batch(_v=pre_call):
+            return _v
+
+        patches = [
+            _SavedAttr(api_debug, "list_breakpoints", lambda: [object()]),
+            _SavedAttr(api_debug, "_arm_dbg_start_batch_hook", fake_arm),
+            _SavedAttr(api_debug, "get_pre_call_batch", fake_get_pre_call_batch),
+            _SavedAttr(api_debug.idaapi, "start_process", lambda *_args: 1),
+            _SavedAttr(api_debug.ida_dbg, "is_debugger_on", lambda: True),
+            _SavedAttr(api_debug.ida_dbg, "get_process_state", lambda: api_debug.ida_dbg.DSTATE_SUSP),
+            _SavedAttr(api_debug.ida_dbg, "get_ip_val", lambda: 0x401000),
+        ]
+        try:
+            api_debug.dbg_start()
+            assert captured == [pre_call], (
+                f"expected hook armed with pre-call batch {pre_call}, got {captured}"
+            )
+        finally:
+            for patch in reversed(patches):
+                patch.restore()
+
+
+@test()
+def test_dbg_start_batch_hook_restores_at_end_of_startup_only():
+    """Batch mode must be restored as soon as the debugger has started up
+    (dbg_process_start / dbg_process_attach) and on cleanup paths
+    (dbg_process_exit / dbg_process_detach), but NOT on later events like
+    dbg_suspend_process — those happen mid-session, after startup, where
+    the user expects normal dialog behavior again."""
+
+    # First, verify dbg_suspend_process does NOT restore batch (would be a
+    # regression: it would keep batch on across the entire debug session).
+    hook = api_debug._DbgStartBatchHook(restore_batch=0)
+    suspend_calls = []
+
+    def fake_batch_no_call(value, _calls=suspend_calls):
+        _calls.append(value)
+        return 1
+
+    patch = _SavedAttr(api_debug.idc, "batch", fake_batch_no_call)
+    try:
+        hook.dbg_suspend_process()
+        assert suspend_calls == [], (
+            "dbg_suspend_process must not restore batch (it fires mid-session)"
+        )
+        assert hook._done is False
+    finally:
+        patch.restore()
+
+    for callback_name, args in [
+        ("dbg_process_start", (1234, 5678, 0x401000, "name", 0x400000, 0x1000)),
+        ("dbg_process_attach", (1234, 5678, 0x401000, "name", 0x400000, 0x1000)),
+        ("dbg_process_exit", (1234, 5678, 0x401000, 0)),
+        ("dbg_process_detach", (1234, 5678, 0x401000)),
+    ]:
+        calls = []
+        unhooked = []
+
+        def fake_batch(value, _calls=calls):
+            _calls.append(("batch", value))
+            return 1
+
+        hook = api_debug._DbgStartBatchHook(restore_batch=0)
+        hook.unhook = lambda _u=unhooked: _u.append(True) or True
+
+        patch = _SavedAttr(api_debug.idc, "batch", fake_batch)
+        try:
+            getattr(hook, callback_name)(*args)
+            assert calls == [("batch", 0)], (
+                f"{callback_name}: expected batch(0), got {calls}"
+            )
+            assert unhooked == [True], (
+                f"{callback_name}: hook should unhook itself"
+            )
+            assert hook._done is True
+
+            # Second invocation must be a no-op (idempotent).
+            calls.clear()
+            unhooked.clear()
+            getattr(hook, callback_name)(*args)
+            assert calls == []
+            assert unhooked == []
+        finally:
+            patch.restore()
+
+
+@test()
+def test_dbg_start_reports_cancelled_when_start_process_returns_zero_and_state_never_comes_up():
+    """When the debugger never comes up and start_process reported a
+    cancellation, dbg_start should surface that specific error."""
+    waits = {"count": 0}
+
+    def wait_for_next_event(_flags, _timeout):
+        waits["count"] += 1
+        return 1
+
+    patches = [
+        _SavedAttr(api_debug, "list_breakpoints", lambda: [object()]),
+        _SavedAttr(api_debug.idaapi, "start_process", lambda *_args: 0),
+        _SavedAttr(api_debug.ida_dbg, "is_debugger_on", lambda: False),
+        _SavedAttr(api_debug.ida_dbg, "wait_for_next_event", wait_for_next_event),
+    ]
+    try:
+        try:
+            api_debug.dbg_start()
+        except IDAError as exc:
+            assert "cancelled" in str(exc).lower()
+        else:
+            raise AssertionError("Expected IDAError when debugger never starts")
+    finally:
+        for patch in reversed(patches):
+            patch.restore()
+
+
+@test()
 def test_dbg_start_waits_briefly_for_first_ip():
     """dbg_start should briefly wait for an initial suspend/IP before falling back to running."""
     calls = {"waits": 0}
