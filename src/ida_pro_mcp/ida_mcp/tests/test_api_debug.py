@@ -97,8 +97,8 @@ def test_dbg_start_arms_batch_restore_hook_before_start_process():
     """dbg_start must arm the batch-mode restore hook BEFORE invoking
     start_process, so dialogs that fire on the main thread after we exit
     execute_sync are still suppressed by batch mode. The hook then turns
-    batch mode back off via dbg_suspend_process / dbg_process_exit /
-    dbg_process_detach."""
+    batch mode back off via dbg_process_start / dbg_process_attach /
+    dbg_process_exit / dbg_process_detach."""
 
     sequence = []
 
@@ -119,13 +119,50 @@ def test_dbg_start_arms_batch_restore_hook_before_start_process():
     ]
     try:
         api_debug.dbg_start()
-        assert sequence[0] == ("arm", 0), f"hook must arm first, got {sequence}"
+        assert sequence[0][0] == "arm", f"hook must arm first, got {sequence}"
         assert sequence[1] == ("start_process",), (
             f"start_process must run after the hook is armed, got {sequence}"
         )
     finally:
         for patch in reversed(patches):
             patch.restore()
+
+
+@test()
+def test_dbg_start_arms_batch_restore_hook_with_pre_call_batch_value():
+    """The batch-restore hook must capture the *pre-call* batch state
+    (what the caller had before the sync wrapper bumped it to 1), so
+    headless / batch-mode workflows aren't silently flipped to
+    interactive after dbg_start. Hard-coding 0 would regress that."""
+
+    captured = []
+
+    def fake_arm(restore_batch=0):
+        captured.append(restore_batch)
+
+    for pre_call in [0, 1]:
+        captured.clear()
+
+        def fake_get_pre_call_batch(_v=pre_call):
+            return _v
+
+        patches = [
+            _SavedAttr(api_debug, "list_breakpoints", lambda: [object()]),
+            _SavedAttr(api_debug, "_arm_dbg_start_batch_hook", fake_arm),
+            _SavedAttr(api_debug, "get_pre_call_batch", fake_get_pre_call_batch),
+            _SavedAttr(api_debug.idaapi, "start_process", lambda *_args: 1),
+            _SavedAttr(api_debug.ida_dbg, "is_debugger_on", lambda: True),
+            _SavedAttr(api_debug.ida_dbg, "get_process_state", lambda: api_debug.ida_dbg.DSTATE_SUSP),
+            _SavedAttr(api_debug.ida_dbg, "get_ip_val", lambda: 0x401000),
+        ]
+        try:
+            api_debug.dbg_start()
+            assert captured == [pre_call], (
+                f"expected hook armed with pre-call batch {pre_call}, got {captured}"
+            )
+        finally:
+            for patch in reversed(patches):
+                patch.restore()
 
 
 @test()

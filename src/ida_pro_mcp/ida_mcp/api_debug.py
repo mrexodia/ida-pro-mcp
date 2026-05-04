@@ -21,7 +21,7 @@ import ida_name
 import idaapi
 
 from .rpc import tool, unsafe, ext
-from .sync import idasync, keep_batch, IDAError
+from .sync import idasync, keep_batch, get_pre_call_batch, IDAError
 from .utils import (
     RegisterValue,
     ThreadRegisters,
@@ -384,14 +384,20 @@ def dbg_start() -> DebugControlResult:
             if addr != ida_idaapi.BADADDR:
                 ida_dbg.add_bpt(addr, 0, idaapi.BPT_SOFT)
 
-    # Arm a DBG_Hooks instance to switch IDA out of batch mode once the
-    # debugger has actually started. Combined with @keep_batch on this
-    # function, batch mode stays on across the execute_sync boundary so
-    # dialogs the debugger plugin shows during initialization (e.g.
-    # "matching executable names") are auto-handled. The hook restores
-    # batch mode on dbg_suspend_process / dbg_process_exit / detach, with
-    # a register_timer fallback so we never get stuck in batch mode.
-    _arm_dbg_start_batch_hook(restore_batch=0)
+    # Arm a DBG_Hooks instance to switch IDA back to its pre-call batch
+    # state once the debugger has actually started. Combined with
+    # @keep_batch on this function, batch mode stays on across the
+    # execute_sync boundary so dialogs the debugger plugin shows during
+    # initialization (e.g. "matching executable names") are auto-handled.
+    # The hook restores on dbg_process_start / _attach / _exit / _detach,
+    # with a register_timer fallback so we never get stuck in batch mode.
+    # Capture the pre-call batch (what the caller had set before the
+    # sync wrapper bumped it to 1) so headless / batch-mode workflows
+    # aren't silently flipped to interactive after dbg_start.
+    pre_call_batch = get_pre_call_batch()
+    if pre_call_batch is None:
+        pre_call_batch = 0
+    _arm_dbg_start_batch_hook(restore_batch=pre_call_batch)
 
     # start_process is documented as asynchronous; when invoked from the
     # IDA main thread inside execute_sync the return code is unreliable
