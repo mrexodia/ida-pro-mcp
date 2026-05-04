@@ -258,8 +258,39 @@ def test_dbg_start_reports_cancelled_when_start_process_returns_zero_and_state_n
 
 
 @test()
-def test_dbg_start_waits_briefly_for_first_ip():
-    """dbg_start should briefly wait for an initial suspend/IP before falling back to running."""
+def test_dbg_start_briefly_waits_for_ip_but_still_succeeds_without_it():
+    """dbg_start may wait briefly for an initial IP/suspend, but must still succeed without it."""
+    calls = {"waits": 0}
+
+    def wait_for_next_event(_flags, timeout):
+        calls["waits"] += 1
+        assert timeout == int(api_debug._DBG_START_WAIT_POLL_MS)
+        return 1
+
+    patches = [
+        _SavedAttr(api_debug, "list_breakpoints", lambda: [object()]),
+        _SavedAttr(api_debug.idaapi, "start_process", lambda *_args: 1),
+        _SavedAttr(api_debug.ida_dbg, "is_debugger_on", lambda: True),
+        _SavedAttr(api_debug.ida_dbg, "get_process_state", lambda: api_debug.ida_dbg.DSTATE_RUN),
+        _SavedAttr(api_debug.ida_dbg, "get_ip_val", lambda: None),
+        _SavedAttr(api_debug.ida_dbg, "wait_for_next_event", wait_for_next_event),
+    ]
+    try:
+        result = api_debug.dbg_start()
+        assert result == {
+            "started": True,
+            "state": "running",
+            "running": True,
+        }
+        assert calls["waits"] == api_debug._DBG_START_IP_GRACE_POLL_COUNT
+    finally:
+        for patch in reversed(patches):
+            patch.restore()
+
+
+@test()
+def test_dbg_start_briefly_waits_for_ip_and_returns_it_if_it_appears():
+    """dbg_start should report IP if it becomes available during the grace period."""
     calls = {"waits": 0}
     ip_values = iter([None, None, 0x401000])
     state_values = iter([
@@ -268,8 +299,9 @@ def test_dbg_start_waits_briefly_for_first_ip():
         api_debug.ida_dbg.DSTATE_SUSP,
     ])
 
-    def wait_for_next_event(_flags, _timeout):
+    def wait_for_next_event(_flags, timeout):
         calls["waits"] += 1
+        assert timeout == int(api_debug._DBG_START_WAIT_POLL_MS)
         return 1
 
     patches = [
@@ -282,18 +314,46 @@ def test_dbg_start_waits_briefly_for_first_ip():
     ]
     try:
         result = api_debug.dbg_start()
-        assert result["started"] is True
-        assert calls["waits"] >= 1
-        if result["state"] == "suspended":
-            assert result.get("suspended") is True
-            if "ip" in result:
-                assert result["ip"] == "0x401000"
-        else:
-            assert result == {
-                "started": True,
-                "state": "running",
-                "running": True,
-            }
+        assert result == {
+            "started": True,
+            "state": "suspended",
+            "suspended": True,
+            "ip": "0x401000",
+        }
+        assert calls["waits"] == 2
+    finally:
+        for patch in reversed(patches):
+            patch.restore()
+
+
+@test()
+def test_dbg_start_waits_up_to_timeout_for_debugger_to_come_up():
+    """dbg_start should tolerate a debugger that only becomes active after several polls."""
+    calls = {"waits": 0}
+    on_values = iter([False, False, False, False, False, False, True])
+
+    def wait_for_next_event(_flags, timeout):
+        calls["waits"] += 1
+        assert timeout == int(api_debug._DBG_START_WAIT_POLL_MS)
+        return 1
+
+    patches = [
+        _SavedAttr(api_debug, "list_breakpoints", lambda: [object()]),
+        _SavedAttr(api_debug.idaapi, "start_process", lambda *_args: 1),
+        _SavedAttr(api_debug.ida_dbg, "is_debugger_on", lambda: next(on_values)),
+        _SavedAttr(api_debug.ida_dbg, "get_process_state", lambda: api_debug.ida_dbg.DSTATE_SUSP),
+        _SavedAttr(api_debug.ida_dbg, "get_ip_val", lambda: 0x401000),
+        _SavedAttr(api_debug.ida_dbg, "wait_for_next_event", wait_for_next_event),
+    ]
+    try:
+        result = api_debug.dbg_start()
+        assert result == {
+            "started": True,
+            "state": "suspended",
+            "suspended": True,
+            "ip": "0x401000",
+        }
+        assert calls["waits"] == 6
     finally:
         for patch in reversed(patches):
             patch.restore()
