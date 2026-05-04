@@ -53,8 +53,17 @@ def _get_tool_timeout_seconds() -> float:
 call_stack = queue.LifoQueue()
 
 
-def _sync_wrapper(ff):
-    """Call a function ff with a specific IDA safety_mode."""
+def _sync_wrapper(ff, keep_batch=False):
+    """Call a function ff with a specific IDA safety_mode.
+
+    If keep_batch=True and ff() returns successfully, batch mode is left on
+    after the wrapper exits. The decorated function is responsible for
+    arranging restoration (typically via a DBG_Hooks callback) so that any
+    asynchronous work scheduled by ff() — e.g. start_process triggering a
+    "matching executable names" dialog after we exit execute_sync — runs
+    while batch mode is still on. On exception, batch mode is always
+    restored before re-raising.
+    """
 
     res_container = queue.Queue()
 
@@ -67,12 +76,15 @@ def _sync_wrapper(ff):
         call_stack.put((ff.__name__))
         # Enable batch mode for all synchronized operations
         old_batch = idc.batch(1)
+        completed = False
         try:
             res_container.put(ff())
+            completed = True
         except Exception as x:
             res_container.put(x)
         finally:
-            idc.batch(old_batch)
+            if not (completed and keep_batch):
+                idc.batch(old_batch)
             call_stack.get()
 
     idaapi.execute_sync(runned, idaapi.MFF_WRITE)
@@ -91,11 +103,14 @@ def _normalize_timeout(value: object) -> float | None:
         return None
 
 
-def sync_wrapper(ff, timeout_override: float | None = None):
+def sync_wrapper(
+    ff, timeout_override: float | None = None, keep_batch: bool = False
+):
     """Wrapper to enable timeout and cancellation during IDA synchronization.
 
     Note: Batch mode is now handled in _sync_wrapper to ensure it's always
-    applied consistently for all synchronized operations.
+    applied consistently for all synchronized operations. Pass keep_batch=True
+    to opt out of the post-call batch restore (see _sync_wrapper docstring).
     """
     # Capture cancel event from thread-local before execute_sync
     cancel_event = get_current_cancel_event()
@@ -125,8 +140,8 @@ def sync_wrapper(ff, timeout_override: float | None = None):
                 sys.setprofile(old_profile)
 
         timed_ff.__name__ = ff.__name__
-        return _sync_wrapper(timed_ff)
-    return _sync_wrapper(ff)
+        return _sync_wrapper(timed_ff, keep_batch=keep_batch)
+    return _sync_wrapper(ff, keep_batch=keep_batch)
 
 
 def idasync(f):
@@ -145,7 +160,8 @@ def idasync(f):
         timeout_override = _normalize_timeout(
             getattr(f, "__ida_mcp_timeout_sec__", None)
         )
-        return sync_wrapper(ff, timeout_override)
+        keep_batch = bool(getattr(f, "__ida_mcp_keep_batch__", False))
+        return sync_wrapper(ff, timeout_override, keep_batch=keep_batch)
 
     return wrapper
 
@@ -168,6 +184,28 @@ def tool_timeout(seconds: float):
         return func
 
     return decorator
+
+
+def keep_batch(func):
+    """Decorator to skip the sync wrapper's post-call batch-mode restore.
+
+    Apply when the tool schedules asynchronous work that runs on the IDA
+    main thread *after* execute_sync exits (e.g. start_process, which
+    triggers the "matching executable names" dialog later). The decorated
+    function MUST arrange batch-mode restoration itself, typically via a
+    DBG_Hooks callback that fires once the asynchronous work has completed,
+    so batch mode is not left on indefinitely.
+
+    Same ordering rule as tool_timeout: place AFTER @idasync (innermost).
+
+        @tool
+        @idasync
+        @keep_batch
+        def my_func(...):
+    """
+
+    setattr(func, "__ida_mcp_keep_batch__", True)
+    return func
 
 
 def is_window_active():
