@@ -18,19 +18,44 @@ NETNODE_AUTOSTART = "$ ida_mcp.autostart"
 
 
 def _get_autostart() -> bool:
-    """Read the autostart preference. Per-IDB > global default > True."""
+    """Read the autostart preference from the IDB. Defaults to True."""
     node = ida_netnode.netnode(NETNODE_AUTOSTART)
     val = node.altval(0)  # 0 = not set, 1 = off, 2 = on
-    if val != 0:
-        return val != 1
+    return val != 1
+
+
+def _apply_global_defaults_to_new_idb():
+    """For new IDA projects (no per-IDB config), initialize from global defaults."""
+    import json
+    import os
+
+    if sys.platform == "win32":
+        user_dir = os.path.join(os.environ.get("APPDATA", ""), "Hex-Rays", "IDA Pro")
+    else:
+        user_dir = os.path.join(os.path.expanduser("~"), ".idapro")
+    defaults_path = os.path.join(user_dir, "mcp", "defaults.json")
+
     try:
-        from .ida_mcp.discovery import read_global_defaults
-        defaults = read_global_defaults()
-        if "autostart" in defaults:
-            return bool(defaults["autostart"])
-    except Exception:
-        pass
-    return True
+        with open(defaults_path, encoding="utf-8") as f:
+            defaults = json.load(f)
+        if not isinstance(defaults, dict):
+            return
+    except (OSError, json.JSONDecodeError):
+        return
+
+    for key in ("cors_policy", "enabled_tools"):
+        if key not in defaults:
+            continue
+        if ida_netnode.netnode(f"$ ida_mcp.{key}").getblob(0, "C") is not None:
+            continue
+        node = ida_netnode.netnode(f"$ ida_mcp.{key}", 0, True)
+        node.setblob(json.dumps(defaults[key]).encode("utf-8"), 0, "C")
+
+    if "autostart" in defaults:
+        if ida_netnode.netnode(NETNODE_AUTOSTART).altval(0) == 0:
+            ida_netnode.netnode(NETNODE_AUTOSTART, 0, True).altset(
+                0, 2 if defaults["autostart"] else 1
+            )
 
 
 def _set_autostart(enabled: bool):
@@ -212,6 +237,8 @@ class MCP(idaapi.plugin_t):
             self._unregister_instance()
             self.mcp.stop()
             self.mcp = None
+
+        _apply_global_defaults_to_new_idb()
 
         # HACK: ensure fresh load of ida_mcp package
         unload_package("ida_mcp")
