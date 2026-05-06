@@ -15,6 +15,42 @@ import tempfile
 from typing import TypedDict
 
 
+def get_global_defaults_path() -> str:
+    """Return the path to the global defaults file."""
+    return os.path.join(_get_ida_user_dir(), "mcp", "defaults.json")
+
+
+def read_global_defaults() -> dict:
+    """Read global defaults file. Returns {} if missing or corrupt."""
+    path = get_global_defaults_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def write_global_defaults(data: dict) -> None:
+    """Atomically write global defaults."""
+    path = get_global_defaults_path()
+    dir_ = os.path.dirname(path)
+    os.makedirs(dir_, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_, prefix=".tmp_", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 class InstanceInfo(TypedDict):
     host: str
     port: int

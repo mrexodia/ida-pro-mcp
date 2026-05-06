@@ -18,10 +18,19 @@ NETNODE_AUTOSTART = "$ ida_mcp.autostart"
 
 
 def _get_autostart() -> bool:
-    """Read the autostart preference from the IDB. Defaults to True."""
+    """Read the autostart preference. Per-IDB > global default > True."""
     node = ida_netnode.netnode(NETNODE_AUTOSTART)
     val = node.altval(0)  # 0 = not set, 1 = off, 2 = on
-    return val != 1
+    if val != 0:
+        return val != 1
+    try:
+        from .ida_mcp.discovery import read_global_defaults
+        defaults = read_global_defaults()
+        if "autostart" in defaults:
+            return bool(defaults["autostart"])
+    except Exception:
+        pass
+    return True
 
 
 def _set_autostart(enabled: bool):
@@ -152,8 +161,14 @@ class MCP(idaapi.plugin_t):
             hotkey = hotkey.replace("Alt", "Option")
 
         self.mcp: "ida_mcp.rpc.McpServer | None" = None
-        self.host = self.DEFAULT_HOST
-        self.port = self.DEFAULT_PORT
+        try:
+            from .ida_mcp.discovery import read_global_defaults
+
+            _defaults = read_global_defaults()
+        except Exception:
+            _defaults = {}
+        self.host = _defaults.get("host", self.DEFAULT_HOST)
+        self.port = _defaults.get("port", self.DEFAULT_PORT)
         self.autostart = _get_autostart()
 
         if self.autostart and ida_kernwin.is_idaq():
