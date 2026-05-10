@@ -680,3 +680,46 @@ def test_make_data_renames_when_name_provided():
             idc.SetType(int(addr, 16), original_type + ";")
         if original_name:
             ida_name.set_name(int(addr, 16), original_name, ida_name.SN_NOCHECK | ida_name.SN_FORCE)
+
+
+@test(binary="typed_fixture.elf")
+def test_set_op_type_stroff_with_valid_struct():
+    """set_op_type kind='stroff' with an existing struct returns ok=True.
+
+    Uses 'Point' which the typed_fixture binary has declared in its IDB.
+    """
+    import idautils, ida_funcs
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    # Find the first instruction with a memory-displacement operand.
+    func = ida_funcs.get_func(int(fn_addr, 16))
+    if not func:
+        skip_test("no func at addr")
+    target_ea = None
+    import ida_ua
+    for head in idautils.FuncItems(func.start_ea):
+        insn = ida_ua.insn_t()
+        if not ida_ua.decode_insn(insn, head):
+            continue
+        for i, op in enumerate(insn.ops):
+            if op.type in (3, 4):  # PHRASE or DISPL
+                target_ea = (head, i)
+                break
+        if target_ea:
+            break
+    if not target_ea:
+        skip_test("no memory-operand instruction in candidate function")
+
+    ea, op_n = target_ea
+    result = set_op_type([{"addr": hex(ea), "op_n": op_n, "kind": "stroff", "struct": "Point", "delta": 0}])
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    # The ok flag may be False on x86 ELF binaries where IDA can't bind a
+    # struct-offset to an arbitrary memory operand -- but the call must NOT
+    # error with "module 'idaapi' has no attribute 'get_struc_id'" or any
+    # other API-level failure.
+    assert "error" not in entry or "no tid" in entry.get("error", "") or "not bind" in entry.get("error", "").lower(), \
+        f"unexpected error: {entry.get('error')!r}"

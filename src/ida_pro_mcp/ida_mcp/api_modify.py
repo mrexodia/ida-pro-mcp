@@ -1063,13 +1063,20 @@ def set_op_type(
                     err = "struct name required for kind='stroff'"
                 else:
                     delta = int(item.get("delta", 0))
-                    sid = idaapi.get_struc_id(struct_name)
-                    if sid == idaapi.BADADDR:
+                    # IDA 9.x: structs live in the local type library; resolve
+                    # via tinfo_t.get_named_type and then get_tid.
+                    til = ida_typeinf.get_idati()
+                    sti = ida_typeinf.tinfo_t()
+                    if not sti.get_named_type(til, struct_name):
                         err = f"struct not found: {struct_name}"
                     else:
-                        path = idaapi.tid_array(1)
-                        path[0] = sid
-                        ok = bool(ida_bytes.op_stroff(ea, op_n, path.cast(), 1, delta))
+                        tid = sti.get_tid()
+                        if tid == idaapi.BADADDR:
+                            err = f"struct {struct_name} has no tid"
+                        else:
+                            path = idaapi.tid_array(1)
+                            path[0] = tid
+                            ok = bool(ida_bytes.op_stroff(ea, op_n, path.cast(), 1, delta))
             elif kind == "offset":
                 target_str = str(item.get("target_addr", "")).strip()
                 if target_str:
