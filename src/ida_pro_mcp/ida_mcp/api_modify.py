@@ -935,8 +935,8 @@ class ForceRecompileResult(TypedDict, total=False):
 @idasync
 def force_recompile(
     items: Annotated[
-        list[ForceRecompileOp] | ForceRecompileOp | str | None,
-        "List of {addr: function-entry-EA} ops, a single op, '*' for all functions, or omit to recompile all.",
+        list[ForceRecompileOp] | ForceRecompileOp,
+        "List of {addr: function-entry-EA} ops, or a single op. Omit / pass empty list to recompile every function.",
     ] = None,
 ) -> dict:
     """Invalidate the Hex-Rays decompile cache for one or more functions.
@@ -948,10 +948,12 @@ def force_recompile(
     targets: list[int] = []
     invalidate_all = False
 
-    if items is None or items == "*":
+    if items is None:
         invalidate_all = True
     elif isinstance(items, dict):
         items = [items]
+    elif isinstance(items, list) and len(items) == 0:
+        invalidate_all = True
 
     if invalidate_all:
         targets = list(idautils.Functions())
@@ -1025,26 +1027,17 @@ def set_op_type(
         "Operand-typing ops. Equivalent to GUI 'Y' (struct offset) or 'O' (offset) operations.",
     ],
 ) -> list[SetOpTypeResult]:
-    """Set the type of one or more instruction operands.
+    """Set the type of an instruction operand. GUI 'Y' / 'O' / '#' equivalent.
 
-    The Hex-Rays decompiler picks how to express a memory access (raw integer,
-    `&array[N]+offset`, `struct.field`, `g_symbol[index]`, ...) based on
-    operand metadata at the actual instruction. When two named globals are
-    contiguous, the decompiler often picks the "earlier symbol + offset"
-    form even when the access conceptually belongs to the later symbol; this
-    tool fixes that by tagging the operand with the desired interpretation.
+    Tags an operand at a specific instruction with a desired interpretation.
+    Useful when the decompiler picks an awkward expression form (e.g., the
+    "earlier-named-symbol + offset" form for contiguous globals).
 
-    Supported `kind` values:
-    - `"stroff"`: convert operand to a struct-offset reference. Requires
-      `struct` (struct type name) and optional `delta` (byte offset within
-      the struct). Equivalent to the GUI 'Y' shortcut.
-    - `"offset"`: mark the operand as an absolute offset / pointer. Optional
-      `target_addr` lets the decompiler resolve the operand to a specific
-      named symbol.
-    - `"hex" | "dec" | "char" | "binary" | "octal"`: format the operand as
-      the named numeric base / character.
-    - `"stkvar"`: convert operand to a stack variable reference (only valid
-      inside a function with a defined frame).
+    `kind` values:
+    - `"stroff"`: struct-offset reference. Requires `struct`, optional `delta`.
+    - `"offset"`: absolute offset / pointer. Optional `target_addr`.
+    - `"hex" | "dec" | "char" | "binary" | "octal"`: numeric format.
+    - `"stkvar"`: stack-variable reference (function-local).
     """
     if isinstance(items, dict):
         items = [items]
