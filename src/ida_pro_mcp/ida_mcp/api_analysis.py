@@ -13,7 +13,10 @@ import ida_idaapi
 import ida_xref
 import ida_ua
 import ida_name
-from .rpc import tool
+from .rpc import tool, MCP_UNSAFE
+
+# Mark disasm as unsafe to prevent schema validation errors on large output
+MCP_UNSAFE.add("disasm")
 from .sync import idasync, tool_timeout, IDAError
 from .utils import (
     parse_address,
