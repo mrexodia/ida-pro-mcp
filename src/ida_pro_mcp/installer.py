@@ -269,19 +269,36 @@ def _get_mcp_servers_view(
 
 
 def _resolve_client_targets(
-    configs: dict[str, tuple[str, str]], only: list[str] | None
+    configs: dict[str, tuple[str, str]],
+    only: list[str] | None,
+    *,
+    project: bool,
 ) -> dict[str, tuple[str, str]]:
     if only is None:
         return configs
 
     available = list(configs.keys())
+    other_scope_configs = (
+        get_global_configs() if project else get_project_configs(os.getcwd())
+    )
+    other_scope_name = "global" if project else "project"
     filtered: dict[str, tuple[str, str]] = {}
     for target_name in only:
         resolved = resolve_client_name(target_name, available)
         if resolved is None:
-            print(
-                f"Unknown client: '{target_name}'. Use --list-clients to see available targets."
+            other_scope_match = resolve_client_name(
+                target_name, list(other_scope_configs.keys())
             )
+            if other_scope_match is not None:
+                print(
+                    f"Client '{other_scope_match}' is not supported for "
+                    f"--scope {'project' if project else 'global'}. "
+                    f"Use --scope {other_scope_name} for this target."
+                )
+            else:
+                print(
+                    f"Unknown client: '{target_name}'. Use --list-clients to see available targets."
+                )
         elif resolved not in filtered:
             filtered[resolved] = configs[resolved]
     return filtered
@@ -345,7 +362,7 @@ def install_mcp_servers(
         print(f"Unsupported platform: {sys.platform}")
         return
 
-    configs = _resolve_client_targets(configs, only)
+    configs = _resolve_client_targets(configs, only, project=project)
     if not configs:
         return
 
