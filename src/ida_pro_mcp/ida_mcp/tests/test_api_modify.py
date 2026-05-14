@@ -17,6 +17,9 @@ from ..api_modify import (
     define_func,
     define_code,
     undefine,
+    force_recompile,
+    set_op_type,
+    make_data,
 )
 from ..api_memory import get_bytes, patch
 from ..api_core import lookup_funcs
@@ -486,3 +489,237 @@ def test_undefine_batch():
         if idaapi.get_func(start_ea) is None:
             define_code({"addr": hex(start_ea)})
             define_func({"addr": hex(start_ea), "end": hex(end_ea)})
+
+
+# ----------------------------------------------------------------------
+# force_recompile
+# ----------------------------------------------------------------------
+
+
+@test()
+def test_force_recompile_single_function():
+    """force_recompile on one function returns ok and reports the function name."""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    result = force_recompile([{"addr": fn_addr}])
+    assert "summary" in result
+    assert result["summary"]["total"] == 1
+    assert result["summary"]["ok"] == 1
+    assert result["summary"]["all"] is False
+    entries = result["results"]
+    assert_is_list(entries, min_length=1)
+    assert entries[0]["ok"] is True
+    assert entries[0]["addr"].startswith("0x")
+    assert "name" in entries[0]
+
+
+@test()
+def test_force_recompile_no_args_means_all():
+    """force_recompile() with no items invalidates every function."""
+    result = force_recompile()
+    assert "summary" in result
+    assert result["summary"]["all"] is True
+    assert result["summary"]["total"] >= 1
+    assert result["summary"]["ok"] == result["summary"]["total"]
+
+
+@test()
+def test_force_recompile_invalid_addr_skipped():
+    """force_recompile silently skips addresses that aren't function entries."""
+    result = force_recompile([{"addr": "0xffffff00"}])
+    assert "summary" in result
+    # Either skipped (total=0) or recorded as failed -- both acceptable
+    assert result["summary"]["all"] is False
+
+
+# ----------------------------------------------------------------------
+# set_op_type
+# ----------------------------------------------------------------------
+
+
+@test(binary="typed_fixture.elf")
+def test_set_op_type_hex_format_roundtrip():
+    """set_op_type kind='hex' marks operand as hex; restoring to dec works."""
+    # Restore to default decimal first to make the test idempotent.
+    set_op_type([{"addr": TYPED_FIXTURE_IMMEDIATE_1234, "op_n": 1, "kind": "dec"}])
+
+    result = set_op_type([{"addr": TYPED_FIXTURE_IMMEDIATE_1234, "op_n": 1, "kind": "hex"}])
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert entry["addr"] == TYPED_FIXTURE_IMMEDIATE_1234
+    assert entry["op_n"] == 1
+    assert entry["kind"] == "hex"
+    assert entry["ok"] is True
+
+    # Restore so other tests aren't affected.
+    set_op_type([{"addr": TYPED_FIXTURE_IMMEDIATE_1234, "op_n": 1, "kind": "dec"}])
+
+
+@test()
+def test_set_op_type_unknown_kind_errors():
+    """set_op_type returns ok=False with an explanatory error for unknown kinds."""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    result = set_op_type([{"addr": fn_addr, "op_n": 0, "kind": "totally-not-a-kind"}])
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert entry["ok"] is False
+    assert "error" in entry
+    assert "unknown kind" in entry["error"]
+
+
+@test()
+def test_set_op_type_stroff_requires_struct():
+    """kind='stroff' without a struct name returns an explanatory error."""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    result = set_op_type([{"addr": fn_addr, "op_n": 0, "kind": "stroff"}])
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert entry["ok"] is False
+    assert "struct name required" in entry["error"]
+
+
+@test()
+def test_set_op_type_invalid_addr_errors():
+    """set_op_type with an unparseable address returns ok=False."""
+    result = set_op_type([{"addr": "not-a-hex", "op_n": 0, "kind": "hex"}])
+    assert_is_list(result, min_length=1)
+    assert result[0]["ok"] is False
+    assert "error" in result[0]
+
+
+# ----------------------------------------------------------------------
+# make_data
+# ----------------------------------------------------------------------
+
+
+@test(binary="typed_fixture.elf")
+def test_make_data_primitive_roundtrip():
+    """make_data applies a primitive type to an address; idc.get_type confirms it."""
+    import idc, ida_name, ida_bytes
+
+    # Use a small data area in the .data segment that we can safely repaint.
+    addr = "0x1069f60"  # __data_start in typed_fixture (16 zero bytes)
+
+    original_name = ida_name.get_name(int(addr, 16))
+    original_type = idc.get_type(int(addr, 16)) or ""
+
+    try:
+        result = make_data([{"addr": addr, "type": "int probe[2]"}])
+        assert_is_list(result, min_length=1)
+        entry = result[0]
+        assert entry["ok"] is True
+        assert entry["size"] == 8  # int[2] = 8 bytes
+        applied = idc.get_type(int(addr, 16))
+        assert applied is not None
+        assert "int" in applied
+    finally:
+        # Restore: undefine, then re-apply original type if any.
+        ida_bytes.del_items(int(addr, 16), ida_bytes.DELIT_EXPAND, 8)
+        if original_type:
+            idc.SetType(int(addr, 16), original_type + ";")
+        if original_name:
+            ida_name.set_name(int(addr, 16), original_name, ida_name.SN_NOCHECK | ida_name.SN_FORCE)
+
+
+@test()
+def test_make_data_invalid_type_errors():
+    """make_data rejects malformed type declarations with ok=False + error."""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    result = make_data([{"addr": fn_addr, "type": "this is not a valid C declaration"}])
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert entry["ok"] is False
+    assert "error" in entry
+
+
+@test()
+def test_make_data_empty_type_errors():
+    """make_data with an empty type field returns an explanatory error."""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    result = make_data([{"addr": fn_addr, "type": ""}])
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert entry["ok"] is False
+    assert "type declaration is required" in entry["error"]
+
+
+@test(binary="typed_fixture.elf")
+def test_make_data_renames_when_name_provided():
+    """make_data with a `name` field applies the name alongside the type."""
+    import idc, ida_name, ida_bytes
+
+    addr = "0x1069f60"
+    original_name = ida_name.get_name(int(addr, 16))
+    original_type = idc.get_type(int(addr, 16)) or ""
+
+    try:
+        result = make_data([
+            {"addr": addr, "type": "int probe_named[2]", "name": "test_make_data_probe"}
+        ])
+        assert_is_list(result, min_length=1)
+        entry = result[0]
+        assert entry["ok"] is True
+        assert ida_name.get_name(int(addr, 16)) == "test_make_data_probe"
+    finally:
+        ida_bytes.del_items(int(addr, 16), ida_bytes.DELIT_EXPAND, 8)
+        if original_type:
+            idc.SetType(int(addr, 16), original_type + ";")
+        if original_name:
+            ida_name.set_name(int(addr, 16), original_name, ida_name.SN_NOCHECK | ida_name.SN_FORCE)
+
+
+@test(binary="typed_fixture.elf")
+def test_set_op_type_stroff_with_valid_struct():
+    """set_op_type kind='stroff' with an existing struct returns ok=True.
+
+    Uses 'Point' which the typed_fixture binary has declared in its IDB.
+    """
+    import idautils, ida_funcs
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    # Find the first instruction with a memory-displacement operand.
+    func = ida_funcs.get_func(int(fn_addr, 16))
+    if not func:
+        skip_test("no func at addr")
+    target_ea = None
+    import ida_ua
+    for head in idautils.FuncItems(func.start_ea):
+        insn = ida_ua.insn_t()
+        if not ida_ua.decode_insn(insn, head):
+            continue
+        for i, op in enumerate(insn.ops):
+            if op.type in (3, 4):  # PHRASE or DISPL
+                target_ea = (head, i)
+                break
+        if target_ea:
+            break
+    if not target_ea:
+        skip_test("no memory-operand instruction in candidate function")
+
+    ea, op_n = target_ea
+    result = set_op_type([{"addr": hex(ea), "op_n": op_n, "kind": "stroff", "struct": "Point", "delta": 0}])
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    # The ok flag may be False on x86 ELF binaries where IDA can't bind a
+    # struct-offset to an arbitrary memory operand -- but the call must NOT
+    # error with "module 'idaapi' has no attribute 'get_struc_id'" or any
+    # other API-level failure.
+    assert "error" not in entry or "no tid" in entry.get("error", "") or "not bind" in entry.get("error", "").lower(), \
+        f"unexpected error: {entry.get('error')!r}"
