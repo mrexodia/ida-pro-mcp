@@ -239,28 +239,25 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         return cast(HTTPServer, self.server).server_port
 
     def _check_origin(self) -> bool:
+        """Validate Origin for config POST requests.
+
+        Delegates to the zeromcp ``_check_api_request`` which already
+        handles non-loopback bindings (LAN) and respects the configured
+        CORS policy.  When the server is bound to 0.0.0.0 the Host
+        check passes for any client; the Origin check still enforces
+        the CORS policy so ``unrestricted`` is needed for browser-based
+        LAN config access.
         """
-        Prevents CSRF and DNS rebinding attacks by ensuring POST requests
-        originate from pages served by this server, not external websites.
-        """
-        origin = self.headers.get("Origin")
-        port = self.server_port
-        if origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
-            self.send_error(403, "Invalid Origin")
-            return False
-        return True
+        return self._check_api_request()
 
     def _check_host(self) -> bool:
+        """Validate Host header for config page access.
+
+        Delegates to ``_check_api_request`` so the same rules apply as
+        for MCP API calls: loopback-bound servers only accept loopback
+        Host headers; non-loopback servers (0.0.0.0) accept any Host.
         """
-        Prevents DNS rebinding attacks where an attacker's domain (e.g., evil.com)
-        resolves to 127.0.0.1, allowing their page to read localhost resources.
-        """
-        host = self.headers.get("Host")
-        port = self.server_port
-        if host not in (f"127.0.0.1:{port}", f"localhost:{port}"):
-            self.send_error(403, "Invalid Host")
-            return False
-        return True
+        return self._check_api_request()
 
     def _send_html(self, status: int, text: str):
         """
