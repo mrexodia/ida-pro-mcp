@@ -355,7 +355,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "idapro", specifier = ">=0.0.7" },
+    { name = "idapro", specifier = ">=0.0.9" },
     { name = "tomli-w", specifier = ">=1.0.0" },
 ]
 
@@ -368,11 +368,11 @@ dev = [
 
 [[package]]
 name = "idapro"
-version = "0.0.7"
+version = "0.0.9"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/da/65/b49019b4713b852349b6516b786c8542930aca7701bb2552b18f4e4a4e25/idapro-0.0.7.tar.gz", hash = "sha256:0b2e184b19e4d8404ea48b1f17f39b21b054931315940ee9716ef8559144988f", size = 966886, upload-time = "2025-10-29T09:07:21.695Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/c9/7529ea6f5ecc7272342e85b3c7a8087646f347a9052b2e34eab71a3667bc/idapro-0.0.9.tar.gz", hash = "sha256:8a043a89ce507533e502e8f6581a4fb58bade25e8fa6049545b79ec636792e35", size = 986315, upload-time = "2026-05-12T15:03:50.068Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fb/5d/6e6565d9a1d6ecf1b48a2bea326f0e3dbe4c3199adfc0a5456b83d235f99/idapro-0.0.7-py3-none-any.whl", hash = "sha256:3cb8d48ac21a19e6a0ef65eacd0005a1f9c40a264a7bcb675914eaa20c6e1371", size = 1999440, upload-time = "2025-10-29T09:07:19.998Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/d9/a455c08b162ec8b16eb9020eb96a6404c2cc4f87ba3b74b8401647b45fe1/idapro-0.0.9-py3-none-any.whl", hash = "sha256:9518ead4d84833a92e6085e9c8204e87ab4b3ae1800267d6c3dc579822311405", size = 2042736, upload-time = "2026-05-12T15:03:48.22Z" },
 ]
 
 [[package]]

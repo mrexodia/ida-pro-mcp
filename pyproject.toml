@@ -19,7 +19,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "idapro>=0.0.7",
+    "idapro>=0.0.9",
     "tomli-w>=1.0.0",
 ]
 

@@ -1,0 +1,17 @@
+{
+  "name": "ida-pro",
+  "version": "0.1.0",
+  "description": "AI-powered reverse engineering assistant that bridges IDA Pro with language models through MCP.",
+  "mcpServers": {
+    "idalib": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "idalib-mcp",
+        "--stdio"
+      ]
+    }
+  }
+}

@@ -37,9 +37,35 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
   - [Zed](https://zed.dev/)
   - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `ida-pro-mcp --config` to get the JSON config for your client.
 
-## Installation
+## Installation (Claude Code)
 
-Install the latest version of the IDA Pro MCP package:
+To install the headless IDA Pro MCP in Claude Code:
+
+```bash
+claude plugin marketplace add mrexodia/claude-marketplace
+claude plugin install ida-pro-mcp@mrexodia
+```
+
+To update to the latest version:
+
+```bash
+claude plugin update ida-pro-mcp@mrexodia
+```
+
+**Note**: This requires having idalib activated globally and [uv](https://astral.sh/uv) installed:
+
+```bash
+# windows
+uv run "C:\Program Files\IDA Professional 9.3\idalib\python\py-activate-idalib.py"
+# macos
+uv run "/Applications/IDA Professional 9.3.app/Contents/MacOS/idalib/python/py-activate-idalib.py"
+```
+
+## Installation (GUI)
+
+**Note**: the MCP plugin is no longer recommended and will eventually be deprecated. Use `idalib-mcp` instead.
+
+If you want to configure the MCP server manually from the IDA GUI:
 
 ```sh
 pip uninstall ida-pro-mcp
@@ -53,10 +79,6 @@ ida-pro-mcp --install
 ```
 
 **Important**: Make sure you completely restart IDA and your MCP client for the installation to take effect. Some clients (like Claude) run in the background and need to be quit from the tray icon.
-
-https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
-
-_Note_: You need to load a binary in IDA before the plugin menu will show up.
 
 ## Prompt Engineering
 
@@ -138,7 +160,7 @@ You can run an SSE server to connect to the user interface like this:
 uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
 ```
 
-After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can also run a headless MCP server. You can start with an initial binary:
+After installing [`idalib`](https://docs.hex-rays.com/core/idalib/getting-started) you can also run a headless MCP server. You can start with an initial binary:
 
 ```sh
 uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
@@ -361,22 +383,6 @@ http://127.0.0.1:13337/mcp?ext=dbg
 - **Consistent error handling**: All batch operations return `[{..., error: null|string}, ...]`
 - **Cursor-based pagination**: Search functions return `cursor: {next: offset}` or `{done: true}` (default limit: 1000, enforced max: 10000 to prevent token overflow)
 - **Performance**: Strings are cached with MD5-based invalidation to avoid repeated `build_strlist` calls in large projects
-
-## Comparison with other MCP servers
-
-There are a few IDA Pro MCP servers floating around, but I created my own for a few reasons:
-
-1. Installation should be fully automated.
-2. The architecture of other plugins make it difficult to add new functionality quickly (too much boilerplate of unnecessary dependencies).
-3. Learning new technologies is fun!
-
-If you want to check them out, here is a list (in the order I discovered them):
-
-- https://github.com/taida957789/ida-mcp-server-plugin (SSE protocol only, requires installing dependencies in IDAPython).
-- https://github.com/fdrechsler/mcp-server-idapro (MCP Server in TypeScript, excessive boilerplate required to add new functionality).
-- https://github.com/MxIris-Reverse-Engineering/ida-mcp-server (custom socket protocol, boilerplate).
-
-Feel free to open a PR to add your IDA Pro MCP server here.
 
 ## Development
 
