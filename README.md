@@ -280,6 +280,7 @@ Worker controls:
 
 ## Modification Operations
 
+- `add_bookmark(addr, name, prefix)`: Add or replace the IDA bookmark at an address; set `prefix=""` for no prefix.
 - `set_comments(items)`: Set comments at address(es) in both disassembly and decompiler views.
 - `patch_asm(items)`: Patch assembly instructions at address(es).
 - `declare_type(decls)`: Declare C type(s) in the local type library.
