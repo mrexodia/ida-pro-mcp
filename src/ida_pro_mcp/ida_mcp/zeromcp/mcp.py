@@ -1123,6 +1123,13 @@ class McpServer:
             param = sig.parameters.get(param_name)
             if not param or param.default is inspect.Parameter.empty:
                 required.append(param_name)
+            else:
+                try:
+                    json.dumps(param.default)
+                except TypeError:
+                    pass
+                else:
+                    properties[param_name]["default"] = param.default
 
         schema: dict[str, Any] = {
             "name": func_name,
