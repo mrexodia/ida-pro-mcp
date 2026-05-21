@@ -18,6 +18,7 @@ from .utils import (
     parse_address,
     decompile_checked,
     refresh_decompiler_ctext,
+    hexrays_local_var_exists,
     CommentOp,
     CommentAppendOp,
     AsmPatchOp,
@@ -300,6 +301,41 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[PatchAsmResult]:
     return results
 
 
+def rename_at_ea(
+    ea: int,
+    new_name: str,
+    *,
+    allow_overwrite: bool = False,
+    dry_run: bool = False,
+) -> tuple[bool, str | None]:
+    """Rename at address with detailed error reporting."""
+    conflict_ea = idaapi.get_name_ea(idaapi.BADADDR, new_name)
+    if (
+        conflict_ea != idaapi.BADADDR
+        and conflict_ea != ea
+        and not allow_overwrite
+    ):
+        return (
+            False,
+            f"can't rename at {hex(ea)} as {new_name!r}: name already used at {hex(conflict_ea)}",
+        )
+
+    if dry_run:
+        return True, None
+
+    flags = idaapi.SN_CHECK
+    if allow_overwrite:
+        flags = idaapi.SN_CHECK | int(getattr(idaapi, "SN_FORCE", 0))
+    ok = idaapi.set_name(ea, new_name, flags)
+    if not ok:
+        return (
+            False,
+            f"Rename failed at {hex(ea)}: IDA rejected name {new_name!r} "
+            "(invalid identifier or internal conflict)",
+        )
+    return True, None
+
+
 @tool
 @idasync
 def rename(
@@ -339,24 +375,12 @@ def rename(
         return False
 
     def _set_name_checked(ea: int, new_name: str) -> tuple[bool, str | None]:
-        conflict_ea = idaapi.get_name_ea(idaapi.BADADDR, new_name)
-        if (
-            conflict_ea != idaapi.BADADDR
-            and conflict_ea != ea
-            and not allow_overwrite
-        ):
-            return False, f"Name already exists at {hex(conflict_ea)}"
-
-        if dry_run:
-            return True, None
-
-        flags = idaapi.SN_CHECK
-        if allow_overwrite:
-            flags = idaapi.SN_CHECK | int(getattr(idaapi, "SN_FORCE", 0))
-        ok = idaapi.set_name(ea, new_name, flags)
-        if not ok:
-            return False, "Rename failed"
-        return True, None
+        return rename_at_ea(
+            ea,
+            new_name,
+            allow_overwrite=allow_overwrite,
+            dry_run=dry_run,
+        )
 
     def _place_func_in_vibe_dir(ea: int) -> tuple[bool, str | None]:
         if dry_run:
@@ -563,11 +587,32 @@ def rename(
                 success = True
                 error = None
                 if not dry_run:
-                    success = ida_hexrays.rename_lvar(func.start_ea, old_name, new_name)
-                    if success:
-                        refresh_decompiler_ctext(func.start_ea)
+                    if not ida_hexrays.init_hexrays_plugin():
+                        success = False
+                        error = (
+                            "Hex-Rays decompiler is not available "
+                            "(required for local variable rename)"
+                        )
+                    else:
+                        success = ida_hexrays.rename_lvar(
+                            func.start_ea, old_name, new_name
+                        )
+                        if success:
+                            refresh_decompiler_ctext(func.start_ea)
+                        elif not hexrays_local_var_exists(func.start_ea, old_name):
+                            error = (
+                                f"Local variable {old_name!r} not found in function at "
+                                f"{hex(func.start_ea)}"
+                            )
+                        else:
+                            error = (
+                                f"Rename failed: could not rename local {old_name!r} "
+                                f"to {new_name!r}"
+                            )
                 if not success:
-                    error = "Rename failed"
+                    error = error or (
+                        f"Rename failed: could not rename local {old_name!r} to {new_name!r}"
+                    )
 
                 result = {
                     "func_addr": func_addr,
@@ -685,10 +730,24 @@ def rename(
                 success = True
                 error = None
                 if not dry_run:
-                    sval = ida_frame.soff_to_fpoff(func, offset)
-                    success = ida_frame.define_stkvar(func, new_name, sval, udm.type)
+                    _, conflict_udm = tinfo_get_udm(frame_tif, new_name)
+                    if conflict_udm and new_name != old_name:
+                        success = False
+                        error = f"Stack variable name {new_name!r} already exists"
+                    else:
+                        sval = ida_frame.soff_to_fpoff(func, offset)
+                        success = ida_frame.define_stkvar(func, new_name, sval, udm.type)
+                        if not success:
+                            error = (
+                                f"Rename failed: could not rename stack variable "
+                                f"{old_name!r} to {new_name!r} in function at "
+                                f"{hex(func.start_ea)}"
+                            )
                 if not success:
-                    error = "Rename failed"
+                    error = error or (
+                        f"Rename failed: could not rename stack variable {old_name!r} "
+                        f"to {new_name!r} in function at {hex(func.start_ea)}"
+                    )
 
                 result = {
                     "func_addr": func_addr,
