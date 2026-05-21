@@ -755,6 +755,14 @@ class UniqueSignatureGenerator:
         start_fn = idaapi.get_func(ea)
         bytes_since_last_check = 0
 
+        # reuse a single segment buffer across every uniqueness check below
+        # rebuilding it for each instruction dominates signature generation time
+        search_buffer = (
+            InMemoryBuffer.load(mode=InMemoryBuffer.LoadMode.SEGMENTS)
+            if SIMD_SPEEDUP_AVAILABLE
+            else None
+        )
+
         for cur_ea, ins, ins_len in InstructionWalker(ea):
             if bytes_since_last_check > cfg.max_single_signature_length:
                 if not cfg.ask_longer_signature:
@@ -773,7 +781,7 @@ class UniqueSignatureGenerator:
             )
             bytes_since_last_check += ins_len
 
-            if SignatureSearcher.is_unique(f"{sig:ida}"):
+            if SignatureSearcher.is_unique(f"{sig:ida}", buffer=search_buffer):
                 sig.trim_signature()
                 return sig
 
@@ -994,11 +1002,14 @@ class SignatureSearcher:
 
     @staticmethod
     def _find_all_simd(
-        ida_signature: str, skip_more_than_one: bool = False
+        ida_signature: str,
+        skip_more_than_one: bool = False,
+        buffer: InMemoryBuffer | None = None,
     ) -> list[Match]:
         simd_signature, _ = SigText.normalize(ida_signature)
-        buf = InMemoryBuffer.load(mode=InMemoryBuffer.LoadMode.SEGMENTS)
-        data_mv = buf.data()
+        if buffer is None:
+            buffer = InMemoryBuffer.load(mode=InMemoryBuffer.LoadMode.SEGMENTS)
+        data_mv = buffer.data()
 
         sig = _SimdSignature(simd_signature)
         results: list[Match] = []
@@ -1020,9 +1031,15 @@ class SignatureSearcher:
         return results
 
     @staticmethod
-    def find_all(ida_signature: str) -> list[Match]:
+    def find_all(
+        ida_signature: str,
+        skip_more_than_one: bool = False,
+        buffer: InMemoryBuffer | None = None,
+    ) -> list[Match]:
         if SIMD_SPEEDUP_AVAILABLE:
-            return SignatureSearcher._find_all_simd(ida_signature)
+            return SignatureSearcher._find_all_simd(
+                ida_signature, skip_more_than_one, buffer
+            )
         binary = idaapi.compiled_binpat_vec_t()
         idaapi.parse_binpat_str(binary, idaapi.inf_get_min_ea(), ida_signature, 16)
         out: list[Match] = []
@@ -1040,9 +1057,14 @@ class SignatureSearcher:
             if hit == idaapi.BADADDR:
                 break
             out.append(Match(hit))
+            if skip_more_than_one and len(out) > 1:
+                break
             ea = hit + 1
         return out
 
     @classmethod
-    def is_unique(cls, ida_signature: str) -> bool:
-        return len(cls.find_all(ida_signature)) == 1
+    def is_unique(
+        cls, ida_signature: str, buffer: InMemoryBuffer | None = None
+    ) -> bool:
+        matches = cls.find_all(ida_signature, skip_more_than_one=True, buffer=buffer)
+        return len(matches) == 1
