@@ -348,7 +348,7 @@ def test_dispatch_tools_list_returns_local_tools_when_redirect_unreachable():
         # The local discovery tools should always be present
         assert "list_instances" in tool_names
         assert "select_instance" in tool_names
-        assert "open_file" not in tool_names
+        assert "open_file" in tool_names
 
 
 @test()

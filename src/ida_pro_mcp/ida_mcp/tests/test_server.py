@@ -93,7 +93,7 @@ def test_tools_list_keeps_discovery_tools_when_ida_unreachable():
         tool_names = {tool["name"] for tool in result["result"].get("tools", [])}
         assert "select_instance" in tool_names
         assert "list_instances" in tool_names
-        assert "open_file" not in tool_names
+        assert "open_file" in tool_names
 
 
 @test()
