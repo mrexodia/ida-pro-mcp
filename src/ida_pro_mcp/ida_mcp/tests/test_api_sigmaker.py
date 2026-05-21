@@ -94,6 +94,57 @@ def test_make_signature_by_name():
     assert entry["unique"] is True
 
 
+@test()
+def test_is_unique_accepts_preloaded_buffer():
+    """is_unique must return the same verdict whether it loads the segment
+    buffer itself or is handed a preloaded one signature generation reuses one
+    buffer across every uniqueness check so the injected buffer path must not
+    change the result"""
+    from .._sigmaker import SignatureSearcher, InMemoryBuffer, SIMD_SPEEDUP_AVAILABLE
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    entry = make_signature(fn_addr)[0]
+    if entry.get("signature") is None:
+        skip_test("could not generate a signature for this function")
+    sig = entry["signature"]
+    assert entry["unique"] is True
+
+    assert SignatureSearcher.is_unique(sig) is True
+    if SIMD_SPEEDUP_AVAILABLE:
+        buffer = InMemoryBuffer.load(mode=InMemoryBuffer.LoadMode.SEGMENTS)
+        # the same buffer must stay valid and reusable across repeated checks
+        assert SignatureSearcher.is_unique(sig, buffer=buffer) is True
+        assert SignatureSearcher.is_unique(sig, buffer=buffer) is True
+
+
+@test()
+def test_find_all_skip_more_than_one_caps_at_two():
+    """a uniqueness check only needs to know whether a second match exists so
+    find_all with skip_more_than_one set stops at two matches instead of
+    scanning to the end of the image while still agreeing with a full scan"""
+    import idaapi
+
+    from .._sigmaker import SignatureSearcher
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    # a single byte is short enough to be ambiguous on any real binary
+    sig = f"{idaapi.get_byte(int(fn_addr, 16)):02X}"
+    full = SignatureSearcher.find_all(sig)
+    if len(full) < 2:
+        skip_test("first function byte is unique in this image")
+
+    capped = SignatureSearcher.find_all(sig, skip_more_than_one=True)
+    assert len(capped) == 2, f"expected 2 capped matches, got {len(capped)}"
+    assert [m.address for m in capped] == [m.address for m in full[:2]]
+    assert SignatureSearcher.is_unique(sig) is False
+
+
 # ============================================================================
 # make_signature_for_function
 # ============================================================================
