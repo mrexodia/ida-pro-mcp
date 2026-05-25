@@ -178,6 +178,18 @@ For stdio-based clients, use:
 uv run idalib-mcp --stdio
 ```
 
+`--stdio` keeps database state inside that MCP server process. For stdio clients
+that spawn separate MCP server processes, such as Codex sub-agents, use
+`--stdio-shared` instead:
+
+```sh
+uv run idalib-mcp --stdio-shared
+```
+
+`--stdio-shared` starts or reuses a shared local HTTP supervisor on the
+configured host/port and proxies stdio JSON-RPC to it, so separate stdio MCP
+processes can share the same opened database workers.
+
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
 ## Headless idalib Session Model
