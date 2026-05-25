@@ -28,6 +28,7 @@ dev = [
     "coverage>=7.13.4",
     "jsonschema>=4.0",
     "mcp>=1.0",
+    "pytest>=9.0.3",
 ]
 
 [project.urls]

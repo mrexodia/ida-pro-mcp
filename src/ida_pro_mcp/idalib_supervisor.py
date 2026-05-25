@@ -52,6 +52,8 @@ IDALIB_MANAGEMENT_TOOLS = {
     "idalib_warmup",
 }
 IDALIB_HIDDEN_PLUGIN_TOOLS = {"list_instances", "select_instance"}
+STDIO_PROXY_START_TIMEOUT_SEC = 120.0
+STDIO_PROXY_PROBE_SESSION_ID = "idalib-stdio-proxy-probe"
 
 
 def _import_zeromcp():
@@ -1243,10 +1245,251 @@ def dispatch_supervisor(request: dict | str | bytes | bytearray) -> dict | None:
     return _require_supervisor().forward_raw(session, request_obj)
 
 
+def _jsonrpc_proxy_error(request: bytes, message: str) -> dict | None:
+    request_id = None
+    try:
+        parsed = json.loads(request)
+        if isinstance(parsed, dict):
+            request_id = parsed.get("id")
+    except Exception:
+        request_id = None
+    if request_id is None:
+        return None
+    return {
+        "jsonrpc": "2.0",
+        "error": {"code": -32000, "message": message},
+        "id": request_id,
+    }
+
+
+def _http_jsonrpc(
+    *,
+    host: str,
+    port: int,
+    body: bytes,
+    session_id: str | None,
+    timeout: float | None = None,
+) -> tuple[dict | None, str | None]:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if session_id:
+        headers["Mcp-Session-Id"] = session_id
+
+    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    try:
+        conn.request("POST", "/mcp", body, headers)
+        response = conn.getresponse()
+        raw = response.read()
+        next_session_id = response.getheader("Mcp-Session-Id") or session_id
+        if response.status >= 400:
+            text = raw.decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {response.status} {response.reason}: {text}")
+        if response.status == 202:
+            return None, next_session_id
+        return json.loads(raw.decode("utf-8")), next_session_id
+    finally:
+        conn.close()
+
+
+def _probe_http_supervisor(host: str, port: int) -> bool:
+    try:
+        result, _ = _http_jsonrpc(
+            host=host,
+            port=port,
+            body=(
+                b'{"jsonrpc":"2.0","id":1,"method":"initialize",'
+                b'"params":{"protocolVersion":"2025-06-18",'
+                b'"capabilities":{},"clientInfo":{"name":"idalib-stdio-proxy",'
+                b'"version":"0"}}}'
+            ),
+            session_id=STDIO_PROXY_PROBE_SESSION_ID,
+            timeout=2.0,
+        )
+    except Exception:
+        return False
+    if not isinstance(result, dict) or "error" in result:
+        return False
+    initialize_result = result.get("result")
+    if not isinstance(initialize_result, dict):
+        return False
+    server_info = initialize_result.get("serverInfo")
+    return isinstance(server_info, dict) and server_info.get("name") == mcp.name
+
+
+def _spawn_shared_http_supervisor(
+    *,
+    host: str,
+    port: int,
+    worker_args: list[str],
+) -> subprocess.Popen:
+    cmd = [
+        sys.executable,
+        "-m",
+        "ida_pro_mcp.idalib_supervisor",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        *worker_args,
+    ]
+
+    creationflags = 0
+    start_new_session = False
+    if os.name == "nt":
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        start_new_session = True
+
+    logger.info("Starting shared idalib HTTP supervisor on %s:%d", host, port)
+    return subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creationflags,
+        start_new_session=start_new_session,
+    )
+
+
+def _ensure_shared_http_supervisor(
+    *,
+    host: str,
+    port: int,
+    worker_args: list[str],
+) -> None:
+    if _probe_http_supervisor(host, port):
+        return
+
+    process = _spawn_shared_http_supervisor(
+        host=host,
+        port=port,
+        worker_args=worker_args,
+    )
+    deadline = time.monotonic() + STDIO_PROXY_START_TIMEOUT_SEC
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"Shared idalib HTTP supervisor exited early with code {process.returncode}"
+            )
+        if _probe_http_supervisor(host, port):
+            return
+        time.sleep(0.2)
+    raise TimeoutError(
+        f"Shared idalib HTTP supervisor did not start on {host}:{port}"
+    )
+
+
+def _open_stdio_initial_database(
+    *,
+    host: str,
+    port: int,
+    input_path: Path,
+    session_id: str | None,
+) -> None:
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "idalib_open",
+            "arguments": {"input_path": str(input_path)},
+        },
+    }
+    response, _ = _http_jsonrpc(
+        host=host,
+        port=port,
+        body=json.dumps(payload).encode("utf-8"),
+        session_id=session_id,
+        timeout=None,
+    )
+    if not isinstance(response, dict) or "error" in response:
+        raise RuntimeError(
+            f"Failed to open initial database through shared supervisor: {response}"
+        )
+    result = response.get("result") or {}
+    if result.get("isError"):
+        content = result.get("content") or []
+        message = content[0].get("text", "unknown error") if content else "unknown error"
+        raise RuntimeError(
+            f"Failed to open initial database through shared supervisor: {message}"
+        )
+
+
+def _stdio_proxy(host: str, port: int, input_path: Path | None = None) -> None:
+    session_id: str | None = None
+    stdin = sys.stdin.buffer
+    stdout = sys.stdout.buffer
+
+    while True:
+        try:
+            request = stdin.readline()
+            if not request:
+                break
+            request = request.strip()
+            if not request:
+                continue
+
+            request_id = None
+            request_method = None
+            try:
+                parsed_request = json.loads(request)
+                if isinstance(parsed_request, dict):
+                    request_id = parsed_request.get("id")
+                    method = parsed_request.get("method")
+                    if isinstance(method, str):
+                        request_method = method
+            except Exception:
+                pass
+
+            try:
+                response, session_id = _http_jsonrpc(
+                    host=host,
+                    port=port,
+                    body=request,
+                    session_id=session_id,
+                    timeout=None,
+                )
+            except Exception as e:
+                response = _jsonrpc_proxy_error(request, str(e))
+
+            if (
+                input_path is not None
+                and request_method == "initialize"
+                and isinstance(response, dict)
+                and "error" not in response
+            ):
+                try:
+                    _open_stdio_initial_database(
+                        host=host,
+                        port=port,
+                        input_path=input_path,
+                        session_id=session_id,
+                    )
+                except Exception as e:
+                    response = _jsonrpc_error(request_id, -32000, str(e))
+
+            if response is not None:
+                stdout.write(json.dumps(response).encode("utf-8") + b"\n")
+                stdout.flush()
+        except (BrokenPipeError, KeyboardInterrupt):
+            break
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MCP supervisor for IDA Pro via idalib")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show debug messages")
-    parser.add_argument("--stdio", action="store_true", help="Serve MCP over stdio instead of HTTP")
+    stdio_group = parser.add_mutually_exclusive_group()
+    stdio_group.add_argument("--stdio", action="store_true", help="Serve MCP over stdio instead of HTTP")
+    stdio_group.add_argument(
+        "--stdio-shared",
+        action="store_true",
+        help=(
+            "Serve MCP over stdio by proxying to a shared local HTTP supervisor. "
+            "This lets stdio clients such as Codex sub-agents share opened databases."
+        ),
+    )
     parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP host, default: 127.0.0.1")
     parser.add_argument("--port", type=int, default=8745, help="HTTP port, default: 8745")
     parser.add_argument(
@@ -1280,6 +1523,21 @@ def main() -> None:
         worker_args.append("--unsafe")
     if args.profile is not None:
         worker_args.extend(["--profile", str(args.profile)])
+
+    if args.stdio_shared:
+        if args.input_path is not None and not args.input_path.exists():
+            raise SystemExit(f"Input file not found: {args.input_path}")
+        daemon_args = list(worker_args)
+        if args.isolated_contexts:
+            daemon_args.append("--isolated-contexts")
+        daemon_args.extend(["--max-workers", str(args.max_workers)])
+        _ensure_shared_http_supervisor(
+            host=args.host,
+            port=args.port,
+            worker_args=daemon_args,
+        )
+        _stdio_proxy(args.host, args.port, input_path=args.input_path)
+        return
 
     global supervisor
     supervisor = IdalibSupervisor(
