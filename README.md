@@ -22,7 +22,7 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
   - [Crush](https://github.com/charmbracelet/crush)
   - [Cursor](https://cursor.com)
   - [Gemini CLI](https://google-gemini.github.io/gemini-cli/)
-  - [Kilo Code](https://www.kilocode.com/)
+  - [Kilo Code](https://kilo.ai/)
   - [Kiro](https://kiro.dev/)
   - [LM Studio](https://lmstudio.ai/)
   - [Opencode](https://opencode.ai/)
