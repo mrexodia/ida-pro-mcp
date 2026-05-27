@@ -145,7 +145,7 @@ def get_global_configs() -> dict[str, tuple[str, str]]:
                 "settings.json",
             ),
             "Antigravity IDE": (
-                os.path.join(os.path.expanduser("~"), ".gemini", "antigravity"),
+                os.path.join(os.path.expanduser("~"), ".gemini", "config"),
                 "mcp_config.json",
             ),
             "Warp": (
@@ -244,7 +244,7 @@ def get_global_configs() -> dict[str, tuple[str, str]]:
             ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
             "Antigravity IDE": (
-                os.path.join(os.path.expanduser("~"), ".gemini", "antigravity"),
+                os.path.join(os.path.expanduser("~"), ".gemini", "config"),
                 "mcp_config.json",
             ),
             "Zed": (
@@ -398,7 +398,7 @@ def get_global_configs() -> dict[str, tuple[str, str]]:
             ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
             "Antigravity IDE": (
-                os.path.join(os.path.expanduser("~"), ".gemini", "antigravity"),
+                os.path.join(os.path.expanduser("~"), ".gemini", "config"),
                 "mcp_config.json",
             ),
             "Zed": (
