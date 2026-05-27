@@ -1,7 +1,8 @@
-"""IDALib Session Manager - Multi-binary management for headless MCP server
+"""IDALib Session Manager - Multi-binary state for the headless MCP worker.
 
-This module provides session management for multiple IDA databases in idalib mode.
-Each session represents an opened binary with its own IDA database instance.
+Each session represents a binary opened in this idalib process. Callers must
+name the session they want to operate on explicitly via `activate_session`;
+there is no implicit "current session" or transport-context binding.
 """
 
 import uuid
@@ -45,16 +46,14 @@ class IDASession:
 class IDASessionManager:
     """Manages multiple IDA database sessions for idalib mode.
 
-    Design:
-    - `_sessions` stores all known session metadata.
-    - `_active_session_id` tracks the database currently opened in the idalib process.
-    - `_context_bindings` maps MCP transport context IDs to session IDs.
+    `_sessions` stores all known session metadata. `_active_session_id` tracks
+    the database currently opened in the idalib process. Callers select which
+    session a request applies to by passing its session_id explicitly.
     """
 
     def __init__(self):
         self._sessions: Dict[str, IDASession] = {}
         self._active_session_id: Optional[str] = None
-        self._context_bindings: Dict[str, str] = {}
         self._lock = threading.RLock()
         logger.info("IDASessionManager initialized")
 
@@ -64,44 +63,27 @@ class IDASessionManager:
         run_auto_analysis: bool = True,
         session_id: Optional[str] = None,
     ) -> str:
-        """Open a binary file and create a new session
-
-        Args:
-            input_path: Path to the binary file
-            run_auto_analysis: Whether to run auto-analysis
-            session_id: Optional custom session ID (auto-generated if not provided)
-
-        Returns:
-            Session ID for the opened binary
-
-        Raises:
-            FileNotFoundError: If the input file doesn't exist
-            RuntimeError: If failed to open the database
-        """
+        """Open a binary file, activate it, and return its session ID."""
         input_path = Path(input_path)
 
         if not input_path.exists():
             raise FileNotFoundError(f"Input file not found: {input_path}")
 
         with self._lock:
-            # Check if this file is already tracked
             for sid, session in self._sessions.items():
                 if session.input_path.resolve() == input_path.resolve():
                     logger.info(f"Binary already open in session: {sid}")
                     session.last_accessed = datetime.now()
                     return sid
 
-            # Generate session ID
             if session_id is None:
                 session_id = str(uuid.uuid4())[:8]
             elif session_id in self._sessions:
                 raise ValueError(f"Session already exists: {session_id}")
 
-            # Open the database
             logger.info(f"Opening database: {input_path} (session: {session_id})")
             self._activate_database_path(str(input_path), run_auto_analysis)
 
-            # Create session object
             session = IDASession(
                 session_id=session_id,
                 input_path=input_path,
@@ -111,7 +93,6 @@ class IDASessionManager:
             self._sessions[session_id] = session
             self._active_session_id = session_id
 
-            # Wait for analysis if requested
             if run_auto_analysis:
                 logger.debug(
                     f"Waiting for auto-analysis to complete (session: {session_id})"
@@ -124,14 +105,7 @@ class IDASessionManager:
             return session_id
 
     def close_session(self, session_id: str) -> bool:
-        """Close a specific session and its database
-
-        Args:
-            session_id: Session ID to close
-
-        Returns:
-            True if closed successfully, False if session not found
-        """
+        """Close a specific session and its database."""
         with self._lock:
             if session_id not in self._sessions:
                 logger.warning(f"Session not found: {session_id}")
@@ -140,120 +114,42 @@ class IDASessionManager:
             session = self._sessions[session_id]
             logger.info(f"Closing session: {session_id} ({session.input_path.name})")
 
-            # If this is the active in-process database, close it.
             if self._active_session_id == session_id:
                 idapro.close_database()
                 self._active_session_id = None
 
-            # Remove session
             del self._sessions[session_id]
-            self._unbind_session_everywhere_locked(session_id)
             logger.info(f"Session closed: {session_id}")
             return True
 
-    def bind_context(
-        self, context_id: str, session_id: str, activate: bool = False
-    ) -> IDASession:
-        """Bind a transport context to a session.
-
-        Args:
-            context_id: Transport-specific context identifier.
-            session_id: IDA session ID to bind.
-            activate: Whether to activate the bound session immediately.
-
-        Returns:
-            The bound session object.
-        """
+    def activate_session(self, session_id: str) -> IDASession:
+        """Make `session_id` the active database for the current request."""
         with self._lock:
-            if session_id not in self._sessions:
-                raise ValueError(f"Session not found: {session_id}")
-
-            self._context_bindings[context_id] = session_id
-            session = self._sessions[session_id]
-            session.last_accessed = datetime.now()
-            logger.info("Bound context %s -> session %s", context_id, session_id)
-
-            if activate:
-                self._activate_session_locked(session_id)
-            return session
-
-    def unbind_context(self, context_id: str) -> bool:
-        """Remove an existing context binding."""
-        with self._lock:
-            removed = self._context_bindings.pop(context_id, None)
-            if removed is None:
-                return False
-            logger.info("Unbound context %s from session %s", context_id, removed)
-            return True
-
-    def get_context_session_id(self, context_id: str) -> Optional[str]:
-        """Return the session ID bound to a context."""
-        with self._lock:
-            return self._context_bindings.get(context_id)
-
-    def get_context_session(self, context_id: str) -> Optional[IDASession]:
-        """Get the session object bound to a context."""
-        with self._lock:
-            session_id = self._context_bindings.get(context_id)
-            if session_id is None:
-                return None
-            return self._sessions.get(session_id)
-
-    def activate_context(self, context_id: str) -> IDASession:
-        """Activate the database bound to a context for the current request."""
-        with self._lock:
-            session_id = self._context_bindings.get(context_id)
-            if session_id is None:
-                raise RuntimeError(
-                    "No session bound for this context. "
-                    "Use idalib_switch(session_id) or idalib_open(...) first."
-                )
             session = self._sessions.get(session_id)
             if session is None:
-                self._context_bindings.pop(context_id, None)
-                raise RuntimeError(
-                    f"Context binding is stale (missing session: {session_id}). "
-                    "Bind to a valid session again."
-                )
-
+                raise ValueError(f"Session not found: {session_id}")
             self._activate_session_locked(session_id)
             session.last_accessed = datetime.now()
             return session
 
-    def list_sessions(self, context_id: Optional[str] = None) -> list[dict]:
-        """List all open sessions with binding and activation metadata."""
+    def list_sessions(self) -> list[dict]:
+        """List all open sessions with activation metadata."""
         with self._lock:
-            context_session_id = self._context_bindings.get(context_id, None)
-            binding_counts: Dict[str, int] = {}
-            for bound_session_id in self._context_bindings.values():
-                binding_counts[bound_session_id] = (
-                    binding_counts.get(bound_session_id, 0) + 1
-                )
-
             return [
                 {
                     **session.to_dict(),
                     "is_active": session.session_id == self._active_session_id,
-                    "is_current_context": session.session_id == context_session_id,
-                    "bound_contexts": binding_counts.get(session.session_id, 0),
                 }
                 for session in self._sessions.values()
             ]
 
     def get_session(self, session_id: str) -> Optional[IDASession]:
-        """Get a specific session by ID
-
-        Args:
-            session_id: Session ID to retrieve
-
-        Returns:
-            Session object or None if not found
-        """
+        """Get a specific session by ID."""
         with self._lock:
             return self._sessions.get(session_id)
 
     def close_all_sessions(self):
-        """Close all sessions and databases"""
+        """Close all sessions and databases."""
         with self._lock:
             logger.info(f"Closing all {len(self._sessions)} sessions")
 
@@ -262,7 +158,6 @@ class IDASessionManager:
                 self._active_session_id = None
 
             self._sessions.clear()
-            self._context_bindings.clear()
             logger.info("All sessions closed")
 
     def _activate_session_locked(self, session_id: str) -> None:
@@ -284,26 +179,12 @@ class IDASessionManager:
         if idapro.open_database(input_path, run_auto_analysis=run_auto_analysis):
             raise RuntimeError(f"Failed to open database: {input_path}")
 
-    def _unbind_session_everywhere_locked(self, session_id: str) -> None:
-        stale_contexts = [
-            context_id
-            for context_id, bound_session_id in self._context_bindings.items()
-            if bound_session_id == session_id
-        ]
-        for context_id in stale_contexts:
-            del self._context_bindings[context_id]
 
-
-# Global session manager instance
 _session_manager: Optional[IDASessionManager] = None
 
 
 def get_session_manager() -> IDASessionManager:
-    """Get the global session manager instance
-
-    Returns:
-        Global IDASessionManager instance
-    """
+    """Get the global session manager instance."""
     global _session_manager
     if _session_manager is None:
         _session_manager = IDASessionManager()

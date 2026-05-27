@@ -4,11 +4,8 @@ import json
 import os
 import re
 import sys
-import threading
-import time
 import traceback
-from collections import OrderedDict
-from typing import Annotated, Any, TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 if TYPE_CHECKING:
@@ -57,37 +54,6 @@ except ImportError:
 
         sys.path.pop(0)
 
-class ProxyInstanceInfo(TypedDict, total=False):
-    host: str
-    port: int
-    pid: int
-    binary: str
-    idb_path: str
-    started_at: str
-    reachable: bool
-    active: bool
-
-
-class ProxySelectResult(TypedDict, total=False):
-    success: bool
-    host: str
-    port: int
-    message: str
-    error: str
-
-
-class ProxyOpenFileResult(TypedDict, total=False):
-    success: bool
-    host: str
-    port: int
-    binary: str
-    pid: int
-    switched: bool
-    message: str
-    error: str
-    result: Any
-
-
 DEFAULT_IDA_HOST = "127.0.0.1"
 DEFAULT_IDA_PORT = 13337
 IDA_HOST = DEFAULT_IDA_HOST
@@ -96,131 +62,7 @@ IDA_PORT = DEFAULT_IDA_PORT
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
 
-LOCAL_TOOLS = {"list_instances", "select_instance", "open_file"}
-OUTPUT_PROXY_CACHE_MAX_SIZE = 100
 _OUTPUT_PATH_RE = re.compile(r"^/output/([a-f0-9-]+)\.(\w+)$")
-_output_proxy_targets: OrderedDict[str, tuple[str, int]] = OrderedDict()
-_output_proxy_lock = threading.Lock()
-SESSION_PROXY_TARGET_TTL_SEC = 24 * 60 * 60
-SESSION_PROXY_TARGET_MAX_SIZE = 4096
-_session_proxy_targets: OrderedDict[str, tuple[str, int]] = OrderedDict()
-_session_proxy_last_seen: dict[str, float] = {}
-_session_proxy_lock = threading.Lock()
-
-
-def _get_proxy_session_key() -> str | None:
-    """Return the active MCP transport session id, if one is available."""
-    return mcp.get_current_transport_session_id()
-
-
-def _prune_session_proxy_targets_locked(now: float | None = None) -> None:
-    """Remove expired or excess per-session IDA target selections."""
-    now = time.monotonic() if now is None else now
-
-    # Tests and older callers may mutate _session_proxy_targets directly. Treat
-    # entries without metadata as live, then include them in normal pruning.
-    for session_key in list(_session_proxy_targets):
-        _session_proxy_last_seen.setdefault(session_key, now)
-
-    if SESSION_PROXY_TARGET_TTL_SEC > 0:
-        cutoff = now - SESSION_PROXY_TARGET_TTL_SEC
-        for session_key, last_seen in list(_session_proxy_last_seen.items()):
-            if last_seen < cutoff:
-                _session_proxy_targets.pop(session_key, None)
-                _session_proxy_last_seen.pop(session_key, None)
-
-    for session_key in list(_session_proxy_last_seen):
-        if session_key not in _session_proxy_targets:
-            _session_proxy_last_seen.pop(session_key, None)
-
-    if SESSION_PROXY_TARGET_MAX_SIZE > 0:
-        while len(_session_proxy_targets) > SESSION_PROXY_TARGET_MAX_SIZE:
-            session_key, _ = _session_proxy_targets.popitem(last=False)
-            _session_proxy_last_seen.pop(session_key, None)
-
-
-def _get_active_ida_target() -> tuple[str, int]:
-    """Return the IDA target selected for this MCP transport session."""
-    session_key = _get_proxy_session_key()
-    if session_key is not None:
-        now = time.monotonic()
-        with _session_proxy_lock:
-            _prune_session_proxy_targets_locked(now)
-            target = _session_proxy_targets.get(session_key)
-            if target is not None:
-                _session_proxy_targets.move_to_end(session_key)
-                _session_proxy_last_seen[session_key] = now
-                return target
-    return IDA_HOST, IDA_PORT
-
-
-def _set_active_ida_target(host: str, port: int) -> None:
-    """Select an IDA target for the current session, falling back to process-wide state."""
-    global IDA_HOST, IDA_PORT
-    session_key = _get_proxy_session_key()
-    if session_key is not None:
-        now = time.monotonic()
-        with _session_proxy_lock:
-            _session_proxy_targets.pop(session_key, None)
-            _session_proxy_targets[session_key] = (host, port)
-            _session_proxy_last_seen[session_key] = now
-            _prune_session_proxy_targets_locked(now)
-        return
-    IDA_HOST = host
-    IDA_PORT = port
-    set_ida_rpc(IDA_HOST, IDA_PORT)
-
-
-def _clear_active_ida_target() -> tuple[str, int]:
-    """Clear the current session's target selection and return the default target."""
-    global IDA_HOST, IDA_PORT
-    session_key = _get_proxy_session_key()
-    if session_key is not None:
-        with _session_proxy_lock:
-            _session_proxy_targets.pop(session_key, None)
-            _session_proxy_last_seen.pop(session_key, None)
-        return IDA_HOST, IDA_PORT
-    IDA_HOST = DEFAULT_IDA_HOST
-    IDA_PORT = DEFAULT_IDA_PORT
-    set_ida_rpc(IDA_HOST, IDA_PORT)
-    return IDA_HOST, IDA_PORT
-
-
-def _extract_output_id(response: dict) -> str | None:
-    result = response.get("result")
-    if not isinstance(result, dict):
-        return None
-    meta = result.get("_meta")
-    if not isinstance(meta, dict):
-        return None
-    ida_meta = meta.get("ida_mcp")
-    if not isinstance(ida_meta, dict):
-        return None
-    output_id = ida_meta.get("output_id")
-    return output_id if isinstance(output_id, str) else None
-
-
-def _remember_output_proxy_target(output_id: str, host: str, port: int) -> None:
-    with _output_proxy_lock:
-        _output_proxy_targets.pop(output_id, None)
-        _output_proxy_targets[output_id] = (host, port)
-        while len(_output_proxy_targets) > OUTPUT_PROXY_CACHE_MAX_SIZE:
-            _output_proxy_targets.popitem(last=False)
-
-
-def _get_output_proxy_target(output_id: str) -> tuple[str, int] | None:
-    with _output_proxy_lock:
-        target = _output_proxy_targets.get(output_id)
-        if target is None:
-            return None
-        _output_proxy_targets.move_to_end(output_id)
-        return target
-
-
-def _remember_output_proxy_target_from_response(host: str, port: int, response: dict) -> None:
-    output_id = _extract_output_id(response)
-    if output_id:
-        _remember_output_proxy_target(output_id, host, port)
 
 
 def _get_proxy_request_path() -> str:
@@ -245,14 +87,14 @@ def _get_proxy_request_headers() -> dict[str, str]:
     return headers
 
 
-def _proxy_to_instance(host: str, port: int, payload: bytes | str | dict) -> dict:
-    """Send a JSON-RPC request to a specific IDA instance and return the response."""
+def _proxy_to_ida(payload: bytes | str | dict) -> dict:
+    """Send a JSON-RPC request to the configured IDA instance and return the response."""
     if isinstance(payload, dict):
         payload = json.dumps(payload)
-    elif isinstance(payload, str):
+    if isinstance(payload, str):
         payload = payload.encode("utf-8")
 
-    conn = http.client.HTTPConnection(host, port, timeout=30)
+    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
     try:
         conn.request(
             "POST",
@@ -266,16 +108,14 @@ def _proxy_to_instance(host: str, port: int, payload: bytes | str | dict) -> dic
             raise RuntimeError(
                 f"HTTP {response.status} {response.reason}: {raw_data}"
             )
-        parsed = json.loads(raw_data)
-        _remember_output_proxy_target_from_response(host, port, parsed)
-        return parsed
+        return json.loads(raw_data)
     finally:
         conn.close()
 
 
-def _proxy_output_download(host: str, port: int, path: str) -> tuple[int, str, list[tuple[str, str]], bytes]:
-    """Proxy a raw output download from a specific IDA instance."""
-    conn = http.client.HTTPConnection(host, port, timeout=30)
+def _proxy_output_download(path: str) -> tuple[int, str, list[tuple[str, str]], bytes]:
+    """Proxy a raw output download from the configured IDA instance."""
+    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
     try:
         conn.request("GET", path)
         response = conn.getresponse()
@@ -284,41 +124,8 @@ def _proxy_output_download(host: str, port: int, path: str) -> tuple[int, str, l
         conn.close()
 
 
-def _proxy_to_ida(payload: bytes | str | dict) -> dict:
-    """Send a JSON-RPC request to the active IDA instance and return the response."""
-    host, port = _get_active_ida_target()
-    return _proxy_to_instance(host, port, payload)
-
-
-def _call_ida_tool(host: str, port: int, name: str, arguments: dict[str, Any]) -> Any:
-    """Call an MCP tool on a specific IDA instance and return structured content."""
-    response = _proxy_to_instance(
-        host,
-        port,
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": name, "arguments": arguments},
-        },
-    )
-    if "error" in response:
-        raise RuntimeError(response["error"].get("message", "Unknown error"))
-
-    result = response.get("result", {})
-    if result.get("isError"):
-        content = result.get("content", [])
-        message = (
-            content[0].get("text", "Unknown tool error")
-            if content
-            else "Unknown tool error"
-        )
-        raise RuntimeError(message)
-    return result.get("structuredContent")
-
-
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
-    """Dispatch JSON-RPC requests to the MCP server registry."""
+    """Dispatch JSON-RPC requests by proxying everything (except initialize/notifications) to IDA."""
     if not isinstance(request, dict):
         request_obj: JsonRpcRequest = json.loads(request)
     else:
@@ -328,40 +135,6 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
         return dispatch_original(request)
     if request_obj["method"].startswith("notifications/"):
         return dispatch_original(request)
-
-    # Handle local tools (instance discovery) without proxying to IDA
-    if request_obj["method"] == "tools/call":
-        params = request_obj.get("params", {})
-        tool_name = params.get("name", "")
-        if tool_name in LOCAL_TOOLS:
-            return dispatch_original(request)
-
-    # Handle tools/list locally: always include local tools, merge IDA tools when available
-    if request_obj["method"] == "tools/list":
-        # Get local tools (always available)
-        local_result = dispatch_original(request)
-        local_tool_names = (
-            {t["name"] for t in local_result.get("result", {}).get("tools", [])}
-            if local_result
-            else set()
-        )
-        # Try to get IDA tools and merge them in
-        try:
-            ida_result = _proxy_to_ida(request)
-            if ida_result and "result" in ida_result:
-                # Filter out IDA tools that duplicate local tools (e.g. select_instance)
-                ida_tools = [
-                    t
-                    for t in ida_result["result"].get("tools", [])
-                    if t.get("name") not in local_tool_names
-                ]
-                if local_result and "result" in local_result:
-                    local_result["result"]["tools"] = (
-                        ida_tools + local_result["result"].get("tools", [])
-                    )
-        except Exception:
-            pass  # IDA unreachable — local tools still work
-        return local_result
 
     try:
         return _proxy_to_ida(request)
@@ -397,19 +170,11 @@ mcp.registry.dispatch = dispatch_proxy
 class ProxyHttpRequestHandler(McpHttpRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
-        output_match = _OUTPUT_PATH_RE.match(parsed.path)
-        if output_match:
+        if _OUTPUT_PATH_RE.match(parsed.path):
             if not self._check_api_request():
                 return
-            output_id = output_match.group(1)
-            target = _get_output_proxy_target(output_id)
-            if target is None:
-                self.send_error(404, "Output not found or expired")
-                return
             try:
-                status, _, response_headers, body = _proxy_output_download(
-                    target[0], target[1], parsed.path
-                )
+                status, _, response_headers, body = _proxy_output_download(parsed.path)
             except Exception as e:
                 self.send_error(502, f"Failed to proxy output download: {e}")
                 return
@@ -425,125 +190,6 @@ class ProxyHttpRequestHandler(McpHttpRequestHandler):
             return
         super().do_GET()
 
-
-# ============================================================================
-# Local tools (handled by the proxy, not forwarded to IDA)
-# ============================================================================
-
-
-@mcp.tool
-def list_instances() -> list[ProxyInstanceInfo]:
-    """List discovered IDA Pro instances and indicate which one is active."""
-    active_host, active_port = _get_active_ida_target()
-    result = []
-    for inst in discover_instances():
-        reachable = probe_instance(inst["host"], inst["port"])
-        result.append(
-            {
-                **inst,
-                "reachable": reachable,
-                "active": inst["host"] == active_host and inst["port"] == active_port,
-            }
-        )
-    return result
-
-
-@mcp.tool
-def select_instance(
-    port: Annotated[int, "Port number of the IDA instance to connect to"],
-    host: Annotated[str, "Host address of the IDA instance"] = "127.0.0.1",
-) -> ProxySelectResult:
-    """Switch this MCP server to proxy requests to a different IDA Pro instance.
-
-    Use list_instances first to see available instances, then select one by port.
-    All subsequent tool calls will be routed to the selected instance.
-    """
-    if port == 0:
-        default_host, default_port = _clear_active_ida_target()
-        return {
-            "success": True,
-            "host": default_host,
-            "port": default_port,
-            "message": "Reset to default IDA target",
-        }
-    if not probe_instance(host, port):
-        return {"success": False, "error": f"Instance at {host}:{port} is not reachable"}
-    _set_active_ida_target(host, port)
-    return {"success": True, "host": host, "port": port}
-
-
-@mcp.tool
-def open_file(
-    file_path: Annotated[
-        str, "Absolute path to the binary file to open in a new IDA instance"
-    ],
-    switch: Annotated[
-        bool, "Automatically switch to the new instance once it starts"
-    ] = True,
-    autonomous: Annotated[
-        bool, "Run in autonomous mode (-A flag), suppressing all dialogs"
-    ] = False,
-    new_database: Annotated[
-        bool, "Force creating a new database even if one exists"
-    ] = False,
-    timeout: Annotated[
-        int, "Seconds to wait for the new instance to register (0 = don't wait)"
-    ] = 30,
-) -> ProxyOpenFileResult:
-    """Open a file in a new IDA Pro instance.
-
-    This proxy-side tool delegates to any reachable IDA instance's local open_file
-    implementation so discovery/launch remains available even when the currently
-    selected instance is down.
-    """
-    target_host, target_port = _get_active_ida_target()
-    if not probe_instance(target_host, target_port):
-        target_host = ""
-        target_port = 0
-        for inst in discover_instances():
-            if probe_instance(inst["host"], inst["port"]):
-                target_host = inst["host"]
-                target_port = inst["port"]
-                break
-
-    if not target_host or target_port == 0:
-        return {
-            "success": False,
-            "error": (
-                "No running IDA instance is available to launch a new file. "
-                "Start one instance first or specify --ida-rpc explicitly."
-            ),
-        }
-
-    try:
-        result = _call_ida_tool(
-            target_host,
-            target_port,
-            "open_file",
-            {
-                "file_path": file_path,
-                "switch": switch,
-                "autonomous": autonomous,
-                "new_database": new_database,
-                "timeout": timeout,
-            },
-        )
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-    if isinstance(result, dict):
-        if (
-            switch
-            and result.get("success")
-            and result.get("host")
-            and result.get("port")
-        ):
-            _set_active_ida_target(str(result["host"]), int(result["port"]))
-        return result
-    return {"success": True, "result": result}
-
-
-# ============================================================================
 
 DEFAULT_IDA_RPC = f"http://{IDA_HOST}:{IDA_PORT}"
 
@@ -592,7 +238,7 @@ def _resolve_ida_rpc(args) -> None:
         IDA_PORT = inst["port"]
         print(
             f"[MCP] Auto-selected: {inst['binary']}. "
-            "Use select_instance tool to switch.",
+            "Pass --ida-rpc http://host:port to override.",
             file=sys.stderr,
         )
 

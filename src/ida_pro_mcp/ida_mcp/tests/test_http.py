@@ -91,20 +91,14 @@ def test_extension_tools_appear_when_enabled():
 
 
 @test()
-def test_original_tools_contains_discovery_tools():
-    """ORIGINAL_TOOLS snapshot must include discovery tools for config rendering."""
-    for name in ("list_instances", "select_instance"):
-        assert name in http_mod.ORIGINAL_TOOLS, f"{name} missing from ORIGINAL_TOOLS"
-
-
-@test()
 def test_original_tools_covers_plugin_side_tools():
     """ORIGINAL_TOOLS should contain every plugin-registered tool.
 
-    idalib-specific tools (idalib_*) are added dynamically by idalib_server
-    and won't be in the snapshot — that's expected.
+    Supervisor-only management tools (idb_open, idb_list) are
+    registered by idalib_supervisor and won't appear in the GUI plugin's
+    snapshot — that's expected.
     """
-    idalib_tools = {n for n in MCP_SERVER.tools.methods if n.startswith("idalib_")}
-    plugin_tools = set(MCP_SERVER.tools.methods) - idalib_tools
+    supervisor_only = {"idb_open", "idb_list"}
+    plugin_tools = set(MCP_SERVER.tools.methods) - supervisor_only
     missing = plugin_tools - set(http_mod.ORIGINAL_TOOLS)
     assert not missing, f"Plugin tools missing from ORIGINAL_TOOLS: {missing}"

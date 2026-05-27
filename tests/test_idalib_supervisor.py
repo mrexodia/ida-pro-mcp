@@ -32,6 +32,7 @@ class _FakeSupervisor(supmod.IdalibSupervisor):
         super().__init__(supmod.McpServer("test"), max_workers=4)
         self.forwarded: list[dict] = []
         self.opened: list[tuple[str, dict]] = []
+        self.tool_calls: list[tuple[str, dict | None]] = []
 
     def _spawn_worker(self):
         return supmod.WorkerSession(
@@ -59,9 +60,7 @@ class _FakeSupervisor(supmod.IdalibSupervisor):
                                 "required": ["addr"],
                             },
                         },
-                        {"name": "idalib_open", "inputSchema": {"type": "object"}},
-                        {"name": "list_instances", "inputSchema": {"type": "object"}},
-                        {"name": "select_instance", "inputSchema": {"type": "object"}},
+                        {"name": "idb_open", "inputSchema": {"type": "object"}},
                     ]
                 },
             }
@@ -73,13 +72,17 @@ class _FakeSupervisor(supmod.IdalibSupervisor):
         return {"jsonrpc": "2.0", "id": payload.get("id"), "result": {"ok": True}}
 
     def call_worker_tool(self, worker, name, arguments=None):
-        if name == "idalib_open":
+        self.tool_calls.append((name, arguments))
+        if name == "idb_open":
             assert arguments is not None
             self.opened.append((name, arguments))
+            warmup = None
+            if arguments.get("build_caches") or arguments.get("init_hexrays"):
+                warmup = {"ok": True, "steps": [], "health": {"status": "ok"}}
             return {
                 "success": True,
                 "session": {
-                    "session_id": arguments["session_id"],
+                    "session_id": arguments["preferred_session_id"],
                     "input_path": arguments["input_path"],
                     "filename": Path(arguments["input_path"]).name,
                     "created_at": "now",
@@ -87,51 +90,24 @@ class _FakeSupervisor(supmod.IdalibSupervisor):
                     "is_analyzing": False,
                     "metadata": {},
                 },
+                "warmup": warmup,
             }
         return {"ok": True, "error": None}
 
+    def _session_is_reachable(self, session):
+        return session.is_alive()
 
-class _TransportMcp:
-    def __init__(self, session_id="stdio:default"):
-        self.session_id = session_id
-
-    def get_current_transport_session_id(self):
-        return self.session_id
-
-
-class _MainExit(Exception):
-    pass
-
-
-class _FakeInputBuffer:
-    def __init__(self, lines):
-        self.lines = list(lines)
-
-    def readline(self):
-        if not self.lines:
-            return b""
-        return self.lines.pop(0)
-
-
-class _FakeStdin:
-    def __init__(self, lines):
-        self.buffer = _FakeInputBuffer(lines)
-
-
-class _RecordingOutputBuffer:
-    def __init__(self):
-        self.writes = []
-
-    def write(self, data):
-        self.writes.append(data)
-
-    def flush(self):
-        pass
-
-
-class _FakeStdout:
-    def __init__(self):
-        self.buffer = _RecordingOutputBuffer()
+    def _probe_session_health(self, session):
+        reachable = self._session_is_reachable(session)
+        return {
+            "backend": session.backend,
+            "process_alive": session.is_alive(),
+            "tcp_connect": reachable if session.backend == "worker" else None,
+            "rpc_ping": reachable if session.backend == "worker" else None,
+            "reachable": reachable,
+            "failed_probe": None if reachable else "tcp_connect",
+            "error": None if reachable else "unreachable",
+        }
 
 
 def _patch_discovery(*, instances, probe):
@@ -195,274 +171,6 @@ def test_worker_rpc_default_has_no_socket_timeout(monkeypatch):
     assert _FakeConnection.instances[0].timeout is None
     assert _FakeConnection.instances[1].timeout == 2.0
 
-
-def test_stdio_shared_supervisor_spawn_uses_http_daemon_command(monkeypatch, tmp_path):
-    sample = tmp_path / "sample.bin"
-    sample.write_bytes(b"x")
-    captured = {}
-
-    class _FakePopen:
-        returncode = None
-
-        def __init__(self, cmd, **kwargs):
-            captured["cmd"] = cmd
-            captured["kwargs"] = kwargs
-
-        def poll(self):
-            return None
-
-    monkeypatch.setattr(supmod.subprocess, "Popen", _FakePopen)
-
-    proc = supmod._spawn_shared_http_supervisor(
-        host="127.0.0.1",
-        port=9876,
-        worker_args=["--unsafe", "--max-workers", "8"],
-    )
-
-    assert isinstance(proc, _FakePopen)
-    assert captured["cmd"][:3] == [
-        sys.executable,
-        "-m",
-        "ida_pro_mcp.idalib_supervisor",
-    ]
-    assert "--stdio" not in captured["cmd"]
-    assert "--stdio-shared" not in captured["cmd"]
-    assert "--unsafe" in captured["cmd"]
-    assert "--max-workers" in captured["cmd"]
-    assert str(sample) not in captured["cmd"]
-    assert captured["kwargs"]["stdin"] is supmod.subprocess.DEVNULL
-    assert captured["kwargs"]["stdout"] is supmod.subprocess.DEVNULL
-    assert captured["kwargs"]["stderr"] is supmod.subprocess.DEVNULL
-    assert "start_new_session" in captured["kwargs"]
-
-
-def test_open_stdio_initial_database_forwards_transport_session(monkeypatch, tmp_path):
-    sample = tmp_path / "sample.bin"
-    sample.write_bytes(b"x")
-    captured = {}
-
-    def fake_http_jsonrpc(**kwargs):
-        captured.update(kwargs)
-        return (
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {
-                    "content": [],
-                    "structuredContent": {
-                        "success": True,
-                        "session": {"session_id": "sample"},
-                    },
-                },
-            },
-            kwargs["session_id"],
-        )
-
-    monkeypatch.setattr(supmod, "_http_jsonrpc", fake_http_jsonrpc)
-
-    supmod._open_stdio_initial_database(
-        host="127.0.0.1",
-        port=9876,
-        input_path=sample,
-        session_id="http-session",
-    )
-
-    assert captured["session_id"] == "http-session"
-    payload = supmod.json.loads(captured["body"])
-    assert payload["params"]["name"] == "idalib_open"
-    assert payload["params"]["arguments"]["input_path"] == str(sample)
-
-
-def test_probe_http_supervisor_uses_stable_session_header(monkeypatch):
-    captured = {}
-
-    def fake_http_jsonrpc(**kwargs):
-        captured.update(kwargs)
-        return (
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {"serverInfo": {"name": supmod.mcp.name}},
-            },
-            kwargs["session_id"],
-        )
-
-    monkeypatch.setattr(supmod, "_http_jsonrpc", fake_http_jsonrpc)
-
-    assert supmod._probe_http_supervisor("127.0.0.1", 9876) is True
-    assert captured["session_id"] == supmod.STDIO_PROXY_PROBE_SESSION_ID
-    assert supmod.json.loads(captured["body"])["method"] == "initialize"
-
-
-def test_probe_http_supervisor_rejects_unexpected_server(monkeypatch):
-    def fake_http_jsonrpc(**kwargs):
-        return (
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {"serverInfo": {"name": "other-server"}},
-            },
-            kwargs["session_id"],
-        )
-
-    monkeypatch.setattr(supmod, "_http_jsonrpc", fake_http_jsonrpc)
-
-    assert supmod._probe_http_supervisor("127.0.0.1", 9876) is False
-
-
-def test_stdio_proxy_opens_initial_database_after_initialize(monkeypatch, tmp_path):
-    sample = tmp_path / "sample.bin"
-    sample.write_bytes(b"x")
-    forwarded = []
-    opened = []
-
-    def fake_http_jsonrpc(**kwargs):
-        forwarded.append(kwargs)
-        return ({"jsonrpc": "2.0", "id": 1, "result": {}}, "http-session")
-
-    monkeypatch.setattr(supmod, "_http_jsonrpc", fake_http_jsonrpc)
-    monkeypatch.setattr(
-        supmod,
-        "_open_stdio_initial_database",
-        lambda **kwargs: opened.append(kwargs),
-    )
-    monkeypatch.setattr(
-        supmod.sys,
-        "stdin",
-        _FakeStdin(
-            [
-                b'{"jsonrpc":"2.0","id":1,"method":"initialize"}\n',
-                b"",
-            ]
-        ),
-    )
-    stdout = _FakeStdout()
-    monkeypatch.setattr(supmod.sys, "stdout", stdout)
-
-    supmod._stdio_proxy("127.0.0.1", 9876, input_path=sample)
-
-    assert forwarded[0]["session_id"] is None
-    assert opened == [
-        {
-            "host": "127.0.0.1",
-            "port": 9876,
-            "input_path": sample,
-            "session_id": "http-session",
-        }
-    ]
-    assert stdout.buffer.writes
-
-
-def test_stdio_proxy_does_not_open_initial_database_when_initialize_fails(
-    monkeypatch, tmp_path
-):
-    sample = tmp_path / "sample.bin"
-    sample.write_bytes(b"x")
-    opened = []
-
-    def fake_http_jsonrpc(**_kwargs):
-        return ({"jsonrpc": "2.0", "id": 1, "error": {"message": "bad"}}, None)
-
-    monkeypatch.setattr(supmod, "_http_jsonrpc", fake_http_jsonrpc)
-    monkeypatch.setattr(
-        supmod,
-        "_open_stdio_initial_database",
-        lambda **kwargs: opened.append(kwargs),
-    )
-    monkeypatch.setattr(
-        supmod.sys,
-        "stdin",
-        _FakeStdin(
-            [
-                b'{"jsonrpc":"2.0","id":1,"method":"initialize"}\n',
-                b"",
-            ]
-        ),
-    )
-    monkeypatch.setattr(supmod.sys, "stdout", _FakeStdout())
-
-    supmod._stdio_proxy("127.0.0.1", 9876, input_path=sample)
-
-    assert opened == []
-
-
-def test_jsonrpc_proxy_error_omits_notification_response():
-    result = supmod._jsonrpc_proxy_error(
-        b'{"jsonrpc":"2.0","method":"notifications/initialized"}',
-        "boom",
-    )
-
-    assert result is None
-
-
-def test_stdio_flag_uses_direct_stdio_not_shared_proxy(monkeypatch):
-    calls = []
-    old_supervisor = supmod.supervisor
-    old_dispatch = supmod.mcp.registry.dispatch
-    old_require_session = supmod.mcp.require_streamable_http_session
-
-    monkeypatch.setattr(supmod.sys, "argv", ["idalib-mcp", "--stdio"])
-    monkeypatch.setattr(
-        supmod,
-        "_ensure_shared_http_supervisor",
-        lambda **_kwargs: calls.append("shared"),
-    )
-    monkeypatch.setattr(supmod.signal, "signal", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(supmod.mcp, "stdio", lambda: (_ for _ in ()).throw(_MainExit))
-
-    try:
-        try:
-            supmod.main()
-        except _MainExit:
-            pass
-        else:
-            raise AssertionError("expected direct stdio path")
-    finally:
-        supmod.supervisor = old_supervisor
-        supmod.mcp.registry.dispatch = old_dispatch
-        supmod.mcp.require_streamable_http_session = old_require_session
-
-    assert calls == []
-
-
-def test_stdio_shared_flag_uses_shared_proxy(monkeypatch):
-    calls = []
-
-    monkeypatch.setattr(supmod.sys, "argv", ["idalib-mcp", "--stdio-shared"])
-    monkeypatch.setattr(
-        supmod,
-        "_ensure_shared_http_supervisor",
-        lambda **kwargs: calls.append(("ensure", kwargs)),
-    )
-    monkeypatch.setattr(
-        supmod,
-        "_stdio_proxy",
-        lambda host, port, input_path=None: calls.append(
-            ("proxy", host, port, input_path)
-        ),
-    )
-
-    supmod.main()
-
-    assert calls[0][0] == "ensure"
-    assert calls[1] == ("proxy", "127.0.0.1", 8745, None)
-
-
-def test_stdio_flags_are_mutually_exclusive(monkeypatch):
-    monkeypatch.setattr(
-        supmod.sys,
-        "argv",
-        ["idalib-mcp", "--stdio", "--stdio-shared"],
-    )
-
-    try:
-        supmod.main()
-    except SystemExit as e:
-        assert e.code == 2
-    else:
-        raise AssertionError("expected argparse conflict")
-
-
 def test_worker_tools_inject_database_and_filter_management_tools():
     sup = _FakeSupervisor()
     tools = sup.worker_tools()
@@ -470,16 +178,43 @@ def test_worker_tools_inject_database_and_filter_management_tools():
     assert names == ["decompile"]
     schema = tools[0]["inputSchema"]
     assert "database" in schema["properties"]
-    assert "database" not in schema.get("required", [])
+    assert "database" in schema.get("required", [])
 
 
-def test_tool_error_result_omits_structured_content():
-    result = supmod._call_tool_result({"error": "no database"}, is_error=True)
-    assert result["isError"] is True
-    assert "structuredContent" not in result
+def test_inject_database_arg_marks_required():
+    sup = _FakeSupervisor()
+    injected = sup._inject_database_arg(
+        {
+            "name": "decompile",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"addr": {"type": "string"}},
+                "required": ["addr"],
+            },
+        }
+    )
+    schema = injected["inputSchema"]
+    assert "database" in schema["properties"]
+    assert "database" in schema["required"]
 
 
-def test_supervisor_blocks_gui_plugin_routing_tools():
+def test_inject_database_arg_is_idempotent_in_required_list():
+    sup = _FakeSupervisor()
+    injected = sup._inject_database_arg(
+        {
+            "name": "decompile",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"addr": {"type": "string"}},
+                "required": ["addr", "database"],
+            },
+        }
+    )
+    required = injected["inputSchema"]["required"]
+    assert required.count("database") == 1
+
+
+def test_handle_tools_call_errors_when_database_missing():
     old_supervisor = supmod.supervisor
     supmod.supervisor = _FakeSupervisor()
     try:
@@ -488,40 +223,347 @@ def test_supervisor_blocks_gui_plugin_routing_tools():
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": "select_instance", "arguments": {"port": 13337}},
+                "params": {"name": "decompile", "arguments": {"addr": "0x1000"}},
             }
         )
         assert result is not None
         assert result["result"]["isError"] is True
         text = result["result"]["content"][0]["text"]
-        assert "GUI-plugin routing tool" in text
+        assert "database is required" in text
         assert not supmod.supervisor.forwarded
     finally:
         supmod.supervisor = old_supervisor
 
 
-def test_open_session_reuses_schema_worker_and_binds_context(tmp_path):
+def test_handle_tools_call_errors_when_database_empty():
+    old_supervisor = supmod.supervisor
+    supmod.supervisor = _FakeSupervisor()
+    try:
+        result = supmod._handle_tools_call(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "decompile",
+                    "arguments": {"addr": "0x1000", "database": ""},
+                },
+            }
+        )
+        assert result is not None
+        assert result["result"]["isError"] is True
+        assert "database is required" in result["result"]["content"][0]["text"]
+    finally:
+        supmod.supervisor = old_supervisor
+
+
+def test_open_session_rejects_unknown_mode(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    try:
+        sup.open_session(str(sample), session_id="sample", mode="bogus")
+    except ValueError as e:
+        assert "Unknown mode" in str(e)
+    else:
+        raise AssertionError("expected ValueError for unknown mode")
+
+
+def test_open_session_prefer_headless_skips_gui_discovery(tmp_path):
+    sample = tmp_path / "sample.bin"
+    idb = tmp_path / "sample.bin.i64"
+    sample.write_bytes(b"x")
+    idb.write_bytes(b"idb")
+    restore = _patch_discovery(
+        instances=[
+            {
+                "host": "127.0.0.1",
+                "port": 31337,
+                "pid": 999,
+                "binary": "sample.bin",
+                "idb_path": str(idb),
+                "started_at": "now",
+            }
+        ],
+        probe=True,
+    )
+    try:
+        sup = _FakeSupervisor()
+        session = sup.open_session(str(sample), session_id="sample", mode="prefer_headless")
+        assert session.backend == "worker"
+        assert sup.opened, "expected the worker to be invoked despite a running GUI"
+    finally:
+        restore()
+
+
+def test_open_session_force_headless_ignores_running_gui(tmp_path):
+    sample = tmp_path / "sample.bin"
+    idb = tmp_path / "sample.bin.i64"
+    sample.write_bytes(b"x")
+    idb.write_bytes(b"idb")
+    restore = _patch_discovery(
+        instances=[
+            {
+                "host": "127.0.0.1",
+                "port": 31337,
+                "pid": 999,
+                "binary": "sample.bin",
+                "idb_path": str(idb),
+                "started_at": "now",
+            }
+        ],
+        probe=True,
+    )
+    try:
+        sup = _FakeSupervisor()
+        session = sup.open_session(str(sample), session_id="sample", mode="force_headless")
+        assert session.backend == "worker"
+    finally:
+        restore()
+
+
+def test_open_session_force_gui_launches_when_no_gui_found(tmp_path, monkeypatch):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    restore = _patch_discovery(instances=[], probe=False)
+    calls = []
+
+    def fake_launch(file_path, **kwargs):
+        calls.append(file_path)
+        return {
+            "success": True,
+            "host": "127.0.0.1",
+            "port": 31337,
+            "pid": 4242,
+            "binary": "sample.bin",
+        }
+
+    monkeypatch.setattr(supmod._discovery, "launch_gui_instance", fake_launch)
+    try:
+        sup = _FakeSupervisor()
+        session = sup.open_session(str(sample), session_id="gui", mode="force_gui")
+        assert session.backend == "gui"
+        assert session.port == 31337
+        assert calls == [str(sample.resolve())] or calls == [str(sample)]
+    finally:
+        restore()
+
+
+def test_idb_list_includes_unadopted_gui_instances(tmp_path, monkeypatch):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    sup.open_session(str(sample), session_id="sample")
+
+    extra_idb = tmp_path / "other.bin.i64"
+    extra_idb.write_bytes(b"idb")
+    monkeypatch.setattr(
+        supmod._discovery,
+        "discover_instances",
+        lambda: [
+            {
+                "host": "127.0.0.1",
+                "port": 31337,
+                "pid": 1234,
+                "binary": "other.bin",
+                "idb_path": str(extra_idb),
+                "started_at": "now",
+            }
+        ],
+    )
+    monkeypatch.setattr(supmod._discovery, "probe_instance", lambda *_args, **_kwargs: True)
+
+    listed = sup.list_sessions()
+    by_id = {entry["session_id"]: entry for entry in listed}
+    assert "sample" in by_id and by_id["sample"]["adopted"] is True
+    unadopted = [entry for entry in listed if not entry["adopted"]]
+    assert len(unadopted) == 1
+    assert unadopted[0]["backend"] == "gui"
+    assert unadopted[0]["input_path"] == str(extra_idb)
+    assert unadopted[0]["pid"] == 1234
+
+
+def test_idb_list_reports_unadopted_worker_instances_as_workers(tmp_path, monkeypatch):
+    extra_idb = tmp_path / "worker.bin"
+    extra_idb.write_bytes(b"idb")
+    monkeypatch.setattr(
+        supmod._discovery,
+        "discover_instances",
+        lambda: [
+            {
+                "host": "127.0.0.1",
+                "port": 31338,
+                "pid": 4321,
+                "binary": "worker.bin",
+                "idb_path": str(extra_idb),
+                "started_at": "now",
+                "backend": "worker",
+            }
+        ],
+    )
+    monkeypatch.setattr(supmod._discovery, "probe_instance", lambda *_args, **_kwargs: True)
+
+    listed = _FakeSupervisor().list_sessions()
+
+    assert len(listed) == 1
+    assert listed[0]["backend"] == "worker"
+    assert listed[0]["metadata"]["backend"] == "worker"
+    assert listed[0]["worker_pid"] == 4321
+    assert listed[0]["adopted"] is False
+
+
+def test_prefer_headless_adopts_only_registered_worker_backend(tmp_path):
+    sample = tmp_path / "sample.bin"
+    idb = tmp_path / "sample.bin.i64"
+    sample.write_bytes(b"x")
+    idb.write_bytes(b"idb")
+    restore = _patch_discovery(
+        instances=[
+            {
+                "host": "127.0.0.1",
+                "port": 31337,
+                "pid": 999,
+                "binary": "sample.bin",
+                "idb_path": str(idb),
+                "started_at": "now",
+            }
+        ],
+        probe=True,
+    )
+    try:
+        sup = _FakeSupervisor()
+        session = sup.open_session(str(sample), session_id="sample", mode="prefer_headless")
+        assert session.backend == "worker"
+        assert session.owned is True
+        assert sup.opened, "legacy GUI registration should not be adopted as a worker"
+    finally:
+        restore()
+
+
+def test_idb_list_omits_unadopted_when_already_adopted(tmp_path, monkeypatch):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    idb = tmp_path / "sample.bin.i64"
+    idb.write_bytes(b"idb")
+    restore = _patch_discovery(
+        instances=[
+            {
+                "host": "127.0.0.1",
+                "port": 31337,
+                "pid": 1234,
+                "binary": "sample.bin",
+                "idb_path": str(idb),
+                "started_at": "now",
+            }
+        ],
+        probe=True,
+    )
+    try:
+        sup = _FakeSupervisor()
+        sup.open_session(str(sample), session_id="gui", mode="prefer_gui")
+        monkeypatch.setattr(supmod._discovery, "probe_instance", lambda *_args, **_kwargs: True)
+        listed = sup.list_sessions()
+        assert all(entry["adopted"] for entry in listed)
+        assert len(listed) == 1
+    finally:
+        restore()
+
+
+def test_open_session_forwards_warmup_flags_and_captures_result(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(
+        str(sample),
+        session_id="sample",
+        run_auto_analysis=False,
+        build_caches=True,
+        init_hexrays=True,
+    )
+    args = sup.opened[0][1]
+    assert args["build_caches"] is True
+    assert args["init_hexrays"] is True
+    assert args["run_auto_analysis"] is False
+    assert session.last_warmup is not None
+    assert session.last_warmup["ok"] is True
+
+
+def test_open_session_forwards_idle_ttl_sec(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    sup.open_session(str(sample), session_id="sample", idle_ttl_sec=1800)
+    args = sup.opened[0][1]
+    assert args["idle_ttl_sec"] == 1800
+
+
+def test_open_session_defaults_idle_ttl_sec_to_baseline(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    sup.open_session(str(sample), session_id="sample")
+    args = sup.opened[0][1]
+    assert args["idle_ttl_sec"] == 600
+
+
+def test_open_session_skips_warmup_when_flags_disabled(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(
+        str(sample),
+        session_id="sample",
+        build_caches=False,
+        init_hexrays=False,
+    )
+    args = sup.opened[0][1]
+    assert args["build_caches"] is False
+    assert args["init_hexrays"] is False
+    assert session.last_warmup is None
+
+
+def test_resolve_session_requires_database():
+    sup = _FakeSupervisor()
+    for value in (None, ""):
+        try:
+            sup.resolve_session(value)
+        except RuntimeError as e:
+            assert "database is required" in str(e)
+        else:
+            raise AssertionError(f"expected RuntimeError for database={value!r}")
+
+
+def test_tool_error_result_omits_structured_content():
+    result = supmod._call_tool_result({"error": "no database"}, is_error=True)
+    assert result["isError"] is True
+    assert "structuredContent" not in result
+
+
+def test_open_session_reuses_schema_worker(tmp_path):
     sample = tmp_path / "sample.bin"
     sample.write_bytes(b"x")
     sup = _FakeSupervisor()
     sup.worker_tools()  # creates the idle/schema worker
-    session = sup.open_session(str(sample), session_id="sample", context_id="ctx")
+    session = sup.open_session(str(sample), session_id="sample")
     assert session.session_id == "sample"
-    assert sup.context_bindings["ctx"] == "sample"
-    assert sup.opened[0][1]["session_id"] == "sample"
+    assert sup.opened[0][1]["preferred_session_id"] == "sample"
 
 
-def test_resolve_session_accepts_session_id_filename_and_context(tmp_path):
+def test_resolve_session_only_accepts_session_id(tmp_path):
     sample = tmp_path / "sample.bin"
     sample.write_bytes(b"x")
     sup = _FakeSupervisor()
-    sup.open_session(str(sample), session_id="sample", context_id="ctx")
-    sup.mcp = _TransportMcp()
-    sup.context_bindings[supmod.SHARED_FALLBACK_CONTEXT_ID] = "sample"
+    sup.open_session(str(sample), session_id="sample")
 
     assert sup.resolve_session("sample").session_id == "sample"
-    assert sup.resolve_session("sample.bin").session_id == "sample"
-    assert sup.resolve_session(None).session_id == "sample"
+
+    for selector in ("sample.bin", str(sample), str(sample.resolve())):
+        try:
+            sup.resolve_session(selector)
+        except RuntimeError as e:
+            assert "not found" in str(e)
+        else:
+            raise AssertionError(f"expected RuntimeError for selector={selector!r}")
 
 
 def test_open_session_uses_matching_gui_instance(tmp_path):
@@ -544,13 +586,12 @@ def test_open_session_uses_matching_gui_instance(tmp_path):
     )
     try:
         sup = _FakeSupervisor()
-        session = sup.open_session(str(sample), session_id="gui", context_id="ctx")
+        session = sup.open_session(str(sample), session_id="gui", mode="prefer_gui")
         assert session.backend == "gui"
         assert session.host == "127.0.0.1"
         assert session.port == 31337
         assert session.pid == 999
-        assert sup.resolve_session(str(sample)).session_id == "gui"
-        assert sup.resolve_session(str(idb)).session_id == "gui"
+        assert sup.resolve_session("gui").session_id == "gui"
         assert sup.opened == []
     finally:
         restore()
@@ -569,11 +610,10 @@ def test_open_session_removes_stale_existing_mapping(tmp_path):
             process=_DeadProcess(),
         )
         with sup._lock:
-            sup._register_session_locked(stale, str(sample.resolve()), "ctx")
-        session = sup.open_session(str(sample), session_id="new", context_id="ctx")
+            sup._register_session_locked(stale, str(sample.resolve()))
+        session = sup.open_session(str(sample), session_id="new")
         assert session.session_id == "new"
         assert "stale" not in sup.sessions
-        assert sup.context_bindings["ctx"] == "new"
     finally:
         restore()
 
@@ -594,15 +634,167 @@ def test_open_session_ignores_dead_workers_for_max_worker_limit(tmp_path):
             process=_DeadProcess(),
         )
         with sup._lock:
-            sup._register_session_locked(stale, str(stale_path.resolve()), "ctx")
+            sup._register_session_locked(stale, str(stale_path.resolve()))
 
-        session = sup.open_session(str(new_path), session_id="new", context_id="ctx")
+        session = sup.open_session(str(new_path), session_id="new")
 
         assert session.session_id == "new"
         assert "stale" not in sup.sessions
-        assert sup.context_bindings["ctx"] == "new"
     finally:
         restore()
+
+
+def test_resolve_session_removes_unreachable_worker(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+    unreachable = {session.session_id}
+
+    def fake_reachable(candidate):
+        if candidate.session_id in unreachable:
+            return False
+        return candidate.is_alive()
+
+    sup._session_is_reachable = fake_reachable
+
+    try:
+        sup.resolve_session("sample")
+    except RuntimeError as e:
+        assert "not reachable" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+    assert "sample" not in sup.sessions
+    assert session.process.returncode == 0
+
+
+def test_open_session_prunes_unreachable_existing_mapping(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    restore = _patch_discovery(instances=[], probe=False)
+    try:
+        sup = _FakeSupervisor()
+        stale = supmod.WorkerSession(
+            session_id="stale",
+            input_path=str(sample.resolve()),
+            filename="sample.bin",
+            process=_FakeProcess(),
+        )
+        with sup._lock:
+            sup._register_session_locked(stale, str(sample.resolve()))
+
+        sup._session_is_reachable = lambda session: session.session_id != "stale" and session.is_alive()
+
+        session = sup.open_session(str(sample), session_id="new")
+
+        assert session.session_id == "new"
+        assert "stale" not in sup.sessions
+    finally:
+        restore()
+
+
+def test_probe_session_health_reports_tcp_connect_failure(monkeypatch):
+    sup = supmod.IdalibSupervisor(supmod.McpServer("test"))
+    worker = supmod.WorkerSession(
+        session_id="worker",
+        input_path="sample.bin",
+        filename="sample.bin",
+        host="127.0.0.1",
+        port=12345,
+        process=_FakeProcess(),
+    )
+
+    def fail_connect(*_args, **_kwargs):
+        raise ConnectionRefusedError("refused")
+
+    monkeypatch.setattr(supmod.socket, "create_connection", fail_connect)
+
+    health = sup._probe_session_health(worker)
+
+    assert health["reachable"] is False
+    assert health["tcp_connect"] is False
+    assert health["rpc_ping"] is None
+    assert health["failed_probe"] == "tcp_connect"
+    assert "refused" in health["error"]
+
+
+def test_probe_session_health_reports_rpc_ping_failure(monkeypatch):
+    sup = supmod.IdalibSupervisor(supmod.McpServer("test"))
+    worker = supmod.WorkerSession(
+        session_id="worker",
+        input_path="sample.bin",
+        filename="sample.bin",
+        host="127.0.0.1",
+        port=12345,
+        process=_FakeProcess(),
+    )
+
+    class _FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(supmod.socket, "create_connection", lambda *_args, **_kwargs: _FakeSocket())
+    sup._worker_rpc = lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("rpc timeout"))
+
+    health = sup._probe_session_health(worker)
+
+    assert health["reachable"] is False
+    assert health["tcp_connect"] is True
+    assert health["rpc_ping"] is False
+    assert health["failed_probe"] == "rpc_ping"
+    assert "rpc timeout" in health["error"]
+
+
+def test_list_sessions_reports_is_active_from_health_probe(tmp_path):
+    first = tmp_path / "first.bin"
+    second = tmp_path / "second.bin"
+    first.write_bytes(b"1")
+    second.write_bytes(b"2")
+    sup = _FakeSupervisor()
+    sup.open_session(str(first), session_id="first")
+    sup.open_session(str(second), session_id="second")
+
+    sup._session_is_reachable = lambda session: session.session_id == "first"
+    supmod._discovery.discover_instances = lambda: []
+
+    listed = {s["session_id"]: s["is_active"] for s in sup.list_sessions()}
+    assert listed == {"first": True, "second": False}
+
+
+def test_supervisor_uses_idb_prefixed_management_tools_only():
+    """No legacy names should leak into IDB_MANAGEMENT_TOOLS or module symbols."""
+    legacy = {
+        "open_database",
+        "idalib_close",
+        "idalib_list",
+        "idalib_save",
+        "idb_close",
+        "idalib_switch",
+        "idalib_unbind",
+        "idalib_current",
+        "idalib_warmup",
+        "idalib_health",
+    }
+    assert supmod.IDB_MANAGEMENT_TOOLS == {"idb_open", "idb_list"}
+    for name in legacy:
+        assert not hasattr(supmod, name), f"{name} should have been deleted"
+    for typename in ("IdalibWarmupResult", "IdalibHealthResult"):
+        assert not hasattr(supmod, typename), f"{typename} should have been deleted"
+    # --stdio-shared and its support code should be gone.
+    for name in (
+        "_stdio_proxy",
+        "_open_stdio_initial_database",
+        "_ensure_shared_http_supervisor",
+        "_spawn_shared_http_supervisor",
+        "_probe_http_supervisor",
+        "_http_jsonrpc",
+        "_stdio_shared_session_id",
+    ):
+        assert not hasattr(supmod, name), f"{name} should have been deleted"
 
 
 def test_open_session_race_discards_losing_worker_for_existing_path(tmp_path):
@@ -612,7 +804,7 @@ def test_open_session_race_discards_losing_worker_for_existing_path(tmp_path):
     class _RaceSupervisor(_FakeSupervisor):
         def call_worker_tool(self, worker, name, arguments=None):
             result = super().call_worker_tool(worker, name, arguments)
-            if name == "idalib_open":
+            if name == "idb_open":
                 existing = supmod.WorkerSession(
                     session_id="winner",
                     input_path=str(sample.resolve()),
@@ -620,7 +812,7 @@ def test_open_session_race_discards_losing_worker_for_existing_path(tmp_path):
                     process=_FakeProcess(),
                 )
                 with self._lock:
-                    self._register_session_locked(existing, str(sample.resolve()), None)
+                    self._register_session_locked(existing, str(sample.resolve()))
             return result
 
     restore = _patch_discovery(instances=[], probe=False)
@@ -629,19 +821,19 @@ def test_open_session_race_discards_losing_worker_for_existing_path(tmp_path):
         session = sup.open_session(str(sample))
         assert session.session_id == "winner"
         assert set(sup.sessions) == {"winner"}
-        assert sup.opened[0][1]["session_id"] != "winner"
+        assert sup.opened[0][1]["preferred_session_id"] != "winner"
     finally:
         restore()
 
 
-def test_open_session_race_rejects_different_requested_session_id(tmp_path):
+def test_open_session_race_returns_existing_when_preferred_id_differs(tmp_path):
     sample = tmp_path / "sample.bin"
     sample.write_bytes(b"x")
 
     class _RaceSupervisor(_FakeSupervisor):
         def call_worker_tool(self, worker, name, arguments=None):
             result = super().call_worker_tool(worker, name, arguments)
-            if name == "idalib_open":
+            if name == "idb_open":
                 existing = supmod.WorkerSession(
                     session_id="winner",
                     input_path=str(sample.resolve()),
@@ -649,21 +841,28 @@ def test_open_session_race_rejects_different_requested_session_id(tmp_path):
                     process=_FakeProcess(),
                 )
                 with self._lock:
-                    self._register_session_locked(existing, str(sample.resolve()), None)
+                    self._register_session_locked(existing, str(sample.resolve()))
             return result
 
     restore = _patch_discovery(instances=[], probe=False)
     try:
         sup = _RaceSupervisor()
-        try:
-            sup.open_session(str(sample), session_id="loser")
-        except ValueError as e:
-            assert "already open as session 'winner'" in str(e)
-        else:
-            raise AssertionError("expected ValueError")
+        session = sup.open_session(str(sample), session_id="loser")
+        assert session.session_id == "winner"
         assert set(sup.sessions) == {"winner"}
     finally:
         restore()
+
+
+def test_open_session_returns_existing_session_when_path_already_open(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    first = sup.open_session(str(sample), session_id="alpha")
+    again = sup.open_session(str(sample), session_id="beta")
+    assert again is first
+    assert again.session_id == "alpha"
+    assert set(sup.sessions) == {"alpha"}
 
 
 def test_open_session_race_rejects_duplicate_session_id_for_different_path(tmp_path):
@@ -684,15 +883,15 @@ def test_open_session_race_rejects_duplicate_session_id_for_different_path(tmp_p
 
         def call_worker_tool(self, worker, name, arguments=None):
             result = super().call_worker_tool(worker, name, arguments)
-            if name == "idalib_open":
+            if name == "idb_open":
                 existing = supmod.WorkerSession(
-                    session_id=arguments["session_id"],
+                    session_id=arguments["preferred_session_id"],
                     input_path=str(first.resolve()),
                     filename="first.bin",
                     process=_FakeProcess(),
                 )
                 with self._lock:
-                    self._register_session_locked(existing, str(first.resolve()), None)
+                    self._register_session_locked(existing, str(first.resolve()))
             return result
 
     restore = _patch_discovery(instances=[], probe=False)
@@ -733,7 +932,7 @@ def test_closed_gui_session_reopens_headless(tmp_path):
     )
     try:
         sup = _FakeSupervisor()
-        session = sup.open_session(str(sample), session_id="gui", context_id="ctx")
+        session = sup.open_session(str(sample), session_id="gui", mode="prefer_gui")
         assert session.backend == "gui"
         supmod._discovery.probe_instance = lambda *_args, **_kwargs: False
         reopened = sup.resolve_session("gui")
@@ -764,7 +963,7 @@ def test_closed_gui_session_falls_back_to_requested_binary_if_idb_is_stale(tmp_p
     )
     try:
         sup = _FakeSupervisor()
-        session = sup.open_session(str(sample), session_id="gui", context_id="ctx")
+        session = sup.open_session(str(sample), session_id="gui", mode="prefer_gui")
         assert session.backend == "gui"
         idb.unlink()
         supmod._discovery.probe_instance = lambda *_args, **_kwargs: False
@@ -794,8 +993,15 @@ def test_closed_gui_session_does_not_reappear_if_closed_during_headless_fallback
 
         def call_worker_tool(self, worker, name, arguments=None):
             result = super().call_worker_tool(worker, name, arguments)
-            if name == "idalib_open":
-                self.close_session(arguments["session_id"])
+            if name == "idb_open":
+                # Simulate: the session disappears while the reopen worker
+                # is doing the open. Drop it from the supervisor's registry
+                # and tear down the spawning worker.
+                sid = arguments["preferred_session_id"]
+                with self._lock:
+                    stale = self._unregister_session_locked(sid)
+                if stale is not None:
+                    self._terminate_worker(stale)
             return result
 
     restore = _patch_discovery(
@@ -813,7 +1019,7 @@ def test_closed_gui_session_does_not_reappear_if_closed_during_headless_fallback
     )
     try:
         sup = _RaceSupervisor()
-        session = sup.open_session(str(sample), session_id="gui", context_id="ctx")
+        session = sup.open_session(str(sample), session_id="gui", mode="prefer_gui")
         assert session.backend == "gui"
         supmod._discovery.probe_instance = lambda *_args, **_kwargs: False
 

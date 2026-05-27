@@ -7,7 +7,6 @@
 
 # --- Core metadata & listings ---
 server_health
-server_warmup
 list_funcs
 list_globals
 imports
