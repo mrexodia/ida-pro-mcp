@@ -832,6 +832,7 @@ def imports_query(
 @idasync
 def idb_save(
     path: Annotated[str, "Optional destination path (default: current IDB path)"] = "",
+    pack: Annotated[bool, "Pack into a single compressed .i64 and delete the loose .id0/.id1/.id2/.nam/.til working files (default: False)"] = False,
 ) -> IdbSaveResult:
     """Save active IDB to disk, optionally to a provided path."""
     try:
@@ -841,7 +842,8 @@ def idb_save(
         if not save_path:
             return {"ok": False, "path": None, "error": "Could not resolve IDB path"}
 
-        ok = bool(ida_loader.save_database(save_path, 0))
+        flags = (ida_loader.DBFL_KILL | ida_loader.DBFL_COMP) if pack else 0
+        ok = bool(ida_loader.save_database(save_path, flags))
         result: dict = {"ok": ok, "path": save_path}
         if not ok:
             result["error"] = "save_database returned false"
