@@ -266,6 +266,7 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[PatchAsmResult]:
         items = [items]
 
     results = []
+    changed = False
     for item in items:
         addr_str = item.get("addr", "")
         instructions = item.get("asm", "")
@@ -286,6 +287,7 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[PatchAsmResult]:
                         )
                         break
                     ida_bytes.patch_bytes(ea, bytes_to_patch)
+                    changed = True
                     ea += len(bytes_to_patch)
                 except Exception as e:
                     results.append(
@@ -297,6 +299,13 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[PatchAsmResult]:
         except Exception as e:
             results.append({"addr": addr_str, "error": str(e)})
 
+    if changed:
+        try:
+            from . import _sigmaker
+
+            _sigmaker.invalidate_image_cache()
+        except Exception:
+            pass
     return results
 
 

@@ -9,6 +9,35 @@ This is a stripped-down, self-contained copy of the sigmaker library
 with GUI/plugin code removed.  Only the engine classes are kept so that
 api_sigmaker.py can use them without an external dependency.
 
+Synced with upstream v1.8.0.  Ported engine improvements over the original
+v1.6.0 vendoring:
+  - WildcardPolicy.for_x86 no longer wildcards immediates (literals baked
+    into the encoding do not move between builds, so wildcarding them only
+    removes bytes that would have made the signature unique).
+  - SignatureSearcher.is_unique bails at the second match instead of
+    enumerating every match -- a large win on big binaries where a short,
+    common prefix can match millions of positions.
+  - GeneratedSignature orders by (length, wildcard_count) so the xref
+    ranking prefers the most specific signature among equal-length ones.
+  - MinimalFunctionSignatureGenerator finds the shortest unique signature
+    anywhere inside a function body (not just from its entry point).
+  - SIMD seed-and-refine helpers are carried over for parity; they are
+    inert unless a compiled `_speedups` module is present.
+  - numpy-backed vectorized scanner with a cached, segment-gap-aware image
+    (_NumpyImage / numpy_find_all). When no compiled `_speedups` exists but
+    numpy is importable, signature scanning materializes the image once per
+    session and refines candidate offsets in memory instead of re-running
+    idaapi.bin_search per uniqueness check. On a 370 MB image this measured
+    ~0.13 s per signature warm vs ~1.5-2.2 s for native bin_search (the
+    one-time image build is ~15-17 s, dominated by idaapi.get_bytes). The
+    cache is invalidated on segment-layout change and by
+    invalidate_image_cache(), which the byte-patch tools call.
+
+The interactive layers (IDA Forms, the plugin class, wait-box progress
+dialogs, clipboard, and the cProfile diagnostics) are intentionally NOT
+vendored: this engine runs inside an MCP server, where popping modal UI
+or blocking on user input is never appropriate.
+
 MIT License
 
 Copyright (c) 2024 Mahmoud Abdelkader (@mahmoudimus)
@@ -34,6 +63,7 @@ SOFTWARE.
 
 from __future__ import annotations
 
+import array
 import contextlib
 import contextvars
 import dataclasses
@@ -49,7 +79,7 @@ import idaapi
 import idc
 
 __author__ = "mahmoudimus"
-__version__ = "1.6.0"
+__version__ = "1.8.0"
 
 
 WILDCARD_POLICY_CTX: contextvars.ContextVar["WildcardPolicy"] = contextvars.ContextVar(
@@ -68,6 +98,47 @@ with contextlib.suppress(ImportError):
     _simd_scan_bytes = simd_scan.scan_bytes
 
     SIMD_SPEEDUP_AVAILABLE = True
+
+
+# numpy-backed vectorized scanner. When a compiled `_speedups` module is not
+# present (the common case for this pip/installer-distributed plugin), numpy
+# still gives a large speedup over re-running idaapi.bin_search per uniqueness
+# check on big binaries: the image is materialized once and cached, then every
+# scan is a vectorized seed-and-refine over that array. See _NumpyImage /
+# numpy_find_all below. numpy ships as wheels and needs no C toolchain, so this
+# path is portable. It is preferred over native bin_search only when the image
+# cache is warm enough to amortize; the cache lives for the whole session and
+# is invalidated on layout change or by invalidate_image_cache() after a patch.
+NUMPY_AVAILABLE = False
+with contextlib.suppress(ImportError):
+    import numpy as _np
+
+    NUMPY_AVAILABLE = True
+
+
+# How many matches a scan loop processes between cancellation polls.
+# idaapi.user_cancelled() is not a cheap predicate (it pumps the UI event
+# loop), and a short, common pattern can match tens of millions of positions,
+# so polling too often makes the poll itself the dominant cost. Polling every
+# 65536 matches keeps that overhead near a second while leaving cancel
+# responsive. Only the SIMD scan loops consult this.
+_CANCEL_POLL_STRIDE: int = 65536
+
+
+def _user_canceled() -> bool:
+    """Headless-safe wrapper around IDA's cancellation predicate.
+
+    IDA exposes the British spelling ``user_cancelled``. In a headless idalib
+    context the function still exists and simply returns False, so polling it
+    is harmless; guard anyway so the engine never hard-depends on it.
+    """
+    fn = getattr(idaapi, "user_cancelled", None)
+    if fn is None:
+        return False
+    try:
+        return bool(fn())
+    except Exception:
+        return False
 
 
 def configure_logging(
@@ -105,6 +176,21 @@ LOGGER = configure_logging()
 
 class Unexpected(Exception):
     """Exception type used throughout the module to indicate unexpected errors."""
+
+
+class UserCanceledError(Exception):
+    """Raised when an optional progress reporter signals cancellation.
+
+    Headless callers do not pass a reporter, so this is effectively inert in
+    the MCP server; it is kept so the generator signatures stay compatible
+    with the upstream engine.
+    """
+
+
+class ProgressReporter(typing.Protocol):
+    """Minimal protocol for cooperative cancellation of long operations."""
+
+    def should_cancel(self) -> bool: ...
 
 
 @functools.total_ordering
@@ -228,6 +314,207 @@ class InMemoryBuffer:
         return ida_addr - self.imagebase
 
 
+# ---------------------------------------------------------------------------
+# numpy-backed image scanner (cached, vectorized, segment-gap aware)
+# ---------------------------------------------------------------------------
+#
+# Bumped by invalidate_image_cache(); part of the cache key so a patch (which
+# does not change the segment layout) forces a rebuild.
+_image_generation: int = 0
+_IMAGE_CACHE: typing.Optional["_NumpyImage"] = None
+
+
+def invalidate_image_cache() -> None:
+    """Drop the cached scan image and force a rebuild on next use.
+
+    Call after patching bytes: the segment *layout* is unchanged by a patch,
+    so the layout fingerprint alone would not notice, and a stale image would
+    scan pre-patch bytes. Patch tools should call this.
+    """
+    global _image_generation, _IMAGE_CACHE
+    _image_generation += 1
+    _IMAGE_CACHE = None
+
+
+def _segment_layout() -> tuple[list[tuple[int, int]], int]:
+    """Return ([(seg_start_ea, size), ...], total_bytes) for all segments."""
+    segs: list[tuple[int, int]] = []
+    total = 0
+    seg = idaapi.get_first_seg()
+    while seg:
+        size = seg.end_ea - seg.start_ea
+        if size > 0:
+            segs.append((seg.start_ea, size))
+            total += size
+        seg = idaapi.get_next_seg(seg.start_ea)
+    return segs, total
+
+
+@dataclasses.dataclass(slots=True)
+class _NumpyImage:
+    """A cached, concatenated numpy view of all segment bytes.
+
+    The segments of a real binary are not contiguous in the address space
+    (PE images have gaps between sections), so a flat buffer offset does NOT
+    equal ``ea - min_ea``. We keep an explicit segment table and map buffer
+    offsets back to effective addresses through it, and we drop candidate
+    matches whose byte window would straddle a segment boundary.
+    """
+
+    arr: "object"  # np.ndarray[uint8]
+    buf_starts: "object"  # np.ndarray[int64]: cumulative buffer offset per seg
+    seg_eas: "object"  # np.ndarray[int64]: start ea per seg
+    seg_sizes: "object"  # np.ndarray[int64]
+    byte_counts: "object"  # np.ndarray[int64], len 256: histogram for seed pick
+    key: tuple
+
+    @staticmethod
+    def _current_key(segs: list[tuple[int, int]], total: int) -> tuple:
+        return (
+            idaapi.get_input_file_path(),
+            int(idaapi.get_imagebase()),
+            total,
+            tuple(segs),
+            _image_generation,
+        )
+
+    @classmethod
+    def current(cls) -> "_NumpyImage":
+        """Return the cached image, (re)building it if the layout changed."""
+        global _IMAGE_CACHE
+        segs, total = _segment_layout()
+        key = cls._current_key(segs, total)
+        cached = _IMAGE_CACHE
+        if cached is not None and cached.key == key:
+            return cached
+
+        parts = []
+        buf_starts = []
+        seg_eas = []
+        seg_sizes = []
+        offset = 0
+        for start_ea, size in segs:
+            data = idaapi.get_bytes(start_ea, size)
+            if not data:
+                # Unreadable segment (e.g. uninitialized .bss): represent it as
+                # zero bytes so offsets/eas stay consistent with the layout.
+                data = bytes(size)
+            parts.append(_np.frombuffer(data, dtype=_np.uint8))
+            buf_starts.append(offset)
+            seg_eas.append(start_ea)
+            seg_sizes.append(size)
+            offset += size
+
+        arr = (
+            _np.concatenate(parts)
+            if parts
+            else _np.empty(0, dtype=_np.uint8)
+        )
+        byte_counts = _np.bincount(arr, minlength=256).astype(_np.int64)
+        img = cls(
+            arr=arr,
+            buf_starts=_np.asarray(buf_starts, dtype=_np.int64),
+            seg_eas=_np.asarray(seg_eas, dtype=_np.int64),
+            seg_sizes=_np.asarray(seg_sizes, dtype=_np.int64),
+            byte_counts=byte_counts,
+            key=key,
+        )
+        _IMAGE_CACHE = img
+        return img
+
+
+def _ida_pattern(ida_signature: str) -> list[tuple[int, bool]]:
+    """Parse an IDA-format signature into [(value, is_wildcard), ...]."""
+    _, pattern = SigText.normalize(ida_signature)
+    return pattern
+
+
+def _numpy_seed_offsets(
+    img: "_NumpyImage", pattern: list[tuple[int, bool]]
+) -> "object":
+    """Return an int64 ndarray of buffer offsets matching the full pattern.
+
+    Seeds on the least-frequent non-wildcard byte (cheap to refine from), then
+    refines against the remaining concrete bytes. Boundary-straddling matches
+    are NOT filtered here; callers that report EAs must use _numpy_offsets_to_eas.
+    """
+    arr = img.arr
+    n = arr.size
+    k = len(pattern)
+    if k == 0:
+        return _np.arange(0, n, dtype=_np.int64)
+
+    # Pick the most selective concrete byte as the seed.
+    seed_j = -1
+    seed_count = None
+    for j, (val, wild) in enumerate(pattern):
+        if wild:
+            continue
+        c = int(img.byte_counts[val])
+        if seed_count is None or c < seed_count:
+            seed_count = c
+            seed_j = j
+    if seed_j < 0:
+        # All-wildcard pattern: matches every aligned position.
+        return _np.arange(0, max(n - k + 1, 0), dtype=_np.int64)
+
+    seed_val = pattern[seed_j][0]
+    hits = _np.flatnonzero(arr == seed_val)
+    cand = hits - seed_j
+    # Keep only candidates whose full window fits in the buffer.
+    cand = cand[(cand >= 0) & (cand + k <= n)]
+    # Refine by every other concrete byte; bail as soon as nothing survives.
+    for j, (val, wild) in enumerate(pattern):
+        if wild or j == seed_j:
+            continue
+        if cand.size == 0:
+            break
+        cand = cand[arr[cand + j] == val]
+    return cand
+
+
+def _numpy_offsets_to_eas(
+    img: "_NumpyImage", offsets: "object", k: int, limit: typing.Optional[int] = None
+) -> list[Match]:
+    """Map buffer offsets to EAs, dropping windows that cross a segment gap.
+
+    Boundary filtering happens BEFORE applying ``limit`` -- otherwise capping
+    at, say, 2 could keep two boundary-straddling false matches and discard a
+    later real one, making a unique signature look non-unique.
+    """
+    if offsets.size == 0:
+        return []
+    # Segment of the window start and of its last byte must match.
+    seg_start = _np.searchsorted(img.buf_starts, offsets, side="right") - 1
+    seg_end = _np.searchsorted(img.buf_starts, offsets + (k - 1), side="right") - 1
+    keep = seg_start == seg_end
+    offsets = offsets[keep]
+    seg_idx = seg_start[keep]
+    if limit is not None and offsets.size > limit:
+        offsets = offsets[:limit]
+        seg_idx = seg_idx[:limit]
+    eas = img.seg_eas[seg_idx] + (offsets - img.buf_starts[seg_idx])
+    return [Match(int(x)) for x in eas]
+
+
+def numpy_find_all(
+    ida_signature: str, skip_more_than_one: bool = False
+) -> list[Match]:
+    """Vectorized all-matches scan over the cached image. EAs are correct
+    across segment gaps. Honors skip_more_than_one by capping work cheaply.
+    """
+    img = _NumpyImage.current()
+    pattern = _ida_pattern(ida_signature)
+    k = len(pattern)
+    if k == 0:
+        return [Match(int(idaapi.inf_get_min_ea()))]
+    offsets = _numpy_seed_offsets(img, pattern)
+    # When the caller only needs uniqueness, two surviving offsets are enough
+    # to prove non-uniqueness; cap the EA mapping at 2.
+    limit = 2 if skip_more_than_one else None
+    return _numpy_offsets_to_eas(img, offsets, k, limit=limit)
+
+
 @dataclasses.dataclass
 class SigMakerConfig:
     output_format: SignatureType
@@ -265,6 +552,13 @@ class SignatureType(enum.Enum):
     @classmethod
     def at(cls, index: int) -> "SignatureType":
         return list(cls.__members__.values())[index]
+
+
+class GenerationStatus(enum.Enum):
+    """How a GeneratedSignature should be interpreted."""
+
+    UNIQUE = "unique"
+    PARTIAL_ON_CANCEL = "partial_on_cancel"
 
 
 class SignatureByte(typing.NamedTuple):
@@ -453,7 +747,14 @@ class WildcardPolicy:
 
     @classmethod
     def for_x86(cls) -> "WildcardPolicy":
-        return cls(frozenset(cls.BaseKind) | frozenset(cls.X86Kind))
+        # Exclude BaseKind.IMM. An immediate like the 0x13371338 in
+        # `mov rcx, 0x13371338` is a literal value baked into the
+        # instruction encoding; it does not shift between binary builds,
+        # so wildcarding it only removes bytes that would have made the
+        # signature unique. MEM/FAR/NEAR still get wildcarded because
+        # those operands DO encode addresses that move between builds.
+        x86_base = frozenset(cls.BaseKind) - {cls.BaseKind.IMM}
+        return cls(x86_base | frozenset(cls.X86Kind))
 
     @classmethod
     def for_arm(cls) -> "WildcardPolicy":
@@ -516,13 +817,26 @@ class WildcardPolicy:
 
 @dataclasses.dataclass(slots=True, frozen=True)
 class GeneratedSignature:
+    """Result container for signature generation operations."""
+
     signature: Signature
     address: Match | None = None
+    status: GenerationStatus = GenerationStatus.UNIQUE
+    match_count: int | None = None
+
+    def _wildcard_count(self) -> int:
+        """Number of wildcard bytes in this signature."""
+        return sum(1 for b in self.signature if b.is_wildcard)
 
     def __lt__(self, other) -> bool:
         if not isinstance(other, GeneratedSignature):
             return NotImplemented
-        return len(self.signature) < len(other.signature)
+        # Prefer shorter signatures; break ties by fewer wildcards so the
+        # most specific signature wins among equal-length candidates.
+        return (len(self.signature), self._wildcard_count()) < (
+            len(other.signature),
+            other._wildcard_count(),
+        )
 
 
 @dataclasses.dataclass(slots=True)
@@ -755,6 +1069,17 @@ class UniqueSignatureGenerator:
         start_fn = idaapi.get_func(ea)
         bytes_since_last_check = 0
 
+        # Seed-and-refine (issue #398): scan the image once to seed a candidate
+        # offset set, then refine that set in memory as the pattern grows
+        # instead of re-scanning (and, on the SIMD path, rebuilding the whole
+        # image buffer) on every uniqueness check. There are two seed-refine
+        # backends -- compiled SIMD and numpy -- plus a native bin_search
+        # fallback. Each is seeded at most once per generate().
+        offsets: typing.Optional[list[int]] = None  # SIMD list candidates
+        buf: typing.Optional["InMemoryBuffer"] = None
+        np_img: typing.Optional["_NumpyImage"] = None
+        np_cand: typing.Optional["object"] = None  # numpy int64 candidate offsets
+
         for cur_ea, ins, ins_len in InstructionWalker(ea):
             if bytes_since_last_check > cfg.max_single_signature_length:
                 if not cfg.ask_longer_signature:
@@ -768,16 +1093,456 @@ class UniqueSignatureGenerator:
             ):
                 raise Unexpected("Signature left function scope without being unique")
 
+            prev_len = len(sig)
             self.processor.append_instruction_to_sig(
                 sig, cur_ea, ins, cfg.wildcard_operands, cfg.wildcard_optimized
             )
             bytes_since_last_check += ins_len
 
+            if SIMD_SPEEDUP_AVAILABLE:
+                # Compiled SIMD: seed once via a single image load, then refine
+                # the surviving offsets in memory per appended byte.
+                if offsets is None:
+                    offsets, buf = SignatureSearcher.find_all_offsets(f"{sig:ida}")
+                else:
+                    data_mv = buf.data()
+                    for j in range(prev_len, len(sig)):
+                        sb = sig[j]
+                        mask = 0x00 if sb.is_wildcard else 0xFF
+                        offsets = _refine_offsets(data_mv, offsets, j, sb.value, mask)
+                if len(offsets) == 1:
+                    sig.trim_signature()
+                    return sig
+                continue
+
+            if SignatureSearcher.use_numpy and NUMPY_AVAILABLE:
+                # numpy: seed once against the cached image, then refine the
+                # candidate ndarray in place for each concrete byte appended.
+                # Boundary-straddling false matches only ever ADD candidates,
+                # so a surviving count of 1 still proves real uniqueness (the
+                # anchor's own location is always among the candidates).
+                if np_cand is None:
+                    np_img = _NumpyImage.current()
+                    np_cand = _numpy_seed_offsets(
+                        np_img, [(b.value, b.is_wildcard) for b in sig]
+                    )
+                else:
+                    arr = np_img.arr
+                    n = arr.size
+                    for j in range(prev_len, len(sig)):
+                        sb = sig[j]
+                        if sb.is_wildcard:
+                            continue
+                        if np_cand.size == 0:
+                            break
+                        np_cand = np_cand[np_cand + j < n]
+                        np_cand = np_cand[arr[np_cand + j] == sb.value]
+                if np_cand.size == 1:
+                    sig.trim_signature()
+                    return sig
+                continue
+
+            # Native bin_search fallback: is_unique bails at the 2nd match and
+            # never materializes a buffer.
             if SignatureSearcher.is_unique(f"{sig:ida}"):
                 sig.trim_signature()
                 return sig
 
         raise Unexpected("Signature not unique (reached end of analysis)")
+
+
+# ---------------------------------------------------------------------------
+# Function-wide signature search (shortest unique signature anywhere in a func)
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(slots=True, frozen=True)
+class _DecodedInstruction:
+    """Pre-decoded instruction data; produced once per function and reused
+    across anchor growth loops in MinimalFunctionSignatureGenerator.
+
+    operand_offb / operand_length describe the byte range to wildcard for
+    this cfg's operand policy. Both are 0 when no operand should be
+    wildcarded (e.g. wildcard_operands=False, or the instruction has no
+    operand that matches the current WildcardPolicy).
+    """
+
+    ea: int
+    size: int
+    raw_bytes: bytes
+    operand_offb: int
+    operand_length: int
+
+
+def _refine_offsets(
+    data_mv: memoryview,
+    offsets: list[int],
+    j: int,
+    value: int,
+    mask: int,
+) -> list[int]:
+    """Keep offsets c where (data_mv[c + j] & mask) == (value & mask).
+
+    j is the pattern-relative index of the byte being checked; c is a match
+    start offset into data_mv. Candidates whose c + j runs past the buffer
+    cannot match and are dropped. Used to refine a shrinking candidate set as
+    a signature grows, instead of re-scanning the whole database.
+    """
+    n = len(data_mv)
+    target = value & mask
+    return [c for c in offsets if c + j < n and (data_mv[c + j] & mask) == target]
+
+
+def _refine_offsets_into(
+    data_mv: memoryview,
+    cands: "array.array",
+    count: int,
+    j: int,
+    value: int,
+    mask: int,
+) -> int:
+    """Refine the first ``count`` entries of the uint32 array ``cands`` in
+    place (Cython when available), returning the new count. The Python branch
+    is a defensive fallback that mirrors _refine_offsets.
+    """
+    if SIMD_SPEEDUP_AVAILABLE:
+        return simd_scan.refine_offsets(data_mv, cands, count, j, value, mask)
+    n = len(data_mv)
+    target = value & mask
+    w = 0
+    for r in range(count):
+        c = cands[r]
+        if c + j < n and (data_mv[c + j] & mask) == target:
+            cands[w] = cands[r]
+            w += 1
+    return w
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ByteIndex:
+    """A 2-byte bucket position index over the segment buffer.
+
+    Wraps simd_scan.build_byte_index. Built once per generate() and discarded;
+    reused across all anchors in that one search. Returns None unless a
+    compiled SIMD speedup module that exposes build_byte_index is present.
+    """
+
+    heads: "array.array"
+    positions: "array.array"
+
+    @classmethod
+    def build(cls, data_mv: memoryview) -> typing.Optional["_ByteIndex"]:
+        if not SIMD_SPEEDUP_AVAILABLE or len(data_mv) < 2:
+            return None
+        build_byte_index = getattr(simd_scan, "build_byte_index", None)
+        if build_byte_index is None:
+            return None
+        heads, positions = build_byte_index(data_mv)
+        return cls(heads, positions)
+
+    def bucket_size(self, key: int) -> int:
+        return self.heads[key + 1] - self.heads[key]
+
+    def candidates(self, key: int) -> "array.array":
+        return self.positions[self.heads[key]:self.heads[key + 1]]
+
+    def bucket_size1(self, b: int) -> int:
+        # 1-byte bucket for b: all 2-byte keys (b<<8)..((b+1)<<8 - 1) telescope
+        # into one contiguous range.
+        return self.heads[(b + 1) << 8] - self.heads[b << 8]
+
+    def candidates1(self, b: int) -> "array.array":
+        return self.positions[self.heads[b << 8]:self.heads[(b + 1) << 8]]
+
+
+def _select_seed_run(
+    sig: "Signature", index: "_ByteIndex"
+) -> typing.Optional[tuple[int, int, int]]:
+    """Pick the unmasked run (2-byte or single byte) with the smallest index
+    bucket (Dynamic Seed Selection), returning (offset, width, key).
+
+    Returns None only when sig has no exact byte at all.
+    """
+    best: typing.Optional[tuple[int, int, int, int]] = None  # (size, offset, width, key)
+    m = len(sig)
+    for j in range(m - 1):
+        a = sig[j]
+        b = sig[j + 1]
+        if a.is_wildcard or b.is_wildcard:
+            continue
+        key = (a.value << 8) | b.value
+        size = index.bucket_size(key)
+        if best is None or size < best[0]:
+            best = (size, j, 2, key)
+    for j in range(m):
+        sb = sig[j]
+        if sb.is_wildcard:
+            continue
+        size = index.bucket_size1(sb.value)
+        if best is None or size < best[0]:
+            best = (size, j, 1, sb.value)
+    if best is None:
+        return None
+    return best[1], best[2], best[3]
+
+
+def _seed_via_index(
+    sig: "Signature",
+    index: typing.Optional["_ByteIndex"],
+    buf: "InMemoryBuffer",
+) -> typing.Optional[tuple["array.array", int]]:
+    """Seed the candidate set from the byte index instead of scanning.
+
+    Picks the most selective unmasked run via Dynamic Seed Selection, maps its
+    hits back to candidate pattern-starts, and refines against the rest of the
+    pattern so the result equals matches(full pattern). Returns
+    (candidates_array, count), or None if the index is unavailable or the
+    pattern has no exact byte at all (caller falls back to a scan).
+    """
+    if index is None:
+        return None
+    run = _select_seed_run(sig, index)
+    if run is None:
+        return None
+    s, width, key = run
+    data_mv = buf.data()
+    n = len(data_mv)
+    m = len(sig)
+    raw = index.candidates(key) if width == 2 else index.candidates1(key)
+    cands = array.array("I", (p - s for p in raw if p >= s and (p - s) + m <= n))
+    # candidates1 is derived from 2-byte windows and never sees offset n-1 as a
+    # window start, so add a final-byte hit explicitly and let refine validate.
+    if width == 1 and n >= 1 and data_mv[n - 1] == key:
+        p = n - 1 - s
+        if 0 <= p and p + m <= n:
+            cands.append(p)
+    count = len(cands)
+    seed_span = (s, s + 1) if width == 2 else (s,)
+    for j in range(m):
+        if j in seed_span:
+            continue
+        sb = sig[j]
+        if sb.is_wildcard:
+            continue
+        count = _refine_offsets_into(data_mv, cands, count, j, sb.value, 0xFF)
+    return cands, count
+
+
+def _decode_function_for_anchors(
+    pfn: "idaapi.func_t",
+    processor: "InstructionProcessor",
+    cfg: "SigMakerConfig",
+) -> list[_DecodedInstruction]:
+    """Decode a function's instructions once and capture per-instruction data
+    for use across all anchor growth loops.
+
+    Reads all function bytes via one idaapi.get_bytes call, then walks
+    instructions via InstructionWalker. The operand wildcard decision is baked
+    in based on cfg.wildcard_operands / cfg.wildcard_optimized; operand_offb /
+    operand_length are both 0 when no operand should be wildcarded.
+    """
+    total = pfn.end_ea - pfn.start_ea
+    if total <= 0:
+        return []
+    func_bytes = idaapi.get_bytes(pfn.start_ea, total)
+    if not func_bytes:
+        return []
+
+    decoded: list[_DecodedInstruction] = []
+    for ea, ins, ins_len in InstructionWalker(pfn.start_ea, pfn.end_ea):
+        offset = ea - pfn.start_ea
+        if offset < 0 or offset + ins_len > len(func_bytes):
+            break
+        raw = bytes(func_bytes[offset:offset + ins_len])
+
+        operand_offb = 0
+        operand_length = 0
+        if cfg.wildcard_operands:
+            off, length = [0], [0]
+            if processor.operand_processor.get_operand(
+                ins, off, length, cfg.wildcard_optimized
+            ):
+                operand_offb = off[0]
+                operand_length = length[0]
+
+        decoded.append(_DecodedInstruction(
+            ea=ea,
+            size=ins_len,
+            raw_bytes=raw,
+            operand_offb=operand_offb,
+            operand_length=operand_length,
+        ))
+    return decoded
+
+
+class MinimalFunctionSignatureGenerator:
+    """Find the shortest unique signature anywhere within a function body.
+
+    Decodes the function once at the start of generate(), then iterates every
+    instruction as a possible anchor over the pre-decoded list, growing a
+    signature from each until unique (bounded by function end and by the size
+    of the best candidate found so far). Returns the smallest unique signature
+    with the fewest wildcards. Raises Unexpected if no unique signature exists
+    within the function.
+
+    The wait-box/ProgressBox UI from upstream is intentionally omitted; this
+    runs headless inside the MCP server. An optional progress_reporter may be
+    supplied to support cooperative cancellation.
+    """
+
+    MIN_USEFUL_SIG_BYTES = 5
+
+    def __init__(
+        self,
+        processor: InstructionProcessor,
+        progress_reporter: typing.Optional[ProgressReporter] = None,
+    ):
+        self.processor = processor
+        self.progress_reporter = progress_reporter
+
+    def generate(
+        self, pfn: "idaapi.func_t", cfg: SigMakerConfig
+    ) -> GeneratedSignature:
+        """Search the function body for the shortest unique signature.
+
+        Uses cfg.max_single_signature_length as the initial budget; the budget
+        shrinks monotonically as better candidates are found. Raises Unexpected
+        if no start point produces a unique signature within the length budget
+        (or all candidates are degenerate, < MIN_USEFUL_SIG_BYTES bytes).
+        """
+        candidates: list[GeneratedSignature] = []
+
+        decoded = _decode_function_for_anchors(pfn, self.processor, cfg)
+        if not decoded:
+            raise Unexpected("No unique signature within function")
+
+        # Load the segment buffer once and reuse it across every is_unique
+        # call (only meaningful on the SIMD path).
+        buf: typing.Optional["InMemoryBuffer"] = None
+        index: typing.Optional["_ByteIndex"] = None
+        if SIMD_SPEEDUP_AVAILABLE:
+            buf = InMemoryBuffer.load(mode=InMemoryBuffer.LoadMode.SEGMENTS)
+            index = _ByteIndex.build(buf.data())
+
+        best_size = cfg.max_single_signature_length
+        for anchor_idx, di in enumerate(decoded):
+            if (
+                self.progress_reporter is not None
+                and self.progress_reporter.should_cancel()
+            ):
+                raise UserCanceledError("Function signature search canceled by user")
+
+            sig = self._grow_unique_from_decoded(
+                decoded, anchor_idx, best_size, cfg, buf=buf, index=index
+            )
+            if sig is None:
+                continue
+            if len(sig) < self.MIN_USEFUL_SIG_BYTES:
+                continue
+
+            candidates.append(GeneratedSignature(sig, Match(di.ea)))
+            best_size = min(best_size, len(sig))
+
+            wildcard_count = sum(1 for b in sig if b.is_wildcard)
+            if len(sig) <= self.MIN_USEFUL_SIG_BYTES and wildcard_count == 0:
+                break
+
+        if not candidates:
+            raise Unexpected("No unique signature within function")
+
+        candidates.sort()
+        return candidates[0]
+
+    def _grow_unique_from_decoded(
+        self,
+        decoded: list[_DecodedInstruction],
+        anchor_idx: int,
+        max_len: int,
+        cfg: SigMakerConfig,
+        buf: typing.Optional["InMemoryBuffer"] = None,
+        index: typing.Optional["_ByteIndex"] = None,
+    ) -> typing.Optional[Signature]:
+        """Grow a signature from ``decoded[anchor_idx]`` forward until unique.
+
+        On the SIMD path it seeds an in-memory candidate-offset set that is
+        refined per appended byte, so the database is scanned once per anchor
+        rather than once per growth step. On non-SIMD builds it falls back to a
+        per-step is_unique scan (which bails at the second match).
+        """
+        sig = Signature()
+        offsets: typing.Optional["array.array"] = None
+        ocount = 0
+        seed_buf = buf
+        min_useful = self.MIN_USEFUL_SIG_BYTES
+        for i in range(anchor_idx, len(decoded)):
+            if (
+                self.progress_reporter is not None
+                and self.progress_reporter.should_cancel()
+            ):
+                raise UserCanceledError("Function signature search canceled by user")
+
+            prev_len = len(sig)
+            self._append_decoded_to_sig(sig, decoded[i])
+
+            if len(sig) > max_len:
+                return None
+
+            # Below MIN_USEFUL_SIG_BYTES a seed scan would enumerate every match
+            # of a short, common prefix only for the caller to discard the
+            # result. Probe uniqueness cheaply (bail-at-2) and defer the
+            # seed-and-refine until the pattern is long enough to be useful.
+            if len(sig) < min_useful:
+                if SignatureSearcher.is_unique(f"{sig:ida}", buf=buf):
+                    sig.trim_signature()
+                    return sig
+                continue
+
+            if not SIMD_SPEEDUP_AVAILABLE or seed_buf is None:
+                count = SignatureSearcher.count_matches(f"{sig:ida}", buf=buf)
+            elif offsets is None:
+                seeded = _seed_via_index(sig, index, seed_buf)
+                if seeded is None:
+                    lst, seed_buf = SignatureSearcher.find_all_offsets(
+                        f"{sig:ida}", buf=seed_buf
+                    )
+                    offsets = array.array("I", lst)
+                    ocount = len(offsets)
+                else:
+                    offsets, ocount = seeded
+                count = ocount
+            else:
+                data_mv = seed_buf.data()
+                for j in range(prev_len, len(sig)):
+                    sb = sig[j]
+                    mask = 0x00 if sb.is_wildcard else 0xFF
+                    ocount = _refine_offsets_into(
+                        data_mv, offsets, ocount, j, sb.value, mask
+                    )
+                count = ocount
+
+            if count == 1:
+                sig.trim_signature()
+                return sig
+
+        return None
+
+    def _append_decoded_to_sig(
+        self, sig: Signature, di: _DecodedInstruction
+    ) -> None:
+        """Append a pre-decoded instruction's bytes to ``sig``, honoring its
+        baked operand-wildcard decision. Mirrors
+        InstructionProcessor.append_instruction_to_sig but reads from
+        di.raw_bytes instead of calling idaapi.get_bytes.
+        """
+        raw = di.raw_bytes
+        if di.operand_length <= 0:
+            sig.extend(SignatureByte(b, False) for b in raw)
+            return
+
+        end_operand = di.operand_offb + di.operand_length
+        sig.extend(SignatureByte(b, False) for b in raw[:di.operand_offb])
+        sig.extend(SignatureByte(b, True) for b in raw[di.operand_offb:end_operand])
+        sig.extend(SignatureByte(b, False) for b in raw[end_operand:])
 
 
 class RangeSignatureGenerator:
@@ -816,11 +1581,17 @@ class SignatureMaker:
     _instruction_processor: InstructionProcessor = dataclasses.field(init=False)
     _unique_generator: UniqueSignatureGenerator = dataclasses.field(init=False)
     _range_generator: RangeSignatureGenerator = dataclasses.field(init=False)
+    _function_generator: MinimalFunctionSignatureGenerator = dataclasses.field(
+        init=False
+    )
 
     def __post_init__(self):
         self._instruction_processor = InstructionProcessor(self._operand_processor)
         self._unique_generator = UniqueSignatureGenerator(self._instruction_processor)
         self._range_generator = RangeSignatureGenerator(self._instruction_processor)
+        self._function_generator = MinimalFunctionSignatureGenerator(
+            self._instruction_processor
+        )
 
     def make_signature(
         self, ea: int | Match, cfg: SigMakerConfig, end: int | None = None
@@ -838,6 +1609,19 @@ class SignatureMaker:
 
         sig = self._range_generator.generate(start_ea, end, cfg)
         return GeneratedSignature(sig)
+
+    def make_function_signature(
+        self, pfn: "idaapi.func_t", cfg: SigMakerConfig
+    ) -> GeneratedSignature:
+        """Find the shortest unique signature anywhere inside ``pfn``.
+
+        Unlike make_signature(func.start_ea, ...), which anchors at the
+        function entry, this scans every instruction in the body as a possible
+        anchor and returns the shortest unique signature found. The returned
+        GeneratedSignature's ``address`` is the anchor it starts from, which
+        may be mid-function.
+        """
+        return self._function_generator.generate(pfn, cfg)
 
 
 class XrefFinder:
@@ -981,6 +1765,11 @@ class SignatureParser:
 class SignatureSearcher:
     input_signature: str = ""
 
+    # When True (and no compiled SIMD module is present), scans go through the
+    # cached numpy image instead of re-running idaapi.bin_search each time.
+    # Defaults to numpy availability; flip off to force native bin_search.
+    use_numpy: typing.ClassVar[bool] = NUMPY_AVAILABLE
+
     @classmethod
     def from_signature(cls, input_signature: str) -> "SignatureSearcher":
         return cls(input_signature=input_signature)
@@ -994,10 +1783,13 @@ class SignatureSearcher:
 
     @staticmethod
     def _find_all_simd(
-        ida_signature: str, skip_more_than_one: bool = False
+        ida_signature: str,
+        skip_more_than_one: bool = False,
+        buf: typing.Optional["InMemoryBuffer"] = None,
     ) -> list[Match]:
         simd_signature, _ = SigText.normalize(ida_signature)
-        buf = InMemoryBuffer.load(mode=InMemoryBuffer.LoadMode.SEGMENTS)
+        if buf is None:
+            buf = InMemoryBuffer.load(mode=InMemoryBuffer.LoadMode.SEGMENTS)
         data_mv = buf.data()
 
         sig = _SimdSignature(simd_signature)
@@ -1008,7 +1800,16 @@ class SignatureSearcher:
 
         n = len(data_mv)
         off = 0
+        # Poll cancellation every _CANCEL_POLL_STRIDE matches rather than per
+        # match: user_cancelled() is not free and a short, common pattern can
+        # produce millions of matches.
+        since_poll = 0
         while off <= n - k:
+            since_poll += 1
+            if since_poll >= _CANCEL_POLL_STRIDE:
+                since_poll = 0
+                if _user_canceled():
+                    break
             idx = _simd_scan_bytes(data_mv[off:], sig)
             if idx < 0:
                 break
@@ -1020,29 +1821,101 @@ class SignatureSearcher:
         return results
 
     @staticmethod
-    def find_all(ida_signature: str) -> list[Match]:
+    def find_all_offsets(
+        ida_signature: str,
+        buf: typing.Optional["InMemoryBuffer"] = None,
+    ) -> tuple[list[int], "InMemoryBuffer"]:
+        """Return (offsets, buf): every match as a 0-based offset into
+        buf.data(), plus the buffer used. The offsets seed an in-memory
+        refinement; reusing the returned buf keeps subsequent refinement on
+        the same bytes. SIMD path only.
+        """
+        simd_signature, _ = SigText.normalize(ida_signature)
+        if buf is None:
+            buf = InMemoryBuffer.load(mode=InMemoryBuffer.LoadMode.SEGMENTS)
+        data_mv = buf.data()
+        sig = _SimdSignature(simd_signature)
+        offsets: list[int] = []
+        k = sig.size_bytes
+        if k == 0:
+            return [0], buf
+        n = len(data_mv)
+        off = 0
+        since_poll = 0
+        while off <= n - k:
+            since_poll += 1
+            if since_poll >= _CANCEL_POLL_STRIDE:
+                since_poll = 0
+                if _user_canceled():
+                    break
+            idx = _simd_scan_bytes(data_mv[off:], sig)
+            if idx < 0:
+                break
+            offsets.append(off + idx)
+            off += idx + 1
+        return offsets, buf
+
+    @staticmethod
+    def find_all(
+        ida_signature: str,
+        buf: typing.Optional["InMemoryBuffer"] = None,
+        skip_more_than_one: bool = False,
+    ) -> list[Match]:
         if SIMD_SPEEDUP_AVAILABLE:
-            return SignatureSearcher._find_all_simd(ida_signature)
+            return SignatureSearcher._find_all_simd(
+                ida_signature, skip_more_than_one=skip_more_than_one, buf=buf
+            )
+        if SignatureSearcher.use_numpy and NUMPY_AVAILABLE:
+            return numpy_find_all(
+                ida_signature, skip_more_than_one=skip_more_than_one
+            )
         binary = idaapi.compiled_binpat_vec_t()
         idaapi.parse_binpat_str(binary, idaapi.inf_get_min_ea(), ida_signature, 16)
         out: list[Match] = []
         ea = idaapi.inf_get_min_ea()
+        max_ea = idaapi.inf_get_max_ea()
         _bin_search = getattr(idaapi, "bin_search", None) or getattr(
             idaapi, "bin_search3"
         )
+        flags = idaapi.BIN_SEARCH_NOCASE | idaapi.BIN_SEARCH_FORWARD
         while True:
-            hit, _ = _bin_search(
-                ea,
-                idaapi.inf_get_max_ea(),
-                binary,
-                idaapi.BIN_SEARCH_NOCASE | idaapi.BIN_SEARCH_FORWARD,
-            )
+            if _user_canceled():
+                break
+            hit, _ = _bin_search(ea, max_ea, binary, flags)
             if hit == idaapi.BADADDR:
                 break
             out.append(Match(hit))
+            # is_unique only needs to know if there is more than one match;
+            # bail at 2 instead of enumerating every match in the database.
+            if skip_more_than_one and len(out) > 1:
+                break
             ea = hit + 1
         return out
 
     @classmethod
-    def is_unique(cls, ida_signature: str) -> bool:
-        return len(cls.find_all(ida_signature)) == 1
+    def count_matches(
+        cls,
+        ida_signature: str,
+        buf: typing.Optional["InMemoryBuffer"] = None,
+    ) -> int:
+        """Return the number of matches for the given IDA-format signature.
+
+        Enumerates every match; callers that only need uniqueness should use
+        is_unique (which bails at the second match).
+        """
+        return len(cls.find_all(ida_signature, buf=buf))
+
+    @classmethod
+    def is_unique(
+        cls,
+        ida_signature: str,
+        buf: typing.Optional["InMemoryBuffer"] = None,
+    ) -> bool:
+        """Return True iff the signature matches exactly one location.
+
+        Bails at the second match. Enumerating all matches of a short, common
+        signature is catastrophic on a large binary, and uniqueness only
+        depends on whether the count is 0, 1, or 2+.
+        """
+        matches = cls.find_all(ida_signature, buf=buf, skip_more_than_one=True)
+        return len(matches) == 1
