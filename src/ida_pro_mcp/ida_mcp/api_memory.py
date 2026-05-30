@@ -24,22 +24,6 @@ from .utils import (
 )
 
 
-def _invalidate_sigmaker_image_cache() -> None:
-    """Drop the sigmaker scan-image cache after a byte patch.
-
-    The cached numpy image used by signature scanning is keyed on segment
-    layout, which a patch does not change -- so a patch would otherwise leave
-    stale bytes in the cache. Lazy import keeps api_memory independent of the
-    sigmaker engine (and a no-op if numpy/sigmaker is unavailable).
-    """
-    try:
-        from . import _sigmaker
-
-        _sigmaker.invalidate_image_cache()
-    except Exception:
-        pass
-
-
 class BytesReadResult(TypedDict):
     addr: str | None
     data: str | None
@@ -285,7 +269,6 @@ def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[PatchResult]:
         patches = [patches]
 
     results = []
-    changed = False
 
     for patch in patches:
         try:
@@ -296,7 +279,6 @@ def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[PatchResult]:
                 raise ValueError(f"Address not mapped: {patch['addr']}")
 
             ida_bytes.patch_bytes(ea, data)
-            changed = True
             results.append(
                 {"addr": patch["addr"], "size": len(data)}
             )
@@ -304,8 +286,6 @@ def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[PatchResult]:
         except Exception as e:
             results.append({"addr": patch.get("addr"), "size": 0, "error": str(e)})
 
-    if changed:
-        _invalidate_sigmaker_image_cache()
     return results
 
 
@@ -357,6 +337,4 @@ def put_int(
                 }
             )
 
-    if any("error" not in r for r in results):
-        _invalidate_sigmaker_image_cache()
     return results

@@ -23,15 +23,10 @@ v1.6.0 vendoring:
     anywhere inside a function body (not just from its entry point).
   - SIMD seed-and-refine helpers are carried over for parity; they are
     inert unless a compiled `_speedups` module is present.
-  - numpy-backed vectorized scanner with a cached, segment-gap-aware image
-    (_NumpyImage / numpy_find_all). When no compiled `_speedups` exists but
-    numpy is importable, signature scanning materializes the image once per
-    session and refines candidate offsets in memory instead of re-running
-    idaapi.bin_search per uniqueness check. On a 370 MB image this measured
-    ~0.13 s per signature warm vs ~1.5-2.2 s for native bin_search (the
-    one-time image build is ~15-17 s, dominated by idaapi.get_bytes). The
-    cache is invalidated on segment-layout change and by
-    invalidate_image_cache(), which the byte-patch tools call.
+
+This file has no third-party dependencies: it relies only on idaapi/idc and
+the standard library. The compiled `_speedups` module is optional; when it is
+absent, scanning falls back to idaapi.bin_search.
 
 The interactive layers (IDA Forms, the plugin class, wait-box progress
 dialogs, clipboard, and the cProfile diagnostics) are intentionally NOT
@@ -98,22 +93,6 @@ with contextlib.suppress(ImportError):
     _simd_scan_bytes = simd_scan.scan_bytes
 
     SIMD_SPEEDUP_AVAILABLE = True
-
-
-# numpy-backed vectorized scanner. When a compiled `_speedups` module is not
-# present (the common case for this pip/installer-distributed plugin), numpy
-# still gives a large speedup over re-running idaapi.bin_search per uniqueness
-# check on big binaries: the image is materialized once and cached, then every
-# scan is a vectorized seed-and-refine over that array. See _NumpyImage /
-# numpy_find_all below. numpy ships as wheels and needs no C toolchain, so this
-# path is portable. It is preferred over native bin_search only when the image
-# cache is warm enough to amortize; the cache lives for the whole session and
-# is invalidated on layout change or by invalidate_image_cache() after a patch.
-NUMPY_AVAILABLE = False
-with contextlib.suppress(ImportError):
-    import numpy as _np
-
-    NUMPY_AVAILABLE = True
 
 
 # How many matches a scan loop processes between cancellation polls.
@@ -312,207 +291,6 @@ class InMemoryBuffer:
                 "ida_addr_to_segment_offset is only valid in 'segments' mode."
             )
         return ida_addr - self.imagebase
-
-
-# ---------------------------------------------------------------------------
-# numpy-backed image scanner (cached, vectorized, segment-gap aware)
-# ---------------------------------------------------------------------------
-#
-# Bumped by invalidate_image_cache(); part of the cache key so a patch (which
-# does not change the segment layout) forces a rebuild.
-_image_generation: int = 0
-_IMAGE_CACHE: typing.Optional["_NumpyImage"] = None
-
-
-def invalidate_image_cache() -> None:
-    """Drop the cached scan image and force a rebuild on next use.
-
-    Call after patching bytes: the segment *layout* is unchanged by a patch,
-    so the layout fingerprint alone would not notice, and a stale image would
-    scan pre-patch bytes. Patch tools should call this.
-    """
-    global _image_generation, _IMAGE_CACHE
-    _image_generation += 1
-    _IMAGE_CACHE = None
-
-
-def _segment_layout() -> tuple[list[tuple[int, int]], int]:
-    """Return ([(seg_start_ea, size), ...], total_bytes) for all segments."""
-    segs: list[tuple[int, int]] = []
-    total = 0
-    seg = idaapi.get_first_seg()
-    while seg:
-        size = seg.end_ea - seg.start_ea
-        if size > 0:
-            segs.append((seg.start_ea, size))
-            total += size
-        seg = idaapi.get_next_seg(seg.start_ea)
-    return segs, total
-
-
-@dataclasses.dataclass(slots=True)
-class _NumpyImage:
-    """A cached, concatenated numpy view of all segment bytes.
-
-    The segments of a real binary are not contiguous in the address space
-    (PE images have gaps between sections), so a flat buffer offset does NOT
-    equal ``ea - min_ea``. We keep an explicit segment table and map buffer
-    offsets back to effective addresses through it, and we drop candidate
-    matches whose byte window would straddle a segment boundary.
-    """
-
-    arr: "object"  # np.ndarray[uint8]
-    buf_starts: "object"  # np.ndarray[int64]: cumulative buffer offset per seg
-    seg_eas: "object"  # np.ndarray[int64]: start ea per seg
-    seg_sizes: "object"  # np.ndarray[int64]
-    byte_counts: "object"  # np.ndarray[int64], len 256: histogram for seed pick
-    key: tuple
-
-    @staticmethod
-    def _current_key(segs: list[tuple[int, int]], total: int) -> tuple:
-        return (
-            idaapi.get_input_file_path(),
-            int(idaapi.get_imagebase()),
-            total,
-            tuple(segs),
-            _image_generation,
-        )
-
-    @classmethod
-    def current(cls) -> "_NumpyImage":
-        """Return the cached image, (re)building it if the layout changed."""
-        global _IMAGE_CACHE
-        segs, total = _segment_layout()
-        key = cls._current_key(segs, total)
-        cached = _IMAGE_CACHE
-        if cached is not None and cached.key == key:
-            return cached
-
-        parts = []
-        buf_starts = []
-        seg_eas = []
-        seg_sizes = []
-        offset = 0
-        for start_ea, size in segs:
-            data = idaapi.get_bytes(start_ea, size)
-            if not data:
-                # Unreadable segment (e.g. uninitialized .bss): represent it as
-                # zero bytes so offsets/eas stay consistent with the layout.
-                data = bytes(size)
-            parts.append(_np.frombuffer(data, dtype=_np.uint8))
-            buf_starts.append(offset)
-            seg_eas.append(start_ea)
-            seg_sizes.append(size)
-            offset += size
-
-        arr = (
-            _np.concatenate(parts)
-            if parts
-            else _np.empty(0, dtype=_np.uint8)
-        )
-        byte_counts = _np.bincount(arr, minlength=256).astype(_np.int64)
-        img = cls(
-            arr=arr,
-            buf_starts=_np.asarray(buf_starts, dtype=_np.int64),
-            seg_eas=_np.asarray(seg_eas, dtype=_np.int64),
-            seg_sizes=_np.asarray(seg_sizes, dtype=_np.int64),
-            byte_counts=byte_counts,
-            key=key,
-        )
-        _IMAGE_CACHE = img
-        return img
-
-
-def _ida_pattern(ida_signature: str) -> list[tuple[int, bool]]:
-    """Parse an IDA-format signature into [(value, is_wildcard), ...]."""
-    _, pattern = SigText.normalize(ida_signature)
-    return pattern
-
-
-def _numpy_seed_offsets(
-    img: "_NumpyImage", pattern: list[tuple[int, bool]]
-) -> "object":
-    """Return an int64 ndarray of buffer offsets matching the full pattern.
-
-    Seeds on the least-frequent non-wildcard byte (cheap to refine from), then
-    refines against the remaining concrete bytes. Boundary-straddling matches
-    are NOT filtered here; callers that report EAs must use _numpy_offsets_to_eas.
-    """
-    arr = img.arr
-    n = arr.size
-    k = len(pattern)
-    if k == 0:
-        return _np.arange(0, n, dtype=_np.int64)
-
-    # Pick the most selective concrete byte as the seed.
-    seed_j = -1
-    seed_count = None
-    for j, (val, wild) in enumerate(pattern):
-        if wild:
-            continue
-        c = int(img.byte_counts[val])
-        if seed_count is None or c < seed_count:
-            seed_count = c
-            seed_j = j
-    if seed_j < 0:
-        # All-wildcard pattern: matches every aligned position.
-        return _np.arange(0, max(n - k + 1, 0), dtype=_np.int64)
-
-    seed_val = pattern[seed_j][0]
-    hits = _np.flatnonzero(arr == seed_val)
-    cand = hits - seed_j
-    # Keep only candidates whose full window fits in the buffer.
-    cand = cand[(cand >= 0) & (cand + k <= n)]
-    # Refine by every other concrete byte; bail as soon as nothing survives.
-    for j, (val, wild) in enumerate(pattern):
-        if wild or j == seed_j:
-            continue
-        if cand.size == 0:
-            break
-        cand = cand[arr[cand + j] == val]
-    return cand
-
-
-def _numpy_offsets_to_eas(
-    img: "_NumpyImage", offsets: "object", k: int, limit: typing.Optional[int] = None
-) -> list[Match]:
-    """Map buffer offsets to EAs, dropping windows that cross a segment gap.
-
-    Boundary filtering happens BEFORE applying ``limit`` -- otherwise capping
-    at, say, 2 could keep two boundary-straddling false matches and discard a
-    later real one, making a unique signature look non-unique.
-    """
-    if offsets.size == 0:
-        return []
-    # Segment of the window start and of its last byte must match.
-    seg_start = _np.searchsorted(img.buf_starts, offsets, side="right") - 1
-    seg_end = _np.searchsorted(img.buf_starts, offsets + (k - 1), side="right") - 1
-    keep = seg_start == seg_end
-    offsets = offsets[keep]
-    seg_idx = seg_start[keep]
-    if limit is not None and offsets.size > limit:
-        offsets = offsets[:limit]
-        seg_idx = seg_idx[:limit]
-    eas = img.seg_eas[seg_idx] + (offsets - img.buf_starts[seg_idx])
-    return [Match(int(x)) for x in eas]
-
-
-def numpy_find_all(
-    ida_signature: str, skip_more_than_one: bool = False
-) -> list[Match]:
-    """Vectorized all-matches scan over the cached image. EAs are correct
-    across segment gaps. Honors skip_more_than_one by capping work cheaply.
-    """
-    img = _NumpyImage.current()
-    pattern = _ida_pattern(ida_signature)
-    k = len(pattern)
-    if k == 0:
-        return [Match(int(idaapi.inf_get_min_ea()))]
-    offsets = _numpy_seed_offsets(img, pattern)
-    # When the caller only needs uniqueness, two surviving offsets are enough
-    # to prove non-uniqueness; cap the EA mapping at 2.
-    limit = 2 if skip_more_than_one else None
-    return _numpy_offsets_to_eas(img, offsets, k, limit=limit)
 
 
 @dataclasses.dataclass
@@ -1069,16 +847,15 @@ class UniqueSignatureGenerator:
         start_fn = idaapi.get_func(ea)
         bytes_since_last_check = 0
 
-        # Seed-and-refine (issue #398): scan the image once to seed a candidate
-        # offset set, then refine that set in memory as the pattern grows
-        # instead of re-scanning (and, on the SIMD path, rebuilding the whole
-        # image buffer) on every uniqueness check. There are two seed-refine
-        # backends -- compiled SIMD and numpy -- plus a native bin_search
-        # fallback. Each is seeded at most once per generate().
+        # Seed-and-refine (issue #398): on the compiled SIMD path, scan the
+        # image once to seed a candidate offset set, then refine that set in
+        # memory as the pattern grows instead of rebuilding the whole image
+        # buffer on every uniqueness check. Without the SIMD module we fall back
+        # to idaapi.bin_search, which never materializes a buffer (is_unique
+        # bails at the second match). The seed is built at most once per
+        # generate().
         offsets: typing.Optional[list[int]] = None  # SIMD list candidates
         buf: typing.Optional["InMemoryBuffer"] = None
-        np_img: typing.Optional["_NumpyImage"] = None
-        np_cand: typing.Optional["object"] = None  # numpy int64 candidate offsets
 
         for cur_ea, ins, ins_len in InstructionWalker(ea):
             if bytes_since_last_check > cfg.max_single_signature_length:
@@ -1111,33 +888,6 @@ class UniqueSignatureGenerator:
                         mask = 0x00 if sb.is_wildcard else 0xFF
                         offsets = _refine_offsets(data_mv, offsets, j, sb.value, mask)
                 if len(offsets) == 1:
-                    sig.trim_signature()
-                    return sig
-                continue
-
-            if SignatureSearcher.use_numpy and NUMPY_AVAILABLE:
-                # numpy: seed once against the cached image, then refine the
-                # candidate ndarray in place for each concrete byte appended.
-                # Boundary-straddling false matches only ever ADD candidates,
-                # so a surviving count of 1 still proves real uniqueness (the
-                # anchor's own location is always among the candidates).
-                if np_cand is None:
-                    np_img = _NumpyImage.current()
-                    np_cand = _numpy_seed_offsets(
-                        np_img, [(b.value, b.is_wildcard) for b in sig]
-                    )
-                else:
-                    arr = np_img.arr
-                    n = arr.size
-                    for j in range(prev_len, len(sig)):
-                        sb = sig[j]
-                        if sb.is_wildcard:
-                            continue
-                        if np_cand.size == 0:
-                            break
-                        np_cand = np_cand[np_cand + j < n]
-                        np_cand = np_cand[arr[np_cand + j] == sb.value]
-                if np_cand.size == 1:
                     sig.trim_signature()
                     return sig
                 continue
@@ -1765,11 +1515,6 @@ class SignatureParser:
 class SignatureSearcher:
     input_signature: str = ""
 
-    # When True (and no compiled SIMD module is present), scans go through the
-    # cached numpy image instead of re-running idaapi.bin_search each time.
-    # Defaults to numpy availability; flip off to force native bin_search.
-    use_numpy: typing.ClassVar[bool] = NUMPY_AVAILABLE
-
     @classmethod
     def from_signature(cls, input_signature: str) -> "SignatureSearcher":
         return cls(input_signature=input_signature)
@@ -1864,10 +1609,6 @@ class SignatureSearcher:
         if SIMD_SPEEDUP_AVAILABLE:
             return SignatureSearcher._find_all_simd(
                 ida_signature, skip_more_than_one=skip_more_than_one, buf=buf
-            )
-        if SignatureSearcher.use_numpy and NUMPY_AVAILABLE:
-            return numpy_find_all(
-                ida_signature, skip_more_than_one=skip_more_than_one
             )
         binary = idaapi.compiled_binpat_vec_t()
         idaapi.parse_binpat_str(binary, idaapi.inf_get_min_ea(), ida_signature, 16)
