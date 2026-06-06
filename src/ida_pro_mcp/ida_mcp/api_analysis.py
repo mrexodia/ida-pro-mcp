@@ -10,6 +10,7 @@ import ida_nalt
 import ida_bytes
 import ida_ida
 import ida_idaapi
+import ida_kernwin
 import ida_xref
 import ida_ua
 import ida_name
@@ -58,6 +59,7 @@ class DecompileResult(TypedDict):
 class ResultCursor(TypedDict, total=False):
     next: int
     done: bool
+    cancelled: bool
 
 
 class DisasmResult(TypedDict, total=False):
@@ -1662,12 +1664,21 @@ def find_bytes(
             )
             continue
 
+        if ida_kernwin.user_cancelled():
+            # Deadline fired set_cancelled() while ida_bytes.bin_search was
+            # running; it bailed with BADADDR. Surface partial results with
+            # a cancelled marker rather than claiming we finished the scan.
+            cursor: ResultCursor = {"next": offset + len(matches), "cancelled": True}
+        elif more:
+            cursor = {"next": offset + limit}
+        else:
+            cursor = {"done": True}
         results.append(
             {
                 "pattern": pattern,
                 "matches": matches,
                 "n": len(matches),
-                "cursor": {"next": offset + limit} if more else {"done": True},
+                "cursor": cursor,
             }
         )
     return results
@@ -1821,12 +1832,18 @@ def find(
             except Exception:
                 pass
 
+            if ida_kernwin.user_cancelled():
+                cursor = {"next": offset + len(matches), "cancelled": True}
+            elif more:
+                cursor = {"next": offset + limit}
+            else:
+                cursor = {"done": True}
             results.append(
                 {
                     "query": pattern_str,
                     "matches": matches,
                     "count": len(matches),
-                    "cursor": {"next": offset + limit} if more else {"done": True},
+                    "cursor": cursor,
                     "error": None,
                 }
             )
@@ -1893,12 +1910,18 @@ def find(
             except Exception:
                 pass
 
+            if ida_kernwin.user_cancelled():
+                cursor = {"next": offset + len(matches), "cancelled": True}
+            elif more:
+                cursor = {"next": offset + limit}
+            else:
+                cursor = {"done": True}
             results.append(
                 {
                     "query": value,
                     "matches": matches,
                     "count": len(matches),
-                    "cursor": {"next": offset + limit} if more else {"done": True},
+                    "cursor": cursor,
                     "error": None,
                 }
             )

@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import idaapi
+import ida_kernwin
 import idc
 from .rpc import McpToolError
 from .zeromcp.jsonrpc import get_current_cancel_event, RequestCancelledError
@@ -163,10 +164,37 @@ def sync_wrapper(
             # not when the request was queued (avoids stale deadlines)
             deadline = time.monotonic() + timeout if timeout > 0 else None
 
+            # Native cancellation: clear any stale flag and schedule a
+            # set_cancelled() at the deadline. Many IDA SDK calls
+            # (ida_search.find_*, ida_bytes.find_bytes/bin_search,
+            # ida_hexrays.decompile*, ida_strlist.build_strlist,
+            # ida_auto.auto_wait) poll user_cancelled() and bail with
+            # BADADDR / MERR_CANCELED within one poll cycle, freeing the
+            # main thread instead of running to natural completion.
+            # set_cancelled() is THREAD_SAFE so firing it from a Timer
+            # thread is safe.
+            ida_kernwin.clr_cancelled()
+            cancel_fired_at: list[float | None] = [None]
+            native_timer: threading.Timer | None = None
+            if deadline is not None:
+                def _fire_native_cancel():
+                    cancel_fired_at[0] = time.monotonic()
+                    ida_kernwin.set_cancelled()
+                native_timer = threading.Timer(timeout, _fire_native_cancel)
+                native_timer.daemon = True
+                native_timer.start()
+
             def profilefunc(frame, event, arg):
-                # Check cancellation first (higher priority)
+                # Check request-level cancellation first (higher priority)
                 if cancel_event is not None and cancel_event.is_set():
                     raise CancelledError("Request was cancelled")
+                # If native cancel just fired, give the tool a short grace
+                # period to format a partial response rather than racing the
+                # IDASyncError. Beyond that we still raise to bound the
+                # response time.
+                fired_at = cancel_fired_at[0]
+                if fired_at is not None and time.monotonic() < fired_at + 5.0:
+                    return
                 if deadline is not None and time.monotonic() >= deadline:
                     raise IDASyncError(f"Tool timed out after {timeout:.2f}s")
 
@@ -176,6 +204,12 @@ def sync_wrapper(
                 return ff()
             finally:
                 sys.setprofile(old_profile)
+                if native_timer is not None:
+                    native_timer.cancel()
+                # Sticky flag: clear unconditionally so the next tool starts
+                # with a clean state. Without this, every subsequent
+                # user_cancelled() returns True forever.
+                ida_kernwin.clr_cancelled()
 
         timed_ff.__name__ = ff.__name__
         return _sync_wrapper(timed_ff, keep_batch=keep_batch)

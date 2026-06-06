@@ -10,6 +10,7 @@ import ida_bytes
 import idaapi
 import ida_funcs
 import ida_hexrays
+import ida_kernwin
 import ida_lines
 import ida_search
 import ida_segment
@@ -1012,8 +1013,10 @@ def search_text(
             needle = pattern.lower()
             matcher = lambda s: needle in s.lower()
 
-    # Build IDA search flags.
-    sflag = ida_search.SEARCH_DOWN | ida_search.SEARCH_NOSHOW
+    # Build IDA search flags. SEARCH_BRK makes find_text return BADADDR on
+    # cancel (vs. the farthest-searched ea), so we can cleanly distinguish
+    # "cancelled" from "match" when the deadline fires set_cancelled().
+    sflag = ida_search.SEARCH_DOWN | ida_search.SEARCH_NOSHOW | ida_search.SEARCH_BRK
     if case_sensitive:
         sflag |= ida_search.SEARCH_CASE
     if regex:
@@ -1080,7 +1083,12 @@ def search_text(
         cursor_ea = ea + (size if size > 0 else 1)
 
     cursor: dict[str, Any]
-    if next_cursor is not None:
+    if ida_kernwin.user_cancelled():
+        # Deadline-driven cancel landed mid-scan. Resume token points at
+        # the position we'd have continued from; flag it so the caller
+        # knows this is a partial result, not a natural end-of-page.
+        cursor = {"next": hex(cursor_ea), "cancelled": True}
+    elif next_cursor is not None:
         cursor = {"next": hex(next_cursor)}
     else:
         cursor = {"done": True}
