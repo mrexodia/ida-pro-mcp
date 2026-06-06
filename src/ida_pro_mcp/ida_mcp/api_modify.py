@@ -31,6 +31,9 @@ from .utils import (
     UndefineOp,
 )
 
+MAX_BOOKMARK_SLOTS = 1024
+BOOKMARK_PREFIX = "idaMCP: "
+
 
 class CommentResult(TypedDict):
     addr: str
@@ -92,9 +95,67 @@ class DefineResult(TypedDict, total=False):
     error: str
 
 
+class BookmarkResult(TypedDict, total=False):
+    addr: str
+    ea: str
+    slot: int | None
+    title: str
+    prefix: str
+    ok: bool
+    error: str
+
+
 # ============================================================================
 # Modification Operations
 # ============================================================================
+
+
+@tool
+@idasync
+def add_bookmark(
+    addr: Annotated[str, "Address to bookmark"],
+    name: Annotated[str, "Bookmark label text after the prefix"],
+    prefix: Annotated[
+        str,
+        "Optional title prefix. Defaults to 'idaMCP: '; pass '' for no prefix.",
+    ] = BOOKMARK_PREFIX,
+) -> BookmarkResult:
+    """Add or replace the IDA bookmark at an address. Set prefix="" for no prefix."""
+    ea = parse_address(addr)
+    title = f"{prefix}{name}"
+    free_slot: int | None = None
+
+    for slot in range(MAX_BOOKMARK_SLOTS):
+        slot_ea = idc.get_bookmark(slot)
+        if slot_ea == idc.BADADDR:
+            if free_slot is None:
+                free_slot = slot
+            continue
+
+        if slot_ea == ea:
+            free_slot = slot
+            break
+
+    if free_slot is None:
+        return {
+            "addr": addr,
+            "ea": hex(ea),
+            "slot": None,
+            "title": title,
+            "prefix": prefix,
+            "ok": False,
+            "error": "No free bookmark slot",
+        }
+
+    idc.put_bookmark(ea, 0, 0, 0, free_slot, title)
+    return {
+        "addr": addr,
+        "ea": hex(ea),
+        "slot": free_slot,
+        "title": title,
+        "prefix": prefix,
+        "ok": True,
+    }
 
 
 @tool
