@@ -154,6 +154,8 @@ class XrefsToResult(TypedDict, total=False):
     addr: str
     xrefs: list[Xref] | None
     more: bool
+    xref_count: int
+    message: str
     error: str
 
 
@@ -179,6 +181,7 @@ class XrefQueryResult(TypedDict, total=False):
     data: list[XrefQueryRow]
     next_offset: int | None
     total: int
+    message: str
     error: str | None
 
 
@@ -186,6 +189,7 @@ class StructFieldXrefsResult(TypedDict, total=False):
     struct: str
     field: str
     xrefs: list[Xref]
+    message: str
     error: str
 
 
@@ -274,6 +278,7 @@ class ExportedFunctionJson(TypedDict, total=False):
     comments: dict[str, dict[str, str]]
     asm: str
     code: str | None
+    decompile_error: str | None
     xrefs: dict[str, list[dict[str, str]]]
     error: str
 
@@ -755,9 +760,9 @@ def decompile(
     """Decompile function(s) at address(es); returns pseudocode and per-item errors."""
     try:
         start = parse_address(addr)
-        code = decompile_function_safe(start, include_addresses=include_addresses)
+        code, err = decompile_function_safe(start, include_addresses=include_addresses)
         if code is None:
-            return {"addr": addr, "code": None, "error": "Decompilation failed"}
+            return {"addr": addr, "code": None, "error": err or "Decompilation failed"}
         result: DecompileResult = {"addr": addr, "code": code}
         try:
             import ida_hexrays
@@ -1128,10 +1133,10 @@ def analyze_batch(
                 analysis["prototype"] = get_prototype(fn)
 
             if include_decompile:
-                code = decompile_function_safe(fn.start_ea)
+                code, err = decompile_function_safe(fn.start_ea)
                 analysis["decompile"] = code
                 if code is None:
-                    analysis["decompile_error"] = "Decompilation failed"
+                    analysis["decompile_error"] = err or "Decompilation failed"
 
             if include_disasm:
                 lines, disasm_truncated = _disasm_lines_limited(fn, max_disasm_insns)
@@ -1155,6 +1160,8 @@ def analyze_batch(
                     "to_count": len(xrefs.get("to", [])),
                     "from_count": len(xrefs.get("from", [])),
                 }
+                if not xrefs.get("to") and not xrefs.get("from"):
+                    analysis["xrefs"]["message"] = "No cross-references to this address"
 
             if include_callers:
                 callers = get_callers(hex(fn.start_ea), limit=max_callers)
@@ -1237,9 +1244,20 @@ def xrefs_to(
 
     for addr in addrs:
         try:
+            ea = parse_address(addr)
+            if not ida_bytes.is_mapped(ea):
+                results.append(
+                    {
+                        "addr": addr,
+                        "xrefs": None,
+                        "error": f"Address not mapped: {addr}",
+                    }
+                )
+                continue
+
             xrefs = []
             more = False
-            for xref in idautils.XrefsTo(parse_address(addr)):
+            for xref in idautils.XrefsTo(ea):
                 if len(xrefs) >= limit:
                     more = True
                     break
@@ -1250,7 +1268,15 @@ def xrefs_to(
                         fn=get_function(xref.frm, raise_error=False),
                     )
                 )
-            results.append({"addr": addr, "xrefs": xrefs, "more": more})
+            entry: XrefsToResult = {
+                "addr": addr,
+                "xrefs": xrefs,
+                "more": more,
+                "xref_count": len(xrefs),
+            }
+            if not xrefs:
+                entry["message"] = "No cross-references to this address"
+            results.append(entry)
         except Exception as e:
             results.append({"addr": addr, "xrefs": None, "error": str(e)})
 
@@ -1294,6 +1320,9 @@ def xref_query(
                 target = idaapi.get_name_ea(idaapi.BADADDR, q)
                 if target == idaapi.BADADDR:
                     raise ValueError(f"Failed to resolve address/name: {q}")
+
+            if not ida_bytes.is_mapped(target):
+                raise ValueError(f"Address not mapped: {q}")
 
             rows: list[dict] = []
             if direction in {"to", "both"}:
@@ -1348,18 +1377,19 @@ def xref_query(
                 rows.sort(key=lambda r: int(str(r["addr"]), 16), reverse=descending)
 
             page = paginate(rows, offset, count)
-            results.append(
-                {
-                    "target": q,
-                    "resolved_addr": hex(target),
-                    "direction": direction,
-                    "xref_type": xref_type,
-                    "data": page["data"],
-                    "next_offset": page["next_offset"],
-                    "total": len(rows),
-                    "error": None,
-                }
-            )
+            page_result: XrefQueryResult = {
+                "target": q,
+                "resolved_addr": hex(target),
+                "direction": direction,
+                "xref_type": xref_type,
+                "data": page["data"],
+                "next_offset": page["next_offset"],
+                "total": len(rows),
+                "error": None,
+            }
+            if len(rows) == 0:
+                page_result["message"] = "No cross-references to this address"
+            results.append(page_result)
         except Exception as e:
             results.append(
                 {
@@ -1452,7 +1482,14 @@ def xrefs_to_field(
                         fn=get_function(xref.frm, raise_error=False),
                     )
                 ]
-            results.append({"struct": struct_name, "field": field_name, "xrefs": xrefs})
+            field_result: StructFieldXrefsResult = {
+                "struct": struct_name,
+                "field": field_name,
+                "xrefs": xrefs,
+            }
+            if not xrefs:
+                field_result["message"] = "No cross-references to this struct field"
+            results.append(field_result)
         except Exception as e:
             results.append(
                 {
@@ -2249,7 +2286,10 @@ def export_funcs(
 
             if format == "json":
                 func_data["asm"] = get_assembly_lines(ea)
-                func_data["code"] = decompile_function_safe(ea)
+                code, err = decompile_function_safe(ea)
+                func_data["code"] = code
+                if code is None and err:
+                    func_data["decompile_error"] = err
                 func_data["xrefs"] = get_all_xrefs(ea)
 
             results.append(func_data)

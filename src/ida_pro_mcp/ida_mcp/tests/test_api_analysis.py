@@ -69,7 +69,7 @@ def test_decompile_invalid_address():
     """decompile reports an error for an unmapped address."""
     result = decompile(get_unmapped_address())
     assert result["code"] is None
-    assert_error(result)
+    assert_error(result, contains="Decompilation failed")
 
 
 @test()
@@ -437,12 +437,47 @@ def test_xrefs_to_by_name():
 
 @test()
 def test_xrefs_to_invalid():
-    """xrefs_to reports an error or empty xrefs for an invalid address."""
+    """xrefs_to reports an error for an unmapped address."""
     result = xrefs_to(get_unmapped_address())
     assert_is_list(result, min_length=1)
     assert result[0]["addr"] == get_unmapped_address()
-    if result[0].get("xrefs") is None:
-        assert_error(result[0])
+    assert result[0].get("xrefs") is None
+    assert_error(result[0], contains="Address not mapped")
+
+
+def _find_address_without_xrefs() -> str | None:
+    """Return a mapped address with no incoming xrefs, if one exists."""
+    import ida_bytes
+    import idaapi
+    import idautils
+
+    for seg_ea in idautils.Segments():
+        seg = idaapi.getseg(seg_ea)
+        if seg is None:
+            continue
+        for head in idautils.Heads(seg.start_ea, min(seg.end_ea, seg.start_ea + 0x4000)):
+            if not ida_bytes.is_mapped(head):
+                continue
+            if not any(True for _ in idautils.XrefsTo(head)):
+                return hex(head)
+    return None
+
+
+@test()
+def test_xrefs_to_zero_xrefs_message():
+    """xrefs_to explains when a mapped address has no incoming xrefs."""
+    addr = _find_address_without_xrefs()
+    if addr is None:
+        skip_test("binary has no mapped address without incoming xrefs")
+
+    result = xrefs_to(addr)
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    assert entry["addr"] == addr
+    assert entry.get("error") in (None, "")
+    assert entry.get("xref_count") == 0
+    assert entry.get("xrefs") == []
+    assert "No cross-references" in (entry.get("message") or "")
 
 
 @test()

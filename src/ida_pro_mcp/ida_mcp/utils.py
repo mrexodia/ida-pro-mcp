@@ -1006,6 +1006,23 @@ class my_modifier_t(ida_hexrays.user_lvar_modifier_t):
         return False
 
 
+def hexrays_local_var_exists(func_ea: int, var_name: str) -> bool:
+    """Return True if a Hex-Rays local variable exists in the decompiled function."""
+    if not ida_hexrays.init_hexrays_plugin():
+        return False
+    try:
+        cfunc = ida_hexrays.decompile(func_ea)
+        if not cfunc:
+            return False
+        lvars = cfunc.get_lvars()
+        for i in range(lvars.size()):
+            if lvars[i].name == var_name:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, list[str]]:
     if sys.platform == "win32":
         import ctypes
@@ -1121,17 +1138,15 @@ def decompile_checked(addr: int):
     return cfunc
 
 
-def decompile_function_safe(ea: int, include_addresses: bool = True) -> Optional[str]:
-    """Safely decompile a function, returning None on failure (uses cache)"""
+def decompile_function_safe(
+    ea: int, include_addresses: bool = True
+) -> tuple[str | None, str | None]:
+    """Safely decompile a function. Returns (code, error); exactly one is non-None."""
     import ida_lines
     import ida_kernwin
 
     try:
-        if not ida_hexrays.init_hexrays_plugin():
-            return None
-        cfunc = ida_hexrays.decompile(ea)
-        if not cfunc:
-            return None
+        cfunc = decompile_checked(ea)
         sv = cfunc.get_pseudocode()
         lines = []
         for sl in sv:
@@ -1154,9 +1169,11 @@ def decompile_function_safe(ea: int, include_addresses: bool = True) -> Optional
                 lines.append(f"{text} /*{line_ea:#x}*/")
             else:
                 lines.append(text)
-        return "\n".join(lines)
-    except Exception:
-        return None
+        return "\n".join(lines), None
+    except IDAError as e:
+        return None, str(e)
+    except Exception as e:
+        return None, f"Decompilation failed at {hex(ea)}: {e}"
 
 
 def get_assembly_lines(ea: int) -> str:
