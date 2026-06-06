@@ -118,6 +118,44 @@ class BrowserTransportGuardTests(unittest.TestCase):
         self.assertTrue(handler._check_api_request())
         self.assertEqual(errors, [])
 
+    # -- LAN connectivity tests (bound to 0.0.0.0) --
+
+    def test_nonloopback_bind_allows_lan_host(self):
+        self.assertTrue(
+            _host_header_allowed_for_bind("0.0.0.0", "192.168.1.10:13337")
+        )
+        self.assertTrue(
+            _host_header_allowed_for_bind("0.0.0.0", "10.0.0.5:13337")
+        )
+
+    def test_check_api_request_allows_lan_client_without_origin(self):
+        handler, errors = _make_handler(
+            host="192.168.1.10:13337",
+            origin=None,
+            bound_host="0.0.0.0",
+        )
+        self.assertTrue(handler._check_api_request())
+        self.assertEqual(errors, [])
+
+    def test_check_api_request_allows_lan_origin_with_wildcard_cors(self):
+        handler, errors = _make_handler(
+            host="192.168.1.10:13337",
+            origin="http://192.168.1.20:3000",
+            bound_host="0.0.0.0",
+            allowed="*",
+        )
+        self.assertTrue(handler._check_api_request())
+        self.assertEqual(errors, [])
+
+    def test_check_api_request_rejects_lan_origin_with_local_cors(self):
+        handler, errors = _make_handler(
+            host="192.168.1.10:13337",
+            origin="http://192.168.1.20:3000",
+            bound_host="0.0.0.0",
+        )
+        self.assertFalse(handler._check_api_request())
+        self.assertEqual(errors, [(403, "Invalid Origin")])
+
     def test_derive_external_base_url_prefers_forwarded_headers(self):
         base = _derive_external_base_url(
             {
