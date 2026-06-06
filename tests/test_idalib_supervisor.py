@@ -71,7 +71,7 @@ class _FakeSupervisor(supmod.IdalibSupervisor):
         self.forwarded.append(payload)
         return {"jsonrpc": "2.0", "id": payload.get("id"), "result": {"ok": True}}
 
-    def call_worker_tool(self, worker, name, arguments=None):
+    def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
         self.tool_calls.append((name, arguments))
         if name == "idb_open":
             assert arguments is not None
@@ -802,7 +802,7 @@ def test_open_session_race_discards_losing_worker_for_existing_path(tmp_path):
     sample.write_bytes(b"x")
 
     class _RaceSupervisor(_FakeSupervisor):
-        def call_worker_tool(self, worker, name, arguments=None):
+        def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
             result = super().call_worker_tool(worker, name, arguments)
             if name == "idb_open":
                 existing = supmod.WorkerSession(
@@ -831,7 +831,7 @@ def test_open_session_race_returns_existing_when_preferred_id_differs(tmp_path):
     sample.write_bytes(b"x")
 
     class _RaceSupervisor(_FakeSupervisor):
-        def call_worker_tool(self, worker, name, arguments=None):
+        def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
             result = super().call_worker_tool(worker, name, arguments)
             if name == "idb_open":
                 existing = supmod.WorkerSession(
@@ -881,7 +881,7 @@ def test_open_session_race_rejects_duplicate_session_id_for_different_path(tmp_p
             self.spawned.append(worker)
             return worker
 
-        def call_worker_tool(self, worker, name, arguments=None):
+        def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
             result = super().call_worker_tool(worker, name, arguments)
             if name == "idb_open":
                 existing = supmod.WorkerSession(
@@ -991,7 +991,7 @@ def test_closed_gui_session_does_not_reappear_if_closed_during_headless_fallback
             self.spawned.append(worker)
             return worker
 
-        def call_worker_tool(self, worker, name, arguments=None):
+        def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
             result = super().call_worker_tool(worker, name, arguments)
             if name == "idb_open":
                 # Simulate: the session disappears while the reopen worker
