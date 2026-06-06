@@ -208,14 +208,25 @@ def py(ctx: Ctx, code: str, *, client_timeout: float = 30) -> tuple[float, str, 
 
 
 def set_server_timeout(ctx: Ctx, seconds: float | None) -> None:
-    """Override the server-side per-tool timeout via os.environ. None = unset."""
+    """Override the server-side per-tool timeout via os.environ. None = unset.
+
+    Note: os.environ requires string values, so the seconds float must be
+    stringified — silently sending a float raises TypeError on the server
+    and the timeout never actually changes.
+    """
     if seconds is None:
         code = "import os; os.environ.pop('IDA_MCP_TOOL_TIMEOUT_SEC', None); 'unset'"
     else:
-        code = f"import os; os.environ['IDA_MCP_TOOL_TIMEOUT_SEC'] = {seconds!r}; os.environ['IDA_MCP_TOOL_TIMEOUT_SEC']"
+        code = (
+            f"import os; "
+            f"os.environ['IDA_MCP_TOOL_TIMEOUT_SEC'] = {str(seconds)!r}; "
+            f"os.environ['IDA_MCP_TOOL_TIMEOUT_SEC']"
+        )
     _, r, e = py(ctx, code)
-    if e and "TOOL-ERROR" in e:
-        raise RuntimeError(f"py_eval unavailable — server has no --unsafe / unsafe toggle off: {e}")
+    if e:
+        raise RuntimeError(f"set_server_timeout({seconds}) failed: {e}")
+    if seconds is not None and r != str(seconds):
+        raise RuntimeError(f"set_server_timeout({seconds}) returned {r!r}")
 
 
 # ─── Reporting helpers ─────────────────────────────────────────────────────
@@ -374,18 +385,14 @@ def phase_4_all_four_tools(ctx: Ctx) -> None:
     """
     hr("phase 4 — C-scan tools with short timeout")
     set_server_timeout(ctx, ctx.short_timeout)
-    size_mb = ctx.binary_info.get("image_size", 0) // (1024 * 1024)
-    LARGE_THRESHOLD_MB = 32
     cases = [
         ("find_bytes",  {"patterns": ["DE AD BE EF CA FE BA BE F0 0D"], "limit": 1}, "list"),
         ("find",        {"type": "string",    "targets": ["zzzz_never_a_match_zzzz"], "limit": 1}, "list"),
         ("find",        {"type": "immediate", "targets": [0xDEADBEEF],                "limit": 1}, "list"),
+        # search_text now uses a Python-level Heads() walk that's bounded
+        # and per-iteration cancellable, so it's safe on any binary size.
+        ("search_text", {"pattern": "zzzz_never_a_match_zzzz", "limit": 1, "regex": False}, "dict"),
     ]
-    if size_mb < LARGE_THRESHOLD_MB:
-        cases.append(("search_text", {"pattern": "zzzz_never_a_match_zzzz", "limit": 1, "regex": False}, "dict"))
-    else:
-        print(f"  ⚠ image size {size_mb} MB ≥ {LARGE_THRESHOLD_MB} MB — SKIPPING search_text")
-        print(f"    (ida_search.find_text on huge .text doesn't honor cancel; would wedge server)")
     for tool, args, shape in cases:
         label = f"{tool}({args.get('type', '')})" if tool == "find" else tool
         # If a prior call wedged the queue, skip subsequent tools rather than pile up POSTs.

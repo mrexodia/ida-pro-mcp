@@ -42,6 +42,23 @@ _TOOL_TIMEOUT_ENV = "IDA_MCP_TOOL_TIMEOUT_SEC"
 _DEFAULT_TOOL_TIMEOUT_SEC = 60.0
 
 
+# Thread-local: while a synchronized tool body is running, holds the monotonic
+# deadline (or None if no timeout). Tools can read this to self-monitor and
+# return partial results gracefully — useful when sync.py's Timer-fired
+# set_cancelled mechanism races with GIL contention on tight loops.
+_deadline_state = threading.local()
+
+
+def get_tool_deadline() -> float | None:
+    """Return the monotonic deadline for the current tool call, or None.
+
+    Only meaningful inside an @idasync function body. Tools that walk
+    large structures can check `time.monotonic() >= get_tool_deadline()`
+    to bail cleanly without depending on the global cancel flag.
+    """
+    return getattr(_deadline_state, "deadline", None)
+
+
 def _get_tool_timeout_seconds() -> float:
     value = os.getenv(_TOOL_TIMEOUT_ENV, "").strip()
     if value == "":
@@ -198,6 +215,9 @@ def sync_wrapper(
                 if deadline is not None and time.monotonic() >= deadline:
                     raise IDASyncError(f"Tool timed out after {timeout:.2f}s")
 
+            # Expose the deadline so tool bodies can self-monitor and
+            # return partial results gracefully (independent of the Timer).
+            _deadline_state.deadline = deadline
             old_profile = sys.getprofile()
             sys.setprofile(profilefunc)
             try:
@@ -210,6 +230,7 @@ def sync_wrapper(
                 # with a clean state. Without this, every subsequent
                 # user_cancelled() returns True forever.
                 ida_kernwin.clr_cancelled()
+                _deadline_state.deadline = None
 
         timed_ff.__name__ = ff.__name__
         return _sync_wrapper(timed_ff, keep_batch=keep_batch)
