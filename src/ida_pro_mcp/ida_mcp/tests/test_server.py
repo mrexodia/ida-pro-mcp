@@ -61,39 +61,18 @@ class _RecordingConnection:
 
 @contextlib.contextmanager
 def _saved_target():
-    """Preserve the currently selected IDA target across assertions."""
+    """Preserve the currently configured IDA target across assertions."""
     old_host = server.IDA_HOST
     old_port = server.IDA_PORT
     old_session = getattr(server.mcp._transport_session_id, "data", None)
     old_exts = getattr(server.mcp._enabled_extensions, "data", set())
-    old_targets = server._session_proxy_targets.copy()
-    old_target_last_seen = server._session_proxy_last_seen.copy()
     try:
         yield
     finally:
         server.IDA_HOST = old_host
         server.IDA_PORT = old_port
-        server._session_proxy_targets.clear()
-        server._session_proxy_targets.update(old_targets)
-        server._session_proxy_last_seen.clear()
-        server._session_proxy_last_seen.update(old_target_last_seen)
         server.mcp._transport_session_id.data = old_session
         server.mcp._enabled_extensions.data = old_exts
-
-
-@test()
-def test_tools_list_keeps_discovery_tools_when_ida_unreachable():
-    """tools/list should still expose local discovery tools when IDA is down."""
-    with _saved_target():
-        server.IDA_HOST = "127.0.0.1"
-        server.IDA_PORT = 1  # unreachable
-        req = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
-        result = server.dispatch_proxy(req)
-        assert "result" in result, f"Expected successful tools/list response, got: {result}"
-        tool_names = {tool["name"] for tool in result["result"].get("tools", [])}
-        assert "select_instance" in tool_names
-        assert "list_instances" in tool_names
-        assert "open_file" in tool_names
 
 
 @test()
@@ -129,60 +108,18 @@ def test_streamable_http_initialize_returns_session_id():
 
 
 @test()
-def test_select_instance_is_scoped_to_transport_session():
-    """Each MCP transport session should keep its own selected proxy target."""
-    with _saved_target():
-        original_probe = server.probe_instance
-        server.probe_instance = lambda host, port: True
-        try:
-            server.mcp._transport_session_id.data = "http:session-a"
-            result_a = server.select_instance(port=11111, host="127.0.0.1")
-            assert result_a["success"] is True
-
-            server.mcp._transport_session_id.data = "http:session-b"
-            result_b = server.select_instance(port=22222, host="127.0.0.1")
-            assert result_b["success"] is True
-
-            server.mcp._transport_session_id.data = "http:session-a"
-            assert server._get_active_ida_target() == ("127.0.0.1", 11111)
-
-            server.mcp._transport_session_id.data = "http:session-b"
-            assert server._get_active_ida_target() == ("127.0.0.1", 22222)
-        finally:
-            server.probe_instance = original_probe
-
-
-@test()
-def test_select_instance_does_not_change_process_default_for_session():
-    """Session-scoped selection must not overwrite the default target for other clients."""
-    with _saved_target():
-        original_probe = server.probe_instance
-        server.probe_instance = lambda host, port: True
-        server.IDA_HOST = "127.0.0.1"
-        server.IDA_PORT = 13337
-        try:
-            server.mcp._transport_session_id.data = "http:session-a"
-            result = server.select_instance(port=14444, host="127.0.0.1")
-            assert result["success"] is True
-            assert (server.IDA_HOST, server.IDA_PORT) == ("127.0.0.1", 13337)
-
-            server.mcp._transport_session_id.data = "http:session-b"
-            assert server._get_active_ida_target() == ("127.0.0.1", 13337)
-        finally:
-            server.probe_instance = original_probe
-
-
-@test()
-def test_server_proxy_to_instance_forwards_session_and_extensions():
-    """Top-level proxy requests should preserve MCP session and enabled extensions."""
+def test_server_proxy_to_ida_forwards_session_and_extensions():
+    """Proxy requests should preserve MCP session and enabled extensions."""
     with _saved_target():
         original_conn = server.http.client.HTTPConnection
         _RecordingConnection.calls = []
         server.http.client.HTTPConnection = _RecordingConnection
+        server.IDA_HOST = "127.0.0.1"
+        server.IDA_PORT = 13337
         server.mcp._transport_session_id.data = "http:session-456"
         server.mcp._enabled_extensions.data = {"dbg"}
         try:
-            server._proxy_to_instance("127.0.0.1", 13337, b"{}")
+            server._proxy_to_ida(b"{}")
             assert len(_RecordingConnection.calls) == 1
             call = _RecordingConnection.calls[0]
             assert call["path"] == "/mcp?ext=dbg"
@@ -235,7 +172,7 @@ def test_ida_rpc_ext_flows_through_to_proxy_path():
         try:
             args = argparse.Namespace(ida_rpc="http://10.0.0.1:9999/mcp?ext=dbg")
             server._resolve_ida_rpc(args)
-            server._proxy_to_instance("10.0.0.1", 9999, b"{}")
+            server._proxy_to_ida(b"{}")
             assert len(_RecordingConnection.calls) == 1
             assert _RecordingConnection.calls[0]["path"] == "/mcp?ext=dbg"
         finally:

@@ -379,14 +379,13 @@ def server_health() -> ServerHealthResult:
     return _build_health_payload()
 
 
-@tool
 @idasync
 def server_warmup(
-    wait_auto_analysis: Annotated[bool, "Wait for auto analysis queue"] = True,
-    build_caches: Annotated[bool, "Build core caches (currently strings)"] = True,
-    init_hexrays: Annotated[bool, "Initialize Hex-Rays decompiler plugin"] = True,
+    wait_auto_analysis: bool = True,
+    build_caches: bool = True,
+    init_hexrays: bool = True,
 ) -> ServerWarmupResult:
-    """Warm up IDA subsystems to reduce first-call latency and transient failures."""
+    """Warm up IDA subsystems. Called by idb_open; no longer exposed as an MCP tool."""
     steps = []
 
     if wait_auto_analysis:

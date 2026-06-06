@@ -166,7 +166,7 @@ After installing [`idalib`](https://docs.hex-rays.com/core/idalib/getting-starte
 uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
 ```
 
-Or start without a binary and open/close arbitrary files later with `idalib_open(...)` / `idalib_close(...)`:
+Or start without a binary and open arbitrary files later with `idb_open(...)`:
 
 ```sh
 uv run idalib-mcp --host 127.0.0.1 --port 8745
@@ -178,27 +178,27 @@ For stdio-based clients, use:
 uv run idalib-mcp --stdio
 ```
 
-`--stdio` keeps database state inside that MCP server process. For stdio clients
-that spawn separate MCP server processes, such as Codex sub-agents, use
-`--stdio-shared` instead:
-
-```sh
-uv run idalib-mcp --stdio-shared
-```
-
-`--stdio-shared` starts or reuses a shared local HTTP supervisor on the
-configured host/port and proxies stdio JSON-RPC to it, so separate stdio MCP
-processes can share the same opened database workers.
+Database workers are persistent: each one runs as a detached process that
+outlives the supervisor that spawned it. When a new supervisor (over stdio
+or HTTP) calls `idb_open` for a binary that is already open under a worker
+on this host, the supervisor adopts that worker transparently — there is
+no separate "shared" mode to enable. Workers self-exit when no request has
+hit them for an idle interval.
 
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
 ## Headless idalib Session Model
 
-`idalib-mcp` is a supervisor that keeps each open database in its own idalib worker process. Starting without an `input_path` is supported; use `idalib_open(input_path, ...)` to open databases dynamically and `idalib_close(session_id)` to close them. This allows one headless MCP server to work with arbitrary files over its lifetime.
+`idalib-mcp` is a supervisor that keeps each open database in its own idalib worker process. Workers register themselves in a host-local discovery directory and outlive the supervisor that spawned them; any subsequent supervisor that wants the same path adopts the running worker. A worker self-exits when no request has hit it for its idle TTL (default 1 hour). There is no `idb_close` tool — clients that no longer care about a database simply stop using it, and only the user can close a GUI window.
 
-If the requested IDB is already open in a GUI IDA instance running the plugin, `idalib-mcp` will use that GUI instance instead of spawning a duplicate headless worker. If the GUI instance later disappears, the next routed request reopens the database in a headless worker when possible. Unsaved GUI-only changes must be saved first if they should be visible after fallback.
+`idb_open` picks the backend via its `mode` parameter:
 
-Tools target either the database bound to the current MCP context or an explicit `database` argument.
+- `prefer_headless` (default): spawn an idalib worker (or adopt one that already has the file open).
+- `force_headless`: same, but never adopt a running GUI even if one has the file.
+- `prefer_gui`: adopt a running GUI for the file; otherwise spawn an idalib worker.
+- `force_gui`: adopt a running GUI for the file; otherwise launch a new IDA GUI process.
+
+Every tool call must carry an explicit `database` argument. There is no implicit "current database" — callers name the session they want to operate on.
 
 ```sh
 uv run idalib-mcp --stdio --max-workers 4
@@ -207,46 +207,21 @@ uv run idalib-mcp --stdio --max-workers 4
 Typical flow:
 
 ```python
-idalib_open("/path/to/binary_a.exe", session_id="binary_a")
-idalib_open("/path/to/library.dll", session_id="library")
+idb_open("/path/to/binary_a.exe", preferred_session_id="binary_a")
+idb_open("/path/to/library.dll", preferred_session_id="library")
 
 decompile("main", database="binary_a")
 xrefs_to("ImportantExport", database="library")
 ```
 
-`database` accepts a session ID, filename, or input path. If omitted, tools use the database bound to the active context.
+`database` must be the session ID returned by `idb_open` (or shown in `idb_list`); filenames and paths are not accepted.
 
-Use `--isolated-contexts` to enable strict per-transport isolation:
+### Management tools
 
-```sh
-uv run idalib-mcp --isolated-contexts --host 127.0.0.1 --port 8745 path/to/executable
-```
-
-### Why use `--isolated-contexts`?
-
-Use it when multiple agents connect to the same `idalib-mcp` server and you want deterministic context isolation:
-
-- Prevent one agent from changing another agent's active database accidentally.
-- Keep each transport context's default database explicit.
-- Still allow intentional collaboration by passing `database=...` or binding multiple agents to the same session ID.
-
-When `--isolated-contexts` is enabled:
-
-- Each transport context has its own binding (`Mcp-Session-Id` for `/mcp`, `session` for `/sse`, `stdio:default` for stdio).
-- Unbound contexts fail fast for IDB-dependent tools/resources unless `database` is provided.
-- `idalib_switch(session_id)` and `idalib_open(...)` bind the caller context only.
-
-### Streamable HTTP behavior
-
-With `--isolated-contexts`, strict Streamable HTTP session semantics are enabled, including `Mcp-Session-Id` validation.
-
-### Context tools
-
-- `idalib_open(input_path, ...)`: Open binary in a worker and bind it to the active context policy.
-- `idalib_switch(session_id)`: Rebind the active context policy to an existing session.
-- `idalib_current()`: Return the session bound to the active context policy.
-- `idalib_unbind()`: Remove the active context binding.
-- `idalib_list()`: Includes `is_active`, `is_current_context`, `bound_contexts`, backend (`worker` or `gui`), and process IDs.
+- `idb_open(input_path, mode="prefer_headless", run_auto_analysis=True, build_caches=True, init_hexrays=True, preferred_session_id="")`: Open a binary, warm up subsystems (strings cache, Hex-Rays), and return its session ID. If a worker or GUI for this path is already running on the host, that instance is adopted and `preferred_session_id` is ignored.
+- `idb_list()`: List open sessions and running GUI IDA instances. Each entry has `adopted` (True if this supervisor manages it, False for GUIs/workers discovered but not yet opened via `idb_open`), `backend` (`worker` or `gui`), `is_active`, and process IDs.
+- `idb_save(session_id, path="")`: Save a session's IDB to disk. Forwarded as a regular worker tool (`database=<id>` injected) — same signature in both backends.
+- Per-database health: call `server_health(database=<id>)` (forwarded). `idb_list()` reports `is_active` from the supervisor's TCP/RPC probe.
 
 Worker controls:
 

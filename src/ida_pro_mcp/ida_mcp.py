@@ -201,9 +201,9 @@ class MCP(idaapi.plugin_t):
         # HACK: ensure fresh load of ida_mcp package
         unload_package("ida_mcp")
         if TYPE_CHECKING:
-            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, set_local_instance
+            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
         else:
-            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, set_local_instance
+            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
 
         port = self.port
         max_port = port + 100
@@ -214,7 +214,6 @@ class MCP(idaapi.plugin_t):
                 )
                 print(f"  Config: http://{self.host}:{port}/config.html")
                 self.mcp = MCP_SERVER
-                set_local_instance(self.host, port)
                 self._register_instance(port)
                 return
             except OSError as e:
