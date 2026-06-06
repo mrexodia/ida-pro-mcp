@@ -15,6 +15,10 @@ if TYPE_CHECKING:
 
 
 NETNODE_AUTOSTART = "$ ida_mcp.autostart"
+NETNODE_CONFIG = "$ ida_mcp.config"
+_ALT_PORT = 0  # altval index for the persisted port (0 = not set)
+_ALT_PERSIST = 1  # altval index for the "save host/port" preference
+_SUP_HOST = 0  # supval index for the persisted host
 
 
 def _get_autostart() -> bool:
@@ -28,6 +32,52 @@ def _set_autostart(enabled: bool):
     """Persist the autostart preference into the IDB."""
     node = ida_netnode.netnode(NETNODE_AUTOSTART, 0, True)
     node.altset(0, 1 if not enabled else 2)
+
+
+def _get_port(default: int) -> int:
+    """Read the persisted server port from the IDB. Defaults to `default`."""
+    node = ida_netnode.netnode(NETNODE_CONFIG)
+    val = node.altval(_ALT_PORT)  # 0 = not set
+    return val if val != 0 else default
+
+
+def _set_port(port: int):
+    """Persist the server port into the IDB."""
+    node = ida_netnode.netnode(NETNODE_CONFIG, 0, True)
+    node.altset(_ALT_PORT, port)
+
+
+def _get_host(default: str) -> str:
+    """Read the persisted server host from the IDB. Defaults to `default`."""
+    node = ida_netnode.netnode(NETNODE_CONFIG)
+    val = node.supstr(_SUP_HOST)
+    return val if val else default
+
+
+def _set_host(host: str):
+    """Persist the server host into the IDB."""
+    node = ida_netnode.netnode(NETNODE_CONFIG, 0, True)
+    node.supset(_SUP_HOST, host)
+
+
+def _get_persist() -> bool:
+    """Read the 'save host/port' preference from the IDB. Defaults to True."""
+    node = ida_netnode.netnode(NETNODE_CONFIG)
+    val = node.altval(_ALT_PERSIST)  # 0 = not set, 1 = off, 2 = on
+    return val != 1
+
+
+def _set_persist(enabled: bool):
+    """Persist the 'save host/port' preference into the IDB."""
+    node = ida_netnode.netnode(NETNODE_CONFIG, 0, True)
+    node.altset(_ALT_PERSIST, 2 if enabled else 1)
+
+
+def _clear_endpoint():
+    """Forget any persisted host/port so the next load uses the defaults."""
+    node = ida_netnode.netnode(NETNODE_CONFIG, 0, True)
+    node.altdel(_ALT_PORT)
+    node.supdel(_SUP_HOST)
 
 
 def unload_package(package_name: str):
@@ -48,20 +98,24 @@ CONFIG_ACTION_LABEL = "MCP Configuration"
 class MCPConfigForm(idaapi.Form):
     """Form to configure MCP server host and port."""
 
-    def __init__(self, host: str, port: int, autostart: bool):
+    def __init__(self, host: str, port: int, autostart: bool, persist: bool):
         form_str = r"""STARTITEM 0
 MCP Server Configuration
 
 <Host:{host}>
 <Port:{port}>
-<Autostart server when IDA opens:{autostart}>{checks}>
+<Autostart server when IDA opens:{autostart}>
+<Save host and port to this database:{save_endpoint}>{checks}>
 """
         super().__init__(
             form_str,
             {
                 "host": idaapi.Form.StringInput(value=host),
                 "port": idaapi.Form.NumericInput(value=port, tp=idaapi.Form.FT_DEC),
-                "checks": idaapi.Form.ChkGroupControl(("autostart",), value=1 if autostart else 0),
+                "checks": idaapi.Form.ChkGroupControl(
+                    ("autostart", "save_endpoint"),
+                    value=(1 if autostart else 0) | (2 if persist else 0),
+                ),
             },
         )
 
@@ -75,8 +129,14 @@ class MCPConfigHandler(idaapi.action_handler_t):
         old_host = self.plugin.host
         old_port = self.plugin.port
         old_autostart = self.plugin.autostart
+        old_persist = self.plugin.persist_endpoint
 
-        form = MCPConfigForm(self.plugin.host, self.plugin.port, self.plugin.autostart)
+        form = MCPConfigForm(
+            self.plugin.host,
+            self.plugin.port,
+            self.plugin.autostart,
+            self.plugin.persist_endpoint,
+        )
         form.Compile()
         ok = form.Execute()
         if ok != 1:
@@ -86,6 +146,7 @@ class MCPConfigHandler(idaapi.action_handler_t):
         host = form.host.value
         port = form.port.value
         autostart = bool(form.checks.value & 1)
+        persist = bool(form.checks.value & 2)
         form.Free()
 
         if port < 1 or port > 65535:
@@ -97,17 +158,33 @@ class MCPConfigHandler(idaapi.action_handler_t):
             _set_autostart(autostart)
             print(f"[MCP] Autostart {'enabled' if autostart else 'disabled'}")
 
-        if host == old_host and port == old_port:
-            if autostart == old_autostart:
-                print(f"[MCP] Configuration unchanged: {host}:{port}")
-            return 1
+        if persist != old_persist:
+            self.plugin.persist_endpoint = persist
+            _set_persist(persist)
+            print(f"[MCP] Save host/port {'enabled' if persist else 'disabled'}")
 
+        endpoint_changed = host != old_host or port != old_port
         self.plugin.host = host
         self.plugin.port = port
-        print(f"[MCP] Configuration updated: {host}:{port}")
+
+        # Save or forget the endpoint based on the preference.
+        if persist:
+            _set_host(host)
+            _set_port(port)
+            if endpoint_changed or persist != old_persist:
+                print(f"[MCP] Configuration updated: {host}:{port} (saved to IDB)")
+        else:
+            if persist != old_persist:
+                _clear_endpoint()  # next load falls back to defaults
+            if endpoint_changed:
+                print(f"[MCP] Configuration updated: {host}:{port} (not saved)")
+
+        if not endpoint_changed and autostart == old_autostart and persist == old_persist:
+            print(f"[MCP] Configuration unchanged: {host}:{port}")
+            return 1
 
         # Apply new endpoint immediately if the server is running.
-        if self.plugin.mcp is not None:
+        if endpoint_changed and self.plugin.mcp is not None:
             print("[MCP] Applying configuration change without manual restart...")
             self.plugin.run(0)
         return 1
@@ -152,9 +229,14 @@ class MCP(idaapi.plugin_t):
             hotkey = hotkey.replace("Alt", "Option")
 
         self.mcp: "ida_mcp.rpc.McpServer | None" = None
-        self.host = self.DEFAULT_HOST
-        self.port = self.DEFAULT_PORT
         self.autostart = _get_autostart()
+        self.persist_endpoint = _get_persist()
+        if self.persist_endpoint:
+            self.host = _get_host(self.DEFAULT_HOST)
+            self.port = _get_port(self.DEFAULT_PORT)
+        else:
+            self.host = self.DEFAULT_HOST
+            self.port = self.DEFAULT_PORT
 
         if self.autostart and ida_kernwin.is_idaq():
             print("[MCP] Plugin loaded, server will start automatically")
