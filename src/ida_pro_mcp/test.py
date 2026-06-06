@@ -84,9 +84,9 @@ With coverage:
     )
     args = parser.parse_args()
 
-    # Check binary exists
-    if not args.binary.exists():
-        print(f"Error: Binary not found: {args.binary}", file=sys.stderr)
+    # Check binary exists and is a file
+    if not args.binary.is_file():
+        print(f"Error: Binary not found or not a file: {args.binary}", file=sys.stderr)
         return 1
 
     # Configure IDA console output

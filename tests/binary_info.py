@@ -34,14 +34,16 @@ def main():
         sys.exit(1)
 
     binary_path = sys.argv[1]
-    if not Path(binary_path).exists():
-        print(f"Error: Binary not found: {binary_path}")
+    if not Path(binary_path).is_file():
+        print(f"Error: Binary not found or not a file: {binary_path}")
         sys.exit(1)
 
     # Import and open database
     import idapro
 
-    idapro.open_database(binary_path, True)
+    if idapro.open_database(binary_path, True):
+        print(f"Error: Failed to open database: {binary_path}", file=sys.stderr)
+        sys.exit(1)
 
     import idaapi
     import idautils
