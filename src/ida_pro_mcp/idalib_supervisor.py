@@ -56,6 +56,14 @@ IDB_MANAGEMENT_TOOLS = {
 WORKER_TCP_HEALTH_TIMEOUT_SEC = 0.5
 WORKER_RPC_HEALTH_TIMEOUT_SEC = 2.0
 
+# Upper bound (seconds) on how long a worker may take to open and auto-analyze a
+# binary before it is reaped and an error is returned. A malformed or hostile
+# binary can drive IDA's auto-analysis into an effectively unbounded loop; with
+# no limit this silently wedges the worker process (and the blocking supervisor
+# RPC waiting on it) forever, with no progress feedback and no recovery.
+# Set IDA_MCP_OPEN_TIMEOUT=0 to wait indefinitely (previous behavior).
+WORKER_OPEN_TIMEOUT_SEC = float(os.environ.get("IDA_MCP_OPEN_TIMEOUT", "1800"))
+
 
 def _import_zeromcp():
     """Import vendored zeromcp without importing ida_mcp/__init__.py."""
@@ -280,6 +288,25 @@ class IdalibSupervisor:
             proc.kill()
             proc.wait(timeout=5)
 
+    @staticmethod
+    def _cleanup_partial_database(input_path: str) -> None:
+        """Remove leftover unpacked IDA database parts after a failed/aborted open.
+
+        When a worker is reaped mid-open (for example on an analysis timeout), the
+        partially written .id0/.id1/.id2/.nam/.til files are left next to the input.
+        IDA then rejects every subsequent open of that path with
+        "database is corrupted beyond repair", turning a one-off failure into a
+        permanent one. The packed .i64/.idb (a complete saved database) is kept.
+        """
+        base = Path(input_path)
+        for ext in (".id0", ".id1", ".id2", ".nam", ".til"):
+            part = base.with_name(base.name + ext)
+            try:
+                if part.exists():
+                    part.unlink()
+            except OSError:
+                pass
+
     def shutdown(self) -> None:
         """Forget local session state without killing persistent workers.
 
@@ -381,7 +408,12 @@ class IdalibSupervisor:
             conn.close()
 
     def call_worker_tool(
-        self, worker: WorkerSession, name: str, arguments: dict[str, Any] | None = None
+        self,
+        worker: WorkerSession,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
     ) -> Any:
         response = self._worker_rpc(
             worker,
@@ -391,6 +423,7 @@ class IdalibSupervisor:
                 "method": "tools/call",
                 "params": {"name": name, "arguments": arguments or {}},
             },
+            timeout=timeout,
         )
         if "error" in response:
             raise RuntimeError(response["error"].get("message", "Unknown worker error"))
@@ -690,6 +723,7 @@ class IdalibSupervisor:
         if break_for_launch:
             return self._launch_gui_and_adopt(resolved, session_id)
 
+        open_timeout = (WORKER_OPEN_TIMEOUT_SEC or None) if run_auto_analysis else None
         try:
             opened = self.call_worker_tool(
                 worker,
@@ -702,9 +736,19 @@ class IdalibSupervisor:
                     "idle_ttl_sec": idle_ttl_sec,
                     "preferred_session_id": session_id,
                 },
+                timeout=open_timeout,
             )
             if isinstance(opened, dict) and opened.get("error"):
                 raise RuntimeError(str(opened["error"]))
+        except TimeoutError:
+            self._terminate_worker(worker)
+            self._cleanup_partial_database(resolved)
+            raise RuntimeError(
+                f"idalib worker timed out after {open_timeout:.0f}s while opening and "
+                f"analyzing {resolved}. The binary may drive auto-analysis into an "
+                f"unbounded loop. Retry with run_auto_analysis=false (open without "
+                f"analysis and decompile on demand), or raise IDA_MCP_OPEN_TIMEOUT."
+            ) from None
         except Exception:
             self._terminate_worker(worker)
             raise

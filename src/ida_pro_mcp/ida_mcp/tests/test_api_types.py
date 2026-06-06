@@ -29,6 +29,7 @@ from ..api_types import (
 TEST_STRUCT_NAME = "__TestStruct__"
 NAME_RESOLUTION_STRUCT = "__NameResolutionTest__"
 CRACKME_DSO_HANDLE = "0x4008"
+CRACKME_CHECK_PW = "0x11a9"
 TYPE_APPLY_SIGNATURE = "int"
 TYPED_FIXTURE_SUM_POINT = "0x1013c10"
 TYPED_FIXTURE_USE_WRAPPER = "0x1013dc0"
@@ -455,6 +456,29 @@ def test_set_type_function_not_found_branch():
 
 
 @test(binary="crackme03.elf")
+def test_set_type_function_undefined_referenced_type():
+    """set_type(kind=function) explains apply failures for undeclared referenced types."""
+    result = set_type(
+        {
+            "addr": CRACKME_CHECK_PW,
+            "kind": "function",
+            "signature": "UndefinedStruct __fastcall check_pw(const char *s)",
+        }
+    )
+    assert_is_list(result, min_length=1)
+    entry = result[0]
+    if entry.get("ok"):
+        skip_test("IDA accepted an undefined referenced type in this environment")
+    assert_error(entry)
+    assert entry["error"] != "Failed to apply function type"
+    assert (
+        "declared" in entry["error"].lower()
+        or "parse" in entry["error"].lower()
+        or "function type" in entry["error"].lower()
+    )
+
+
+@test(binary="crackme03.elf")
 def test_set_type_stack_missing_member():
     """set_type(kind=stack) reports a missing frame member explicitly."""
     fn_addr = get_named_address("main")
@@ -533,7 +557,8 @@ def test_set_type_local_branch():
     assert_is_list(result, min_length=1)
     assert (
         "error" not in result[0]
-        or result[0].get("error") == "Failed to apply local variable type"
+        or result[0].get("ok") is True
+        or "Failed to apply type" in (result[0].get("error") or "")
     )
 
 

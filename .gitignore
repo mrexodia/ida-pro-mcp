@@ -35,3 +35,5 @@ scalene-profile.json
 
 # MCP config
 .mcp.json
+
+.DS_Store

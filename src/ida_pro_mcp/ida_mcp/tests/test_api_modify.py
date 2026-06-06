@@ -23,6 +23,7 @@ from ..api_core import lookup_funcs
 
 
 CRACKME_MAIN = "0x123e"
+CRACKME_CHECK_PW = "0x11a9"
 CRACKME_PATCH_ASM_ADDR = "0x125e"
 CRACKME_FRAME_DUMMY = "0x11a0"
 TYPED_FIXTURE_IMMEDIATE_1234 = "0x1013e44"
@@ -209,6 +210,14 @@ def test_rename_function_roundtrip():
 
 
 @test(binary="crackme03.elf")
+def test_rename_duplicate_name():
+    """rename reports when the target name is already used elsewhere."""
+    result = rename({"func": [{"addr": CRACKME_FRAME_DUMMY, "name": "main"}]})
+    assert "func" in result
+    assert_error(result["func"][0], contains="already used")
+
+
+@test(binary="crackme03.elf")
 def test_rename_data_roundtrip():
     """rename can rename a global/data symbol and restore it."""
     import idaapi
@@ -261,12 +270,12 @@ def test_rename_stop_on_error():
     assert result["summary"]["stopped"] is True
 
 
-@test()
+@test(binary="crackme03.elf")
 def test_rename_local_error_handling():
     """rename(local=...) reports a structured error for a missing local variable."""
-    fn_addr = get_any_function()
+    fn_addr = CRACKME_CHECK_PW
     if not fn_addr:
-        skip_test("binary has no functions")
+        skip_test("check_pw not present")
 
     result = rename(
         {
@@ -281,7 +290,7 @@ def test_rename_local_error_handling():
     )
     assert "local" in result
     assert "error" in result["local"][0]
-    assert_error(result["local"][0])
+    assert_error(result["local"][0], contains="not found")
 
 
 @test(binary="typed_fixture.elf")
@@ -297,7 +306,9 @@ def test_rename_local_roundtrip():
         )
         assert (
             "error" not in result["local"][0]
-            or result["local"][0].get("error") == "Rename failed"
+            or "not found" in (result["local"][0].get("error") or "").lower()
+            or "Hex-Rays" in (result["local"][0].get("error") or "")
+            or "could not rename local" in (result["local"][0].get("error") or "").lower()
         )
     finally:
         rename(

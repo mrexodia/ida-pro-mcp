@@ -43,6 +43,7 @@ class AnalyzeFunctionResult(TypedDict, total=False):
     prototype: str | None
     size: int
     decompiled: str | None
+    decompile_error: str | None
     decompile_truncated: int
     assembly: str | None
     strings: list[str]
@@ -231,14 +232,16 @@ def _analyze_function_internal(
         result["size"] = func.end_ea - func.start_ea
 
         # Decompilation — capped at _DECOMPILE_LINE_CAP lines.
-        try:
-            raw_code = decompile_function_safe(ea)
+        raw_code, decompile_err = decompile_function_safe(ea)
+        if raw_code is None:
+            result["decompiled"] = None
+            if decompile_err:
+                result["decompile_error"] = decompile_err
+        else:
             code, total_lines = _cap_decompile(raw_code)
             result["decompiled"] = code
             if total_lines is not None:
                 result["decompile_truncated"] = total_lines
-        except Exception:
-            result["decompiled"] = None
 
         # Assembly — opt-in only.
         if include_asm:
@@ -477,7 +480,7 @@ def diff_before_after(
         return {"error": f"No function at {hex(ea)}"}
 
     # --- Before ---
-    before = decompile_function_safe(ea)
+    before, _ = decompile_function_safe(ea)
 
     # --- Apply action ---
     applied: str
@@ -486,9 +489,11 @@ def diff_before_after(
             name = action_args.get("name")
             if not name:
                 return {"error": "action_args must contain 'name'"}
-            ok = idaapi.set_name(ea, name, idaapi.SN_CHECK)
+            from .api_modify import rename_at_ea
+
+            ok, err = rename_at_ea(ea, name)
             if not ok:
-                return {"error": f"set_name failed for {name!r}"}
+                return {"error": err or f"set_name failed for {name!r}"}
             applied = f"Renamed to {name!r}"
 
         elif action == "set_type":
@@ -496,13 +501,20 @@ def diff_before_after(
             if not type_str:
                 return {"error": "action_args must contain 'type'"}
             from .api_types import _parse_function_tinfo
+
             try:
                 tif = _parse_function_tinfo(type_str)
-            except ValueError:
-                return {"error": f"Failed to parse type: {type_str!r}"}
+            except ValueError as exc:
+                return {"error": str(exc)}
             ok = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.TINFO_DEFINITE)
             if not ok:
-                return {"error": f"apply_tinfo failed for {type_str!r}"}
+                return {
+                    "error": (
+                        f"Failed to apply function type at {hex(ea)} for signature "
+                        f"{type_str!r}; ensure all referenced types are declared in the "
+                        "local type library"
+                    )
+                }
             applied = f"Set type to {type_str!r}"
 
         elif action == "set_comment":
@@ -519,7 +531,7 @@ def diff_before_after(
 
     # --- After (invalidate Hex-Rays cache so we see the change) ---
     ida_hexrays.mark_cfunc_dirty(ea)
-    after = decompile_function_safe(ea)
+    after, _ = decompile_function_safe(ea)
 
     return {
         "before": before,

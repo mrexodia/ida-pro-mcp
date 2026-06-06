@@ -112,8 +112,9 @@ def test_utils_stack_frame_and_decompile_helpers():
     names = {v["name"] for v in vars_}
     assert {"rhs_handle", "lhs_handle"}.issubset(names)
 
-    code = decompile_function_safe(0x1013DC0)
+    code, err = decompile_function_safe(0x1013DC0)
     assert code is not None
+    assert err is None
     assert "sum_point" in code
     # Address annotations (/*0x....*/) are added via get_line_item; passing None
     # for the phead/ptail output params could crash IDA via null-pointer write.
