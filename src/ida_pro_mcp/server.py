@@ -248,7 +248,23 @@ def _resolve_ida_rpc(args) -> None:
 def main():
     global IDA_HOST, IDA_PORT
 
-    parser = argparse.ArgumentParser(description="IDA Pro MCP Server")
+    # `ida-pro-mcp ssh-bridge ...` delegates to the SSH bridge subcommand,
+    # which sets up an SSH reverse tunnel so a remote MCP client can reach a
+    # local IDA Pro. Handled before argparse to keep its own argument set.
+    if len(sys.argv) > 1 and sys.argv[1] == "ssh-bridge":
+        try:
+            from .ssh_bridge import main as ssh_bridge_main
+        except ImportError:
+            from ssh_bridge import main as ssh_bridge_main
+        ssh_bridge_main(sys.argv[2:])
+        return
+
+    parser = argparse.ArgumentParser(
+        description="IDA Pro MCP Server",
+        epilog="Subcommands: 'ida-pro-mcp ssh-bridge <user@host>' tunnels a "
+        "local IDA Pro to a remote MCP client over SSH "
+        "(see 'ida-pro-mcp ssh-bridge --help').",
+    )
     parser.add_argument(
         "--install",
         nargs="?",
