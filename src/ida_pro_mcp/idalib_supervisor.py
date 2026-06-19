@@ -28,6 +28,7 @@ from typing import Annotated, Any, TypedDict
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_HTTP_HOST = "0.0.0.0"
 
 _DATABASE_ARG = "database"
 _DATABASE_ARG_SCHEMA = {
@@ -1190,7 +1191,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="MCP supervisor for IDA Pro via idalib")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show debug messages")
     parser.add_argument("--stdio", action="store_true", help="Serve MCP over stdio instead of HTTP")
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP host, default: 127.0.0.1")
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=DEFAULT_HTTP_HOST,
+        help=f"HTTP host, default: {DEFAULT_HTTP_HOST}",
+    )
     parser.add_argument("--port", type=int, default=8745, help="HTTP port, default: 8745")
     parser.add_argument("--unsafe", action="store_true", help="Enable unsafe worker tools (DANGEROUS)")
     parser.add_argument(

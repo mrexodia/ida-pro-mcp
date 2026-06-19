@@ -157,19 +157,19 @@ You should also use a tool like Lumina or FLIRT to try and resolve all the open 
 You can run an SSE server to connect to the user interface like this:
 
 ```sh
-uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
+uv run ida-pro-mcp --transport http://0.0.0.0:8744/sse
 ```
 
 After installing [`idalib`](https://docs.hex-rays.com/core/idalib/getting-started) you can also run a headless MCP server. You can start with an initial binary:
 
 ```sh
-uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
+uv run idalib-mcp --port 8745 path/to/executable
 ```
 
 Or start without a binary and open arbitrary files later with `idb_open(...)`:
 
 ```sh
-uv run idalib-mcp --host 127.0.0.1 --port 8745
+uv run idalib-mcp --port 8745
 ```
 
 For stdio-based clients, use:
@@ -177,6 +177,32 @@ For stdio-based clients, use:
 ```sh
 uv run idalib-mcp --stdio
 ```
+
+The IDA plugin and `idalib-mcp` HTTP supervisor listen on `0.0.0.0` by
+default in this fork, allowing direct connections through any network
+interface. Restrict access with a host firewall or trusted network; the MCP
+HTTP endpoint does not provide authentication. Use `--host 127.0.0.1` for
+`idalib-mcp`, or change the plugin host in its configuration dialog, to
+restore loopback-only access.
+
+### Build and distribute this fork
+
+Build the wheel, source archive, and checksums:
+
+```sh
+make package
+```
+
+Copy the generated `.whl` file from `dist/` to another machine, then install
+and register the IDA plugin:
+
+```sh
+python -m pip install --force-reinstall ./ida_pro_mcp-*.whl
+ida-pro-mcp --install
+```
+
+The target machine needs Python 3.11 or newer and network access for package
+dependencies unless they are already installed or provided separately.
 
 Database workers are persistent: each one runs as a detached process that
 outlives the supervisor that spawned it. When a new supervisor (over stdio

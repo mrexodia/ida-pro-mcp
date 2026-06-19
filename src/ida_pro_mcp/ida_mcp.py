@@ -93,6 +93,8 @@ def unload_package(package_name: str):
 
 CONFIG_ACTION_ID = "mcp:configure"
 CONFIG_ACTION_LABEL = "MCP Configuration"
+DEFAULT_HOST = "0.0.0.0"
+DEFAULT_PORT = 13337
 
 
 class MCPConfigForm(idaapi.Form):
@@ -220,8 +222,8 @@ class MCP(idaapi.plugin_t):
     wanted_name = "MCP"
     wanted_hotkey = "Ctrl-Alt-M"
 
-    DEFAULT_HOST = "127.0.0.1"
-    DEFAULT_PORT = 13337
+    DEFAULT_HOST = DEFAULT_HOST
+    DEFAULT_PORT = DEFAULT_PORT
 
     def init(self):
         hotkey = MCP.wanted_hotkey.replace("-", "+")
@@ -342,5 +344,4 @@ class MCP(idaapi.plugin_t):
 
 def PLUGIN_ENTRY():
     return MCP()
-
 

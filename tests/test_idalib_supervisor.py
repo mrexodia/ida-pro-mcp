@@ -6,6 +6,10 @@ from pathlib import Path
 from ida_pro_mcp import idalib_supervisor as supmod
 
 
+def test_default_http_host_allows_remote_connections():
+    assert supmod.DEFAULT_HTTP_HOST == "0.0.0.0"
+
+
 class _FakeProcess:
     pid = 12345
     returncode = None
