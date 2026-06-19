@@ -84,7 +84,6 @@ if TYPE_CHECKING:
     IDA_VERSION: tuple[int, int, int] = cast(tuple[int, int, int], (9, 2, 0))
 else:
     IDA_VERSION = _parse_kernel_version(idaapi.get_kernel_version())
-    
 
 IDA_GE_90 = IDA_VERSION >= (9, 0, 0)
 IDA_GE_85 = IDA_VERSION >= (8, 5, 0)
