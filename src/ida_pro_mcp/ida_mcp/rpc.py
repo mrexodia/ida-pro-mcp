@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from typing import Any, Optional
 from .zeromcp import (
     McpRpcRegistry,
@@ -19,7 +20,8 @@ MCP_SERVER = McpServer("ida-pro-mcp", extensions=MCP_EXTENSIONS)
 
 OUTPUT_LIMIT_MAX_CHARS = 50000
 OUTPUT_CACHE_MAX_SIZE = 100
-_output_cache: dict[str, Any] = {}
+OUTPUT_CACHE_TTL_SECONDS = 300
+_output_cache: dict[str, tuple[Any, float]] = {}
 _download_base_url: str = os.environ.get("IDA_MCP_URL", "http://127.0.0.1:13337")
 
 
@@ -81,14 +83,25 @@ def _build_download_meta(output_id: str, total_chars: int) -> dict:
 
 
 def get_cached_output(output_id: str) -> Optional[Any]:
-    return _output_cache.get(output_id)
+    entry = _output_cache.get(output_id)
+    if entry is None:
+        return None
+    data, timestamp = entry
+    if time.time() - timestamp > OUTPUT_CACHE_TTL_SECONDS:
+        del _output_cache[output_id]
+        return None
+    return data
 
 
 def _cache_output(output_id: str, data: Any) -> None:
+    now = time.time()
+    expired = [k for k, (_, ts) in _output_cache.items() if now - ts > OUTPUT_CACHE_TTL_SECONDS]
+    for k in expired:
+        del _output_cache[k]
     if len(_output_cache) >= OUTPUT_CACHE_MAX_SIZE:
         oldest_key = next(iter(_output_cache))
         del _output_cache[oldest_key]
-    _output_cache[output_id] = data
+    _output_cache[output_id] = (data, now)
 
 
 def _install_tools_call_patch() -> None:
