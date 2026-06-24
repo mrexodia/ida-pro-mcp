@@ -53,8 +53,26 @@ IDB_MANAGEMENT_TOOLS = {
     "idb_open",
     "idb_list",
 }
-WORKER_TCP_HEALTH_TIMEOUT_SEC = 0.5
-WORKER_RPC_HEALTH_TIMEOUT_SEC = 2.0
+# Health-probe timeouts. A busy worker (mid auto-analysis / decompile) runs
+# single-threaded and cannot answer a JSON-RPC ping until it yields, so a tight
+# RPC timeout misclassifies "busy" as "dead" and gets the worker reaped. These
+# default generously and are env-overridable for slow hosts / huge databases.
+WORKER_TCP_HEALTH_TIMEOUT_SEC = float(os.environ.get("IDA_MCP_HEALTH_TCP_TIMEOUT", "2.0"))
+WORKER_RPC_HEALTH_TIMEOUT_SEC = float(os.environ.get("IDA_MCP_HEALTH_RPC_TIMEOUT", "10.0"))
+
+# When a health probe fails but the worker process is still alive, retry instead
+# of reaping it immediately: a busy worker is not a dead worker. Only a worker
+# whose OS process has actually exited is treated as unreachable.
+WORKER_HEALTH_RETRIES = int(os.environ.get("IDA_MCP_HEALTH_RETRIES", "3"))
+WORKER_HEALTH_RETRY_BACKOFF_SEC = float(os.environ.get("IDA_MCP_HEALTH_RETRY_BACKOFF", "1.0"))
+
+# Grace window (seconds) before a live-but-unresponsive worker is declared
+# wedged and reaped. A worker that keeps failing health probes for longer than
+# this — while its process is still alive — is treated as permanently stuck
+# (e.g. an analysis loop) rather than transiently busy, so it does not pin a
+# worker slot forever. Set IDA_MCP_WEDGED_GRACE_SEC=0 to never reap a live
+# worker (pure keep-forever behavior for long-lived single-user setups).
+WORKER_WEDGED_GRACE_SEC = float(os.environ.get("IDA_MCP_WEDGED_GRACE_SEC", "300"))
 
 # Upper bound (seconds) on how long a worker may take to open and auto-analyze a
 # binary before it is reaped and an error is returned. A malformed or hostile
@@ -153,6 +171,11 @@ class WorkerSession:
     owned: bool = True
     pid: int | None = None
     last_warmup: dict[str, Any] | None = None
+    # time.monotonic() of the first consecutive failed health probe while the
+    # process was still alive, or None when last seen healthy. Used to tell a
+    # transiently-busy worker (keep) from a permanently wedged one (reap after
+    # a grace window). See resolve_session().
+    unhealthy_since: float | None = None
 
     def to_dict(self) -> IdalibSessionInfo:
         return {
@@ -341,10 +364,13 @@ class IdalibSupervisor:
         return None
 
     def _prune_dead_worker_sessions_locked(self) -> None:
+        # Prune only workers whose OS process has actually exited. A live but
+        # busy worker fails the reachability probe yet must NOT be torn down —
+        # see resolve_session() for the same busy-vs-dead distinction.
         stale_session_ids = [
             session.session_id
             for session in self.sessions.values()
-            if session.backend == "worker" and session.owned and not self._session_is_reachable(session)
+            if session.backend == "worker" and session.owned and not session.is_alive()
         ]
         for session_id in stale_session_ids:
             stale = self._unregister_session_locked(session_id)
@@ -887,16 +913,62 @@ class IdalibSupervisor:
         session = self.peek_session(database)
         if self._session_is_reachable(session):
             session.last_accessed = datetime.now()
+            session.unhealthy_since = None  # recovered — clear wedged tracking
             return session
         if session.backend == "gui":
             return self._reopen_gui_session_headless(session)
+
+        # A failed probe does not mean the worker is dead — a worker that is busy
+        # running auto-analysis or a long decompile is single-threaded and cannot
+        # answer a ping until it yields. Reaping it here destroys live sessions.
+        # Only treat the worker as gone once its OS process has actually exited;
+        # while the process is alive, retry the probe with backoff.
+        for attempt in range(max(0, WORKER_HEALTH_RETRIES)):
+            if not session.is_alive():
+                break  # process really exited — stop retrying, reap below
+            if WORKER_HEALTH_RETRY_BACKOFF_SEC > 0:
+                time.sleep(WORKER_HEALTH_RETRY_BACKOFF_SEC)
+            if self._session_is_reachable(session):
+                session.last_accessed = datetime.now()
+                session.unhealthy_since = None  # recovered — clear tracking
+                return session
+
         session_id = session.session_id
-        with self._lock:
-            current = self.sessions.get(session_id)
-            if current is session:
-                self._unregister_session_locked(session_id)
-        self._terminate_worker(session)
-        raise RuntimeError(f"Worker for session '{session_id}' is not reachable")
+
+        # Process actually exited: genuinely dead, reap it.
+        if not session.is_alive():
+            with self._lock:
+                current = self.sessions.get(session_id)
+                if current is session:
+                    self._unregister_session_locked(session_id)
+            self._terminate_worker(session)
+            raise RuntimeError(f"Worker for session '{session_id}' is not reachable")
+
+        # Process is alive but unresponsive. Distinguish transiently busy (keep,
+        # retryable) from permanently wedged (reap after a grace window so it
+        # does not pin a worker slot forever). A non-positive grace window means
+        # "never reap a live worker".
+        now = time.monotonic()
+        if session.unhealthy_since is None:
+            session.unhealthy_since = now
+        unhealthy_for = now - session.unhealthy_since
+
+        if WORKER_WEDGED_GRACE_SEC > 0 and unhealthy_for >= WORKER_WEDGED_GRACE_SEC:
+            with self._lock:
+                current = self.sessions.get(session_id)
+                if current is session:
+                    self._unregister_session_locked(session_id)
+            self._terminate_worker(session)
+            raise RuntimeError(
+                f"Worker for session '{session_id}' was unresponsive for "
+                f"{unhealthy_for:.0f}s (>= {WORKER_WEDGED_GRACE_SEC:.0f}s grace) "
+                f"and was reaped as wedged. Reopen the database."
+            )
+
+        raise RuntimeError(
+            f"Worker for session '{session_id}' is alive but not responding "
+            f"(busy or wedged for {unhealthy_for:.0f}s); session kept. Retry shortly."
+        )
 
     def peek_session(self, database: str) -> WorkerSession:
         if not database:
@@ -1049,7 +1121,8 @@ def idb_open(
     init_hexrays: Annotated[bool, "Initialize Hex-Rays decompiler after open"] = True,
     idle_ttl_sec: Annotated[
         int,
-        "Minimum idle TTL in seconds before the headless worker self-exits.",
+        "Minimum idle TTL in seconds before the headless worker self-exits. "
+        "Use 0 (or any value <= 0) to keep the worker resident forever.",
     ] = 600,
     preferred_session_id: Annotated[
         str, "Preferred session ID (auto-generated if empty). Ignored if the file is already open in a GUI or worker session."

@@ -21,6 +21,16 @@ def test_check_fires_after_idle_ttl():
     assert reason is not None and "no requests" in reason
 
 
+def test_check_never_fires_when_ttl_disabled():
+    # ttl <= 0 disables idle self-exit entirely, even long past any idle window.
+    lc = WorkerLifecycle(idle_ttl_sec=0.0, poll_interval_sec=0.05)
+    time.sleep(0.10)
+    assert lc.check_shutdown_reason() is None
+    lc.set_idle_ttl(-1.0)
+    time.sleep(0.10)
+    assert lc.check_shutdown_reason() is None
+
+
 def test_touch_resets_idle_ttl():
     lc = WorkerLifecycle(idle_ttl_sec=0.10, poll_interval_sec=0.05)
     time.sleep(0.06)
@@ -75,12 +85,18 @@ def test_set_idle_ttl_uses_request_when_above_min():
     assert lc.idle_ttl_sec == 1800.0
 
 
-def test_set_idle_ttl_clamps_to_min():
+def test_set_idle_ttl_zero_or_negative_means_never_exit():
+    # A non-positive TTL is the "never self-exit" sentinel, preserved as 0.0
+    # (no MIN clamp) so the worker stays resident for long-lived sessions.
     lc = WorkerLifecycle(idle_ttl_sec=1000.0)
     lc.set_idle_ttl(0)
-    assert lc.idle_ttl_sec == WorkerLifecycle.MIN_IDLE_TTL_SEC
+    assert lc.idle_ttl_sec == 0.0
     lc.set_idle_ttl(-50.0)
-    assert lc.idle_ttl_sec == WorkerLifecycle.MIN_IDLE_TTL_SEC
+    assert lc.idle_ttl_sec == 0.0
+
+
+def test_set_idle_ttl_clamps_small_positive_to_min():
+    lc = WorkerLifecycle(idle_ttl_sec=1000.0)
     lc.set_idle_ttl(3.0)
     assert lc.idle_ttl_sec == WorkerLifecycle.MIN_IDLE_TTL_SEC
 
@@ -91,9 +107,16 @@ def test_set_idle_ttl_adds_load_time():
     assert lc.idle_ttl_sec == 645.0
 
 
-def test_set_idle_ttl_clamps_user_then_adds_load_time():
+def test_set_idle_ttl_never_exit_overrides_load_time():
+    # The "never exit" sentinel wins over any load-time padding.
     lc = WorkerLifecycle(idle_ttl_sec=10.0)
     lc.set_idle_ttl(0.0, load_time_sec=120.0)
+    assert lc.idle_ttl_sec == 0.0
+
+
+def test_set_idle_ttl_clamps_small_positive_then_adds_load_time():
+    lc = WorkerLifecycle(idle_ttl_sec=10.0)
+    lc.set_idle_ttl(3.0, load_time_sec=120.0)
     assert lc.idle_ttl_sec == WorkerLifecycle.MIN_IDLE_TTL_SEC + 120.0
 
 
