@@ -97,6 +97,11 @@ def _install_ida_stubs() -> None:
         return mod
 
     idaapi = _stub("idaapi")
+    # Sentinel marking this idaapi as the headless stub (NOT a real IDA runtime).
+    # `pytest_collection_modifyitems` reads it to decide whether to skip the
+    # IDA-runtime-only suite. When running inside real IDA the module is the
+    # genuine one and this attribute is absent.
+    idaapi._mh_headless_stub = True
     # sync.py: `ida_major, ida_minor = map(int, idaapi.get_kernel_version().split("."))`
     idaapi.get_kernel_version = MagicMock(return_value="9.3")
     # sync._sync_wrapper does `idaapi.execute_sync(runned, MFF_WRITE)` then BLOCKS
@@ -169,3 +174,65 @@ def _install_ida_stubs() -> None:
 
 
 _install_ida_stubs()
+
+
+# ---------------------------------------------------------------------------
+# requires_ida marker + headless auto-skip of the IDA-runtime-only suite.
+#
+# A large suite (everything under ``src/ida_pro_mcp/ida_mcp/tests/`` that drives
+# the ``@test(binary=...)`` fixture, plus the supervisor import-isolation test)
+# only behaves correctly against a real IDA / idalib runtime. Headless, the
+# stub above returns ``MagicMock`` objects that don't behave like IDA, so those
+# tests fail spuriously. When the stub is active (no real IDA present) we mark
+# that suite ``requires_ida`` and skip it, while leaving the genuinely-headless
+# pure-logic tests running.
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402  (after the stub install above, by design)
+
+
+def _real_ida_present() -> bool:
+    """True when running against a genuine IDA runtime (stub NOT in effect)."""
+    idaapi_mod = sys.modules.get("idaapi")
+    if idaapi_mod is None:
+        return False
+    if isinstance(idaapi_mod, _FakeIdaModule):
+        return False
+    if getattr(idaapi_mod, "_mh_headless_stub", False):
+        return False
+    return True
+
+
+# nodeid substrings whose tests need a real IDA/idalib runtime. nodeids use
+# forward slashes on every platform, so these match regardless of OS.
+_REQUIRES_IDA_PATH_PREFIX = "src/ida_pro_mcp/ida_mcp/tests/"
+_REQUIRES_IDA_NODEIDS = {
+    "tests/test_idalib_supervisor.py::test_supervisor_import_does_not_import_ida_modules",
+}
+
+
+def _requires_ida_runtime(item) -> bool:
+    nodeid = item.nodeid.replace("\\", "/")
+    if _REQUIRES_IDA_PATH_PREFIX in nodeid:
+        return True
+    if nodeid in _REQUIRES_IDA_NODEIDS:
+        return True
+    return False
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "requires_ida: test only runs against a real IDA/idalib runtime; "
+        "auto-skipped headless (stub idaapi active).",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if _real_ida_present():
+        return
+    skip_marker = pytest.mark.skip(reason="requires a real IDA/idalib runtime")
+    for item in items:
+        if _requires_ida_runtime(item):
+            item.add_marker(pytest.mark.requires_ida)
+            item.add_marker(skip_marker)

@@ -13,6 +13,11 @@ ida-pro-essentials:
     description: Core IDA Pro RE concepts (disassembly, pseudocode, structures, xrefs, naming, types, auto-analysis) each mapped to this server's MCP tools.
     priority: 92
 
+decompiler-mastery:
+    title: Mastering Hex-Rays Pseudocode Quality
+    description: Turn the decompiler's draft into readable pseudocode - apply types/prototypes/enums, split-or-join fused/spilled variables, name functions/locals/stack, recognize the recurring idioms, and know when to decompile vs read disasm - mapped to decompile/analyze_batch/set_type/rename/force_recompile.
+    priority: 88
+
 re-methodology:
     title: A Disciplined RE Methodology
     description: The hypothesis -> static read -> dynamic confirm loop, working outward from strings/imports/dispatch, clean-room note-taking, and which server tools fit each step.
@@ -23,10 +28,20 @@ tools-reference:
     description: How tools are organized, the safety classes, and the ?ext extension gating model.
     priority: 80
 
+tool-index:
+    title: Tool Index
+    description: A scannable lookup map of every tool family - core/query, memory, modify, types, stack, analysis, composite, survey, sigmaker, debugger(dbg), probes, domain, python, docs - with each family's one-line purpose, safety class (READ/WRITE/DESTRUCTIVE/EXECUTE), ?ext group, and full tool roster, plus a which-family-do-I-reach-for cheatsheet.
+    priority: 78
+
 idapython-cookbook:
     title: IDAPython Cookbook
     description: Copy-paste IDAPython recipes (idautils/ida_funcs/ida_bytes/xrefs/ida_typeinf/idc) plus execute_sync, BADADDR, and CP949 gotchas.
     priority: 72
+
+scripting-automation:
+    title: Scripting & Automation with py_eval / py_exec_file
+    description: Automating RE through the EXECUTE-class Python tools - batch sweeps over functions, the already-on-main-thread rule (never nest execute_sync), returning a result var vs json.dumps to stdout, self-bounding against the timeout, py_exec_file for large/write-to-disk scripts, and clean-room note discipline for dirty output.
+    priority: 71
 
 ida-domain-sdk:
     title: The ida-domain SDK
@@ -38,10 +53,20 @@ opcode-and-packet-re:
     description: End-to-end recipe - find the recv dispatch/switch, map opcode->handler, infer packet field layouts, and confirm live with probe_net pre/post capture.
     priority: 68
 
+type-reconstruction:
+    title: Type Reconstruction End-to-End
+    description: The declare -> apply -> verify loop - declare_type C decls, infer_types seeding, set_type/type_apply_batch to attach, read_struct to confirm against static bytes, and read_struct_live to confirm at a live runtime pointer.
+    priority: 67
+
 struct-and-vtable-recovery:
     title: C++ Struct, vtable & RTTI Recovery
     description: Recover C++ object layouts from this+offset patterns, declare_type them, confirm at a live pointer with read_struct/dbg_read, and walk vtables/RTTI.
     priority: 66
+
+calling-conventions-abi:
+    title: 32-bit x86 Calling Conventions & ABI
+    description: Where args live on 32-bit MSVC (__cdecl/__stdcall/__thiscall + varargs) - ecx=this, stack slots, who cleans the stack, return-value registers - and the exact trace_calls/probe_add capture specs that read the right slots live.
+    priority: 65
 
 crypto-hunting:
     title: 'Crypto Hunting: Ciphers and Key Schedules'
@@ -57,6 +82,16 @@ probe-toolkit:
     title: Probe / Watch / Autopilot Toolkit
     description: The non-stopping live-debugger probe layer and the instrument -> run -> drain loop.
     priority: 60
+
+autopilot-playbook:
+    title: 'Autopilot Playbook: Worked Examples'
+    description: Two complete instrument -> run -> drain -> summarize -> reason loops with exact tool calls and returned shapes - a recv/decrypt packet-capture example and a struct-field-change watchpoint example - plus autopilot_run sequencing and pitfalls.
+    priority: 59
+
+signatures-and-flirt:
+    title: Byte-Pattern Signatures & FLIRT-Style Identification
+    description: Synthesize AOB / wildcarded byte-pattern signatures (make_signature / make_signature_for_function / make_signature_for_range / find_xref_signatures) to relocate a function or data item across builds - uniqueness pitfalls, operand-wildcard policy, the four output formats (ida/x64dbg/mask/bitmask), and how this differs from IDA FLIRT .sig libraries.
+    priority: 57
 
 watchpoints-and-tracepoints:
     title: Watchpoints & Tracepoints Deep Dive
@@ -83,7 +118,17 @@ performance-and-scale:
     description: Batching tools, the strings/schema caches, bulk byte reads, bounded probe rings, and keeping a live probe session stable on hot functions.
     priority: 30
 
+troubleshooting:
+    title: Troubleshooting This Server
+    description: Symptom -> cause -> fix for the failures that actually stop a session - no debugger session / is_debugger_on, BADADDR sentinel, missing Hex-Rays license, ungated ?ext groups, idalib vs in-GUI in-process mode, and CP949 text decoding.
+    priority: 20
+
 pro-tips-and-pitfalls:
     title: Pro-Tips & Pitfalls
     description: A dense, scannable field guide of IDA + RE + this-server tips, tricks, and common traps (address math, types, debugging, caches, encoding, performance).
     priority: 10
+
+glossary:
+    title: 'RE + IDA + MCP Glossary'
+    description: Operational definitions of the core terms across these docs - ea/BADADDR/RVA/VA, xref, basic block, vtable/RTTI, tinfo/struct/enum, FLIRT and AOB signatures, breakpoint/watchpoint/tracepoint/appcall, calling conventions, S-box/key schedule, opcode/dispatch, and the MCP layer (tool/resource/prompt, safety class, ext group, structured output, idalib) - each mapped to the real server tool that touches it.
+    priority: 5

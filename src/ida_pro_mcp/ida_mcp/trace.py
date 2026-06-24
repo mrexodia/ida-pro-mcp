@@ -15,6 +15,7 @@ import atexit
 import gzip
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -799,6 +800,272 @@ def diff_buffers(a_hex: Any, b_hex: Any) -> dict:
     }
 
 
+# ============================================================================
+# PURE-LOGIC BYTE-PATTERN + RANGE helpers (no idaapi)
+#
+# Used by the live memory_scan tool, but kept pure so the wildcard parsing and
+# the mapped-range coalescing are unit-testable headless.
+# ============================================================================
+
+
+def parse_byte_pattern(pattern_hex: Any) -> list[Optional[int]]:
+    """Parse a hex byte pattern with wildcards into a list of int|None.
+
+    Accepts space- or comma-separated tokens, an unspaced hex run, or an
+    "0x"-prefixed run. A byte is a 2-hex-digit value 00..ff. A wildcard is "??"
+    or "?" (a single "?" matches one whole byte) and parses to None. A token of
+    one hex nibble is rejected (ambiguous). Pure: no IDA, no live process.
+
+    Raises ValueError for an empty / malformed pattern so the caller reports a
+    clean error instead of installing a never-matching scan.
+    """
+    if pattern_hex is None:
+        raise ValueError("empty byte pattern")
+    s = str(pattern_hex).strip()
+    if not s:
+        raise ValueError("empty byte pattern")
+
+    # Tokenize. If there is any whitespace or comma, split on it; otherwise treat
+    # the string as a contiguous run of byte/?? pairs.
+    if any(ch.isspace() for ch in s) or "," in s:
+        raw_tokens = [t for t in re.split(r"[\s,]+", s) if t]
+    else:
+        if s[:2].lower() == "0x":
+            s = s[2:]
+        raw_tokens = []
+        i = 0
+        n = len(s)
+        while i < n:
+            ch = s[i]
+            if ch == "?":
+                # consume one or two consecutive '?' as a single wildcard byte
+                if i + 1 < n and s[i + 1] == "?":
+                    raw_tokens.append("??")
+                    i += 2
+                else:
+                    raw_tokens.append("?")
+                    i += 1
+            else:
+                raw_tokens.append(s[i:i + 2])
+                i += 2
+
+    if not raw_tokens:
+        raise ValueError("empty byte pattern")
+
+    pattern: list[Optional[int]] = []
+    for tok in raw_tokens:
+        low = tok.lower()
+        if low in ("??", "?", "*", ".."):
+            pattern.append(None)
+            continue
+        if low.startswith("0x"):
+            low = low[2:]
+        if len(low) != 2 or any(c not in "0123456789abcdef" for c in low):
+            raise ValueError(f"bad pattern token {tok!r} (want a hex byte or '??')")
+        pattern.append(int(low, 16))
+    return pattern
+
+
+def find_pattern_in_buffer(
+    buf: bytes,
+    pattern: list[Optional[int]],
+    base: int = 0,
+    limit: Optional[int] = None,
+) -> list[int]:
+    """Return absolute addresses where `pattern` matches inside `buf`.
+
+    `pattern` is a list of int|None (None == wildcard byte, as produced by
+    parse_byte_pattern). A returned address is base + match_offset. Stops once
+    `limit` hits are collected (None == unbounded). Pure: a straight byte scan
+    over the buffer, no IDA, no live process.
+    """
+    if not pattern:
+        return []
+    data = bytes(buf or b"")
+    plen = len(pattern)
+    dlen = len(data)
+    hits: list[int] = []
+    if plen > dlen:
+        return hits
+    # Anchor on the first concrete (non-wildcard) byte to skip cheaply.
+    anchor_idx = next((i for i, b in enumerate(pattern) if b is not None), None)
+    last_start = dlen - plen
+    i = 0
+    while i <= last_start:
+        if anchor_idx is not None:
+            a = data[i + anchor_idx]
+            if a != pattern[anchor_idx]:
+                i += 1
+                continue
+        matched = True
+        for j in range(plen):
+            pb = pattern[j]
+            if pb is not None and data[i + j] != pb:
+                matched = False
+                break
+        if matched:
+            hits.append(base + i)
+            if limit is not None and len(hits) >= limit:
+                break
+        i += 1
+    return hits
+
+
+def merge_ranges(ranges: Any) -> list[tuple[int, int]]:
+    """Coalesce a list of (start, end) half-open ranges into sorted, disjoint
+    ranges. Adjacent or overlapping ranges are merged. Invalid entries (end <=
+    start, non-numeric) are skipped. Pure: no IDA, no live process.
+    """
+    cleaned: list[tuple[int, int]] = []
+    for entry in (ranges or []):
+        try:
+            start, end = int(entry[0]), int(entry[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if end <= start:
+            continue
+        cleaned.append((start, end))
+    if not cleaned:
+        return []
+    cleaned.sort()
+    merged: list[tuple[int, int]] = [cleaned[0]]
+    for start, end in cleaned[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:  # overlap or adjacency
+            if end > last_end:
+                merged[-1] = (last_start, end)
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def largest_aligned_slot(addr: int, size: int, max_slot: int = 8) -> int:
+    """Pick the largest hardware-watchpoint slot (8/4/2/1) that is <= size, <=
+    max_slot, and naturally aligned to `addr`. Always returns at least 1.
+
+    Hardware data breakpoints watch a naturally-aligned power-of-two window. For
+    a range we arm the biggest such window that fits. Pure: no IDA.
+    """
+    try:
+        a = int(addr)
+        sz = int(size)
+        cap = int(max_slot)
+    except (TypeError, ValueError):
+        return 1
+    if sz < 1:
+        return 1
+    for slot in (8, 4, 2, 1):
+        if slot > cap:
+            continue
+        if slot <= sz and (a % slot) == 0:
+            return slot
+    return 1
+
+
+def clamp_scan_window(
+    seg_start: int,
+    seg_end: int,
+    want_start: Optional[int],
+    want_end: Optional[int],
+) -> Optional[tuple[int, int]]:
+    """Intersect a segment [seg_start,seg_end) with a requested [want_start,
+    want_end) window. Returns the clamped (start, end) or None when there is no
+    overlap. None bounds mean "unbounded on that side". Pure helper for
+    memory_scan's range walk.
+    """
+    lo = seg_start if want_start is None else max(seg_start, int(want_start))
+    hi = seg_end if want_end is None else min(seg_end, int(want_end))
+    if hi <= lo:
+        return None
+    return (lo, hi)
+
+
+def pattern_to_mask(pattern: Any) -> tuple[bytes, str]:
+    """Render a parsed byte pattern (list of int|None) as an IDA-style
+    (bytes, mask) pair.
+
+    `pattern` is the int|None list produced by parse_byte_pattern. The returned
+    `bytes` value carries 0x00 in every wildcard slot and the concrete byte
+    elsewhere; the `mask` string carries "x" for a concrete byte and "?" for a
+    wildcard, one char per byte. This is the canonical form an IDA byte-search
+    consumes. Pure: no IDA, no live process.
+
+    Raises ValueError for an empty pattern or a slot that is neither None nor a
+    0..255 int, so a malformed pattern fails loudly instead of producing a
+    silently-wrong mask.
+    """
+    items = list(pattern or [])
+    if not items:
+        raise ValueError("empty pattern")
+    raw = bytearray()
+    mask_chars: list[str] = []
+    for i, item in enumerate(items):
+        if item is None:
+            raw.append(0)
+            mask_chars.append("?")
+            continue
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise ValueError(f"pattern slot {i} is not an int or wildcard: {item!r}")
+        if item < 0 or item > 0xFF:
+            raise ValueError(f"pattern slot {i} out of byte range: {item}")
+        raw.append(item)
+        mask_chars.append("x")
+    return bytes(raw), "".join(mask_chars)
+
+
+def total_range_bytes(ranges: Any) -> int:
+    """Total number of bytes covered by a list of (start, end) half-open ranges,
+    counting overlaps ONCE.
+
+    Coalesces via merge_ranges first (so overlapping / adjacent / unsorted /
+    invalid entries are handled exactly as the scan walk sees them), then sums
+    the disjoint spans. Pure: no IDA, no live process.
+    """
+    return sum(end - start for start, end in merge_ranges(ranges))
+
+
+def aggregate_probe_stats(probes: Any, ring_stats: Any) -> dict:
+    """Roll up the probe registry + ring stats into the probe_stats result shape.
+
+    `probes` is a list of probe descriptor dicts (as list_probes returns);
+    `ring_stats` is the dict from ProbeRing.stats(). Returns
+    {armed_probes,total_probes,ring,fill_pct,dropped,per_probe} where per_probe
+    is the (id,ea,kind,hits,max_hits,armed) breakdown sorted by hit count
+    descending. fill_pct is size/cap as a 0..100 percentage (0.0 when cap is
+    missing/zero). Pure: takes plain dicts and returns a plain dict so the
+    aggregation shape is unit-testable headless; the live tool only supplies the
+    inputs.
+    """
+    rows = [p for p in (probes or []) if isinstance(p, dict)]
+    armed = sum(1 for p in rows if p.get("armed"))
+    stats = dict(ring_stats or {})
+    cap = stats.get("cap") or 0
+    size = stats.get("size") or 0
+    fill = round((size / cap) * 100.0, 2) if cap else 0.0
+
+    per_probe = [
+        {
+            "probe_id": p.get("probe_id"),
+            "ea": p.get("ea"),
+            "kind": p.get("kind"),
+            "hits": p.get("hits", 0),
+            "max_hits": p.get("max_hits"),
+            "armed": bool(p.get("armed")),
+        }
+        for p in rows
+    ]
+    per_probe.sort(key=lambda d: d.get("hits", 0) or 0, reverse=True)
+
+    return {
+        "armed_probes": armed,
+        "total_probes": len(rows),
+        "ring": stats,
+        "fill_pct": fill,
+        "dropped": stats.get("dropped", 0),
+        "per_probe": per_probe,
+    }
+
+
 __all__ = [
     "configure_idb",
     "install_tracer",
@@ -819,4 +1086,13 @@ __all__ = [
     # Pure-logic autopilot analysis
     "summarize_records",
     "diff_buffers",
+    # Pure-logic byte-pattern + range helpers
+    "parse_byte_pattern",
+    "find_pattern_in_buffer",
+    "merge_ranges",
+    "largest_aligned_slot",
+    "clamp_scan_window",
+    "pattern_to_mask",
+    "total_range_bytes",
+    "aggregate_probe_stats",
 ]

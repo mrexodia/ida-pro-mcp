@@ -144,6 +144,37 @@ class BufferDiffResult(TypedDict, total=False):
     error: str
 
 
+class MemoryScanResult(TypedDict, total=False):
+    pattern: str
+    pattern_len: int
+    mask: str
+    hits: list[str]
+    scanned_ranges: int
+    truncated: bool
+    error: str
+
+
+class ProbeStatsResult(TypedDict, total=False):
+    armed_probes: int
+    total_probes: int
+    ring: dict
+    fill_pct: float
+    dropped: int
+    per_probe: list[dict]
+    error: str
+
+
+class SnapshotListResult(TypedDict, total=False):
+    snapshots: list[dict]
+    error: str
+
+
+class SnapshotDeleteResult(TypedDict, total=False):
+    name: str
+    deleted: bool
+    error: str
+
+
 # ============================================================================
 # PURE-LOGIC SEPARATION (no live process / no idaapi required)
 # ============================================================================
@@ -490,6 +521,13 @@ def _ptr_size() -> int:
     except Exception:
         pass
     return 4
+
+
+def _hw_slot_size(addr: int, size: int) -> int:
+    """Largest aligned hardware-watch slot for `addr`/`size`, capped at the
+    pointer width (8 on 64-bit, 4 on 32-bit). Thin wrapper over the pure
+    trace.largest_aligned_slot so the alignment math stays unit-testable."""
+    return _trace.largest_aligned_slot(addr, size, max_slot=_ptr_size())
 
 
 def _read_reg(name: str) -> int | None:
@@ -1210,6 +1248,104 @@ def watch_field(
 
 @ext("probes")
 @safety("EXECUTE")
+@title("Watch a memory RANGE for changes")
+@tool
+@idasync
+def watch_region(
+    ea: str,
+    size: int,
+    mode: str = "write",
+    predicate: str | None = None,
+    max_hits: int = 512,
+) -> ProbeRef:
+    """Install a non-stopping hardware watchpoint over a byte RANGE.
+
+    Unlike watch_field (which watches a single scalar field of size 1/2/4/8),
+    this watches `size` consecutive bytes starting at `ea` and records ONLY when
+    any byte in the range changes since the last hit. On change it records
+    {field,old,new,writer_pc,caller,tid} where old/new are the FULL range hex,
+    then returns False so the debuggee never stops. Self-disarms at max_hits.
+
+    HARDWARE-SLOT / GRANULARITY LIMIT: a data watchpoint uses the CPU debug
+    registers - only 4 slots, and each slot watches a naturally-aligned 1/2/4/8
+    byte window. A range larger than a single slot cannot be covered by one
+    hardware watch: this tool arms ONE watch sized to the largest aligned slot
+    that fits (<= size, one of 8/4/2/1 on 64-bit; 4/2/1 on 32-bit) at `ea`, and
+    its change-detector compares the WHOLE `size`-byte range. Writes inside the
+    range but outside the armed slot may not trip the hardware; to cover a wide
+    range exactly, split it into several aligned watch_region / watch_field
+    calls. Excess/unaligned watches can fail or never fire.
+
+    Requires a live debugger session; never calls dbg_start.
+    """
+    guard = _require_debugger()
+    if guard:
+        return guard  # type: ignore[return-value]
+
+    import ida_dbg
+    from .utils import parse_address
+
+    try:
+        addr = parse_address(ea)
+    except IDAError as exc:
+        return {"error": str(exc)}
+
+    try:
+        region_size = int(size)
+    except (TypeError, ValueError):
+        return {"error": f"size must be an int, got {size!r}"}
+    if region_size < 1 or region_size > 4096:
+        return {"error": f"watch_region size must be 1..4096, got {region_size}"}
+
+    slot_size = _hw_slot_size(addr, region_size)
+
+    bpt_type = ida_dbg.BPT_RDWR if mode == "rdwr" else ida_dbg.BPT_WRITE
+
+    probe_id = _stable_probe_id("watchr", addr, [f"size{region_size}", mode], predicate)
+
+    seed = _read_mem(addr, region_size)
+    with _probe_specs_lock:
+        _probe_specs[probe_id] = {
+            "kind": "watch",
+            "ea": addr,
+            "plan": [],
+            "conv": "cdecl",
+            "predicate": predicate,
+            "max_hits": int(max_hits),
+            "watch_size": region_size,
+            "watch_last": seed.hex() if seed else None,
+        }
+
+    ref = _install_code_probe(
+        addr,
+        kind="watch_region",
+        plan=[],
+        capture_raw=[f"size{region_size}", mode],
+        condition=predicate,
+        max_hits=max_hits,
+        conv="cdecl",
+        predicate=None,
+        bpt_type=bpt_type,
+        bpt_size=int(slot_size),
+        probe_id=probe_id,
+    )
+    with _probe_specs_lock:
+        spec = _probe_specs.get(probe_id, {})
+        spec.update({
+            "kind": "watch",
+            "watch_size": region_size,
+            "watch_last": seed.hex() if seed else None,
+            "predicate": predicate,
+            "max_hits": int(max_hits),
+        })
+        _probe_specs[probe_id] = spec
+    if isinstance(ref, dict):
+        ref["capture"] = [f"region({hex(addr)},{region_size}) hw_slot={slot_size}"]
+    return ref
+
+
+@ext("probes")
+@safety("EXECUTE")
 @title("Trace calls with args and return value")
 @tool
 @idasync
@@ -1287,6 +1423,126 @@ def trace_calls(
             ]
         else:
             ref["capture"] = capture + ["ret@return-site (place a probe_add(ret) at the call's return address)"]
+    return ref
+
+
+def _resolve_import_ea(name: str) -> dict:
+    """Resolve an imported API `name` to a probe-able address.
+
+    Tries, in order: a direct named address (get_name_ea_all / get_name_ea), then
+    the import-module enumeration (the IAT entry, i.e. the thunk slot holding the
+    resolved pointer). Returns {"func_ea": int|None, "iat_ea": int|None,
+    "via": str} - func_ea is where to set the entry breakpoint; iat_ea is the IAT
+    thunk slot when only that was found. On total failure returns
+    {"error": "..."}. Best-effort and IDA-version tolerant.
+    """
+    target = str(name).strip()
+    if not target:
+        return {"error": "empty API name"}
+
+    func_ea: int | None = None
+    via = "name"
+    try:
+        import idc
+
+        BADADDR = getattr(idc, "BADADDR", 0xFFFFFFFFFFFFFFFF)
+        ea = idc.get_name_ea_simple(target)
+        if ea is not None and ea != BADADDR:
+            func_ea = int(ea)
+    except Exception:
+        pass
+
+    iat_ea: int | None = None
+    if func_ea is None:
+        try:
+            import idaapi
+
+            found: dict = {}
+
+            def _imp_cb(ea, imp_name, ordinal, _found=found, _t=target):
+                if imp_name and imp_name == _t:
+                    _found["ea"] = int(ea)
+                    return False  # stop
+                if imp_name and _t in imp_name:
+                    _found.setdefault("loose", int(ea))
+                return True
+
+            qty = idaapi.get_import_module_qty()
+            for i in range(qty):
+                idaapi.enum_import_names(i, _imp_cb)
+                if "ea" in found:
+                    break
+            if "ea" in found:
+                iat_ea = found["ea"]
+                via = "iat"
+            elif "loose" in found:
+                iat_ea = found["loose"]
+                via = "iat_loose"
+        except Exception:
+            pass
+
+    if func_ea is None and iat_ea is None:
+        return {"error": f"could not resolve import {target!r} to an address"}
+
+    return {"func_ea": func_ea, "iat_ea": iat_ea, "via": via}
+
+
+@ext("probes")
+@safety("EXECUTE")
+@title("Probe an imported API by name")
+@tool
+@idasync
+def probe_api_call(
+    name: str,
+    capture: list[str] | None = None,
+    max_hits: int = 512,
+) -> ProbeRef:
+    """Resolve an imported API by `name` and install a non-stopping capturing
+    probe at it.
+
+    Resolves `name` to a probe-able address (a direct named function EA when the
+    import is a real code stub, else the IAT thunk slot that holds the resolved
+    pointer), then installs a probe_add-style non-stopping breakpoint there. When
+    `capture` is omitted, a sensible default is used: the caller (return address)
+    plus the first four stack args by 32-bit cdecl/stdcall convention
+    ("caller","arg0".."arg3"). The probe records each hit and ALWAYS returns
+    False so the debuggee never stops; it self-disarms at max_hits.
+
+    NOTE: if resolution lands on the IAT thunk slot rather than a code stub, the
+    breakpoint sits on the indirect-call target slot; the captured args still
+    follow the stack convention at the call. Pass an explicit `capture` to tune.
+
+    Requires a live debugger session; never calls dbg_start.
+    """
+    guard = _require_debugger()
+    if guard:
+        return guard  # type: ignore[return-value]
+
+    resolved = _resolve_import_ea(name)
+    if resolved.get("error"):
+        return {"error": resolved["error"]}
+
+    addr = resolved.get("func_ea")
+    if addr is None:
+        addr = resolved.get("iat_ea")
+    if addr is None:
+        return {"error": f"could not resolve import {name!r} to an address"}
+
+    cap = list(capture) if capture else ["caller", "arg0", "arg1", "arg2", "arg3"]
+    plan = parse_capture_spec(cap)
+
+    ref = _install_code_probe(
+        int(addr),
+        kind="api_call",
+        plan=plan,
+        capture_raw=cap,
+        condition=None,
+        max_hits=max_hits,
+        conv="cdecl",
+    )
+    if isinstance(ref, dict):
+        ref["api"] = name
+        ref["resolved_via"] = resolved.get("via")
     return ref
 
 
@@ -1608,6 +1864,147 @@ def probe_net(
 
 
 # ============================================================================
+# LIVE MEMORY SCAN (read-only)
+# ============================================================================
+
+
+def _live_memory_ranges() -> list[tuple[int, int]]:
+    """Enumerate mapped [start,end) ranges of the live debuggee.
+
+    Best-effort over the IDA debugger memory-info API; coalesced via the pure
+    trace.merge_ranges so the scan walks disjoint, ordered windows.
+    """
+    raw: list[tuple[int, int]] = []
+    try:
+        import ida_dbg
+        import ida_idd
+
+        meminfo = ida_idd.meminfo_vec_t()
+        if ida_dbg.get_memory_info(meminfo):
+            for region in meminfo:
+                try:
+                    start = int(region.start_ea)
+                    end = int(region.end_ea)
+                except Exception:
+                    continue
+                if end > start:
+                    raw.append((start, end))
+    except Exception:
+        pass
+    return _trace.merge_ranges(raw)
+
+
+_SCAN_CHUNK = 1 << 16  # read mapped memory in 64 KiB chunks
+
+
+@ext("dbg")
+@safety("READ")
+@title("Scan live debuggee memory for a byte pattern")
+@tool
+@idasync
+@tool_timeout(120.0)
+def memory_scan(
+    pattern_hex: str,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 64,
+) -> MemoryScanResult:
+    """Scan LIVE debuggee memory for a byte pattern (with wildcards).
+
+    `pattern_hex` is a hex byte pattern where "??" (or a single "?") is a
+    wildcard byte, e.g. "8b ?? 56 ff 15" or "8b??56ff15". The scan walks the
+    debuggee's mapped ranges (optionally clamped to [start,end)), reading them in
+    chunks and matching the pattern; it returns up to `limit` absolute hit
+    addresses. READ-ONLY: it reads live memory and installs NOTHING.
+
+    Requires a live debugger session; never calls dbg_start.
+    """
+    guard = _require_debugger()
+    if guard:
+        return guard  # type: ignore[return-value]
+
+    try:
+        pattern = _trace.parse_byte_pattern(pattern_hex)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    plen = len(pattern)
+    if plen == 0:
+        return {"error": "empty byte pattern"}
+
+    try:
+        _, mask = _trace.pattern_to_mask(pattern)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    from .utils import parse_address
+
+    want_start = None
+    want_end = None
+    try:
+        if start is not None:
+            want_start = parse_address(start)
+        if end is not None:
+            want_end = parse_address(end)
+    except IDAError as exc:
+        return {"error": str(exc)}
+
+    try:
+        cap = int(limit)
+    except (TypeError, ValueError):
+        cap = 64
+    if cap < 1:
+        cap = 1
+
+    ranges = _live_memory_ranges()
+    if not ranges:
+        return {"error": "no mapped memory ranges from the live debugger"}
+
+    hits: list[int] = []
+    scanned = 0
+    truncated = False
+    overlap = plen - 1  # carry to catch matches spanning a chunk boundary
+
+    for seg_start, seg_end in ranges:
+        window = _trace.clamp_scan_window(seg_start, seg_end, want_start, want_end)
+        if window is None:
+            continue
+        lo, hi = window
+        scanned += 1
+        pos = lo
+        while pos < hi:
+            chunk_end = min(pos + _SCAN_CHUNK, hi)
+            read_len = chunk_end - pos
+            # extend by overlap to catch boundary-spanning matches (bounded by hi)
+            read_len_ext = min(read_len + overlap, hi - pos)
+            data = _read_mem(pos, read_len_ext)
+            if data:
+                local = _trace.find_pattern_in_buffer(data, pattern, base=pos, limit=cap - len(hits))
+                for h in local:
+                    # avoid double-counting a hit that begins in the overlap tail
+                    # of one chunk and the head of the next
+                    if h < chunk_end and h not in hits:
+                        hits.append(h)
+                        if len(hits) >= cap:
+                            truncated = True
+                            break
+            if len(hits) >= cap:
+                break
+            pos = chunk_end
+        if len(hits) >= cap:
+            break
+
+    return {
+        "pattern": str(pattern_hex),
+        "pattern_len": plen,
+        "mask": mask,
+        "hits": [hex(h) for h in hits],
+        "scanned_ranges": scanned,
+        "truncated": truncated,
+    }
+
+
+# ============================================================================
 # SNAPSHOT (best-effort, NOT full process state)
 # ============================================================================
 
@@ -1723,9 +2120,70 @@ def snapshot_restore(name: str) -> SnapshotResult:
     }
 
 
+@safety("READ")
+@title("List in-process snapshots")
+@tool
+@idasync
+def snapshot_list() -> SnapshotListResult:
+    """List the in-process snapshots saved by snapshot_save.
+
+    Returns each snapshot's name plus its register count and the number/size of
+    captured memory ranges (metadata only, never the captured bytes). Read-only;
+    does not require a live debugger.
+    """
+    out: list[dict] = []
+    with _snapshots_lock:
+        for nm, snap in _snapshots.items():
+            ranges = snap.get("ranges", []) or []
+            out.append({
+                "name": nm,
+                "regs": len(snap.get("regs", {}) or {}),
+                "ranges": len(ranges),
+                "bytes": sum(len(r.get("hex", "")) // 2 for r in ranges),
+            })
+    return {"snapshots": out}
+
+
+@ext("probes")
+@safety("DESTRUCTIVE")
+@title("Delete an in-process snapshot")
+@tool
+@idasync
+def snapshot_delete(name: str) -> SnapshotDeleteResult:
+    """Delete the in-process snapshot saved under `name`.
+
+    Removes the named snapshot from the in-process store (it never touched the
+    debuggee, so nothing in the target changes). Returns {name, deleted} where
+    deleted is False if no such snapshot existed. Does not require a live
+    debugger.
+    """
+    with _snapshots_lock:
+        existed = _snapshots.pop(name, None) is not None
+    if not existed:
+        return {"name": name, "deleted": False, "error": f"no snapshot named {name!r}"}
+    return {"name": name, "deleted": True}
+
+
 # ============================================================================
 # SUMMARY / DIFF / ARM / AUTOPILOT TOOLS
 # ============================================================================
+
+
+@safety("READ")
+@title("Probe + ring health summary")
+@tool
+@idasync
+def probe_stats() -> ProbeStatsResult:
+    """Read-only health summary of the probe toolkit.
+
+    Reports the armed/total probe counts, the ring stats (cap/size/dropped) with
+    a fill percentage, and a per-probe hit-count breakdown (id, ea, kind, hits,
+    max_hits, armed). Collapses "is anything firing / am I dropping records" into
+    one call. Read-only; does not require a live debugger.
+    """
+    probes = _trace.list_probes()
+    ring = _trace.get_probe_ring()
+    return _trace.aggregate_probe_stats(probes, ring.stats())  # type: ignore[return-value]
 
 
 @safety("READ")
@@ -2019,15 +2477,21 @@ __all__ = [
     "probe_clear",
     "run_until",
     "watch_field",
+    "watch_region",
+    "probe_api_call",
     "trace_calls",
     "read_struct_live",
     "appcall",
     "appcall_inspect",
     "probe_net",
+    "memory_scan",
     "snapshot_save",
     "snapshot_restore",
+    "snapshot_list",
+    "snapshot_delete",
     "trace_summary",
     "diff_buffers",
+    "probe_stats",
     "probe_arm",
     "autopilot_run",
 ]
