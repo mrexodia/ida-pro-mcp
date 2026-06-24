@@ -17,10 +17,14 @@ jobs:
                 run: echo "Approved to run fork PR tests"
 
     idalib-tests:
-        # Run on all pushes, and on fork PRs only after the approval job passes.
+        # Requires the upstream IDA test image (ghcr.io/mrexodia/ida-docker),
+        # which this fork cannot pull — so it is SKIPPED on the AriusII fork
+        # (headless-tests.yml is the fork's gate). Flip the repository condition
+        # to 'AriusII/ida-pro-mcp' once image/package access is available here.
+        # Runs on all pushes upstream, and on fork PRs after the approval job.
         if: |
             always() &&
-            github.repository == 'AriusII/ida-pro-mcp' &&
+            github.repository == 'mrexodia/ida-pro-mcp' &&
             (
               github.event_name == 'push' ||
               needs.approval.result == 'success'
