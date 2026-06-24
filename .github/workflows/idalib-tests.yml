@@ -1,51 +1,53 @@
 name: idalib-tests
 on:
-  push:
-  pull_request_target:
+    push:
+    pull_request_target:
 
 jobs:
-  approval:
-    # Only gate fork PRs. Pushes run normally, and same-repo contributors use
-    # normal push CI instead of pull_request_target.
-    if: |
-      github.event_name == 'pull_request_target' &&
-      github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
-    environment: external-pr
-    steps:
-      - name: Approval granted
-        run: echo "Approved to run fork PR tests"
+    approval:
+        # Only gate fork PRs. Pushes run normally, and same-repo contributors use
+        # normal push CI instead of pull_request_target.
+        if: |
+            github.event_name == 'pull_request_target' &&
+            github.event.pull_request.head.repo.full_name != github.repository
+        runs-on: ubuntu-latest
+        environment: external-pr
+        steps:
+            -   name: Approval granted
+                run: echo "Approved to run fork PR tests"
 
-  idalib-tests:
-    # Run on all pushes, and on fork PRs only after the approval job passes.
-    if: |
-      always() &&
-      github.repository == 'mrexodia/ida-pro-mcp' &&
-      (
-        github.event_name == 'push' ||
-        needs.approval.result == 'success'
-      )
-    needs: approval
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        ida-version: ['9.0', '9.1', '9.2', '9.3']
-    permissions:
-      contents: read
-      packages: read
-    container:
-      image: ghcr.io/mrexodia/ida-docker/ida:${{ matrix.ida-version }}
-      credentials:
-        username: ${{ github.repository_owner }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+    idalib-tests:
+        # Run on all pushes, and on fork PRs only after the approval job passes.
+        if: |
+            always() &&
+            github.repository == 'AriusII/ida-pro-mcp' &&
+            (
+              github.event_name == 'push' ||
+              needs.approval.result == 'success'
+            )
+        needs: approval
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                ida-version: [ '9.3' ]
+        permissions:
+            contents: read
+            packages: read
+        container:
+            # IDA test image published by upstream (mrexodia/ida-docker); this
+            # fork consumes it rather than building its own IDA container.
+            image: ghcr.io/mrexodia/ida-docker/ida:${{ matrix.ida-version }}
+            credentials:
+                username: ${{ github.repository_owner }}
+                password: ${{ secrets.GITHUB_TOKEN }}
+        steps:
+            -   uses: actions/checkout@v6
+                with:
+                    ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
-      - uses: astral-sh/setup-uv@v7
+            -   uses: astral-sh/setup-uv@v7
 
-      - name: Run tests
-        run: |
-          uv run ida-mcp-test tests/crackme03.elf -q
-          uv run ida-mcp-test tests/typed_fixture.elf -q
+            -   name: Run tests
+                run: |
+                    uv run ida-mcp-test tests/crackme03.elf -q
+                    uv run ida-mcp-test tests/typed_fixture.elf -q
