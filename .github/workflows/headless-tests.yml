@@ -24,10 +24,10 @@ jobs:
                 python-version: [ '3.13' ]
         steps:
             -   name: Checkout
-                uses: actions/checkout@v6
+                uses: actions/checkout@v4
 
             -   name: Install uv
-                uses: astral-sh/setup-uv@v8
+                uses: astral-sh/setup-uv@v8.2.0
                 with:
                     python-version: ${{ matrix.python-version }}
 
