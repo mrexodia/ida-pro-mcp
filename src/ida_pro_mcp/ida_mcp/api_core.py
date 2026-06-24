@@ -2,25 +2,24 @@
 
 import logging
 import re
+import threading
 import time
 from typing import Annotated, Any, NotRequired, TypedDict
 
 import ida_auto
-import ida_bytes
-import idaapi
 import ida_funcs
 import ida_hexrays
 import ida_kernwin
 import ida_lines
-import ida_search
-import ida_segment
-import idautils
 import ida_loader
 import ida_nalt
+import ida_segment
 import ida_typeinf
+import idaapi
+import idautils
 import idc
 
-from .rpc import tool
+from .rpc import tool, safety, title
 from .sync import idasync, get_tool_deadline
 from .utils import (
     ConvertedNumber,
@@ -40,7 +39,6 @@ from .utils import (
     paginate,
     pattern_filter,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -141,21 +139,26 @@ class SearchTextResult(TypedDict, total=False):
 
 # Cached strings list: [(ea, text), ...]
 _strings_cache: list[tuple[int, str]] | None = None
+_strings_cache_lock = threading.Lock()
 _server_started_at = time.time()
 
 
 def _get_strings_cache() -> list[tuple[int, str]]:
     """Get cached strings, building cache on first access."""
     global _strings_cache
-    if _strings_cache is None:
-        _strings_cache = [(s.ea, str(s)) for s in idautils.Strings() if s is not None]
-    return _strings_cache
+    with _strings_cache_lock:
+        if _strings_cache is None:
+            _strings_cache = [
+                (s.ea, str(s)) for s in idautils.Strings() if s is not None
+            ]
+        return _strings_cache
 
 
 def invalidate_strings_cache():
     """Clear the strings cache (call after IDB changes)."""
     global _strings_cache
-    _strings_cache = None
+    with _strings_cache_lock:
+        _strings_cache = None
 
 
 def init_caches():
@@ -373,10 +376,26 @@ def _build_health_payload() -> dict:
     }
 
 
+@safety("READ")
+@title("Server Health Probe")
 @tool
 @idasync
 def server_health() -> ServerHealthResult:
-    """Health/ready probe for MCP server and current IDB state."""
+    """WHAT: Liveness/readiness probe for the MCP server and the database it has open.
+
+    WHEN TO USE: Call first in any session to confirm the server is reachable and an
+    IDB is actually loaded before issuing real analysis tools; also use to check whether
+    auto-analysis has finished, whether Hex-Rays is available (gates decompile), and
+    whether the strings cache is warm.
+
+    RETURNS: status, server uptime_sec, idb_path, module/input_path, imagebase,
+    auto_analysis_ready, hexrays_ready, and strings_cache_ready/size.
+
+    PITFALL: hexrays_ready may be False on the very first probe even when Hex-Rays is
+    installed; it initializes lazily, so a follow-up server_warmup (run by idb_open)
+    or a first decompile call flips it true. auto_analysis_ready is None when the
+    auto_is_ok API is unavailable, which is NOT the same as "not ready".
+    """
     return _build_health_payload()
 
 
@@ -430,12 +449,30 @@ def server_warmup(
     }
 
 
+@safety("READ")
+@title("Look Up Functions by Address or Name")
 @tool
 @idasync
 def lookup_funcs(
-    queries: Annotated[list[str] | str, "Address(es) or name(s)"],
+    queries: Annotated[
+        list[str] | str,
+        "One or more function references, each either an address (0x401000 or sub_401000) or a symbol name (e.g. 'main'). Pass '*' or an empty value to fetch the first 1000 functions.",
+    ],
 ) -> list[LookupFuncResult]:
-    """Get functions by address or name (auto-detects)"""
+    """WHAT: Resolve each query to a function and return its descriptor, auto-detecting
+    whether the query is an address (0x.. / sub_..) or a name.
+
+    WHEN TO USE: The fast lookup when you already know exactly which function(s) you
+    want by address or name and need their metadata; prefer list_funcs/func_query when
+    you need to FILTER or paginate across the whole image.
+
+    RETURNS: One row per query, each {query, fn, error}; fn is None and error is set
+    ("Not found" / "Not a function") when the query does not resolve to a function.
+
+    PRO-TIP: Results are aligned 1:1 and in order with the input queries, so you can zip
+    them back to your inputs. The bulk '*' mode caps at 1000 functions — use func_query
+    with pagination for full enumeration of large binaries.
+    """
     queries = normalize_list_input(queries)
 
     # Treat empty/"*" as "all functions" - but add limit
@@ -473,14 +510,29 @@ def lookup_funcs(
     return results
 
 
+@safety("READ")
+@title("Convert Integers Between Representations")
 @tool
 def int_convert(
     inputs: Annotated[
         list[NumberConversion] | NumberConversion,
-        "Convert numbers to various formats (hex, decimal, binary, ascii)",
+        "One or more {text, size} items: text is a number in any base (0x.., 0b.., decimal); size is the byte width to encode it in (omit/0 = smallest width that fits). A bare string is accepted and treated as 64-bit.",
     ],
 ) -> list[IntConvertResult]:
-    """Convert numbers to different formats"""
+    """WHAT: Convert each input number into all common representations at once: decimal,
+    hexadecimal, little-endian byte string, ASCII (if printable), and binary.
+
+    WHEN TO USE: When eyeballing a constant, flag value, or magic number found in the
+    listing and you want every view (e.g. is this 0x6F6C6C65H actually the ASCII tag
+    'ello'?). Pure arithmetic — does not touch the IDB and works without a database.
+
+    RETURNS: One row per input {input, result, error}; result is None and error is set
+    on an unparseable number or when the value overflows the requested size.
+
+    PITFALL: bytes/ascii are LITTLE-ENDIAN encodings, so the byte order is reversed
+    versus how the hex literal reads left-to-right; ascii is null only when a byte is
+    outside the printable range 32..126.
+    """
     inputs = normalize_dict_list(inputs, lambda s: {"text": s, "size": 64})
 
     results = []
@@ -542,15 +594,28 @@ def int_convert(
     return results
 
 
+@safety("READ")
+@title("List Functions")
 @tool
 @idasync
 def list_funcs(
     queries: Annotated[
         list[ListQuery] | ListQuery,
-        "List functions with optional filtering and pagination",
+        "One or more {filter, offset, count} pages. filter is a substring/glob matched against the function name ('' or '*' = all); offset/count drive offset/count pagination (count defaults to 100).",
     ],
 ) -> list[Page[Function]]:
-    """List functions with optional filtering and offset/count pagination."""
+    """WHAT: Enumerate functions, name-filtered and paginated, returning one page per query.
+
+    WHEN TO USE: The simple "what functions exist / find functions whose name contains X"
+    listing. Reach for func_query instead when you need size/type filters, regex name
+    matching, or sorting; use lookup_funcs when you already know the exact address/name.
+
+    RETURNS: One Page[Function] per query: {data: [{addr, name, ...}], next_offset};
+    next_offset is the value to pass as the next page's offset, or None when exhausted.
+
+    PRO-TIP: Batch several {filter,offset,count} queries in a single call to fetch
+    multiple name slices in one round-trip instead of issuing the tool repeatedly.
+    """
     queries = normalize_dict_list(queries)
     all_functions = [get_function(addr) for addr in idautils.Functions()]
 
@@ -570,15 +635,30 @@ def list_funcs(
     return results
 
 
+@safety("READ")
+@title("Query Functions With Filters and Sorting")
 @tool
 @idasync
 def func_query(
     queries: Annotated[
         list[FunctionQuery] | FunctionQuery,
-        "Richer function query (size/type/name filters + pagination)",
+        "One or more query objects supporting: filter (name substring), name_regex (Python regex on name), min_size/max_size (bytes), has_type (true/false on whether a tinfo is set), sort_by ('addr'|'name'|'size'), descending, and offset/count pagination.",
     ],
 ) -> list[FunctionQueryPage]:
-    """Query functions with richer filtering than list_funcs."""
+    """WHAT: Richer function search than list_funcs — filter by name substring or regex,
+    by byte-size bounds, by whether a type is set, then sort and paginate.
+
+    WHEN TO USE: To hunt for candidates by shape, e.g. "large untyped functions"
+    (max_size off, has_type=false, sort_by=size descending) when triaging a binary, or
+    a regex name sweep that plain substring filter can't express.
+
+    RETURNS: One FunctionQueryPage per query {data, next_offset, error}; each row is
+    {addr, name, size, has_type}. An invalid name_regex yields an empty page, not an error.
+
+    PRO-TIP: sort_by/min_size/max_size combine, so you can rank the biggest functions in
+    a size band; the internal size_int helper field is stripped from the output, so sort
+    on 'size' rather than expecting a numeric size in the rows.
+    """
     queries = normalize_dict_list(queries)
 
     all_functions: list[dict] = []
@@ -617,7 +697,7 @@ def func_query(
         if sort_by not in ("addr", "name", "size"):
             sort_by = "addr"
 
-        filtered = all_functions
+        filtered = list(all_functions)
         name_filter = query.get("filter", "")
         if name_filter:
             filtered = pattern_filter(filtered, name_filter, "name")
@@ -652,15 +732,29 @@ def func_query(
     return results
 
 
+@safety("READ")
+@title("List Global Symbols")
 @tool
 @idasync
 def list_globals(
     queries: Annotated[
         list[ListQuery] | ListQuery,
-        "List global variables with optional filtering and pagination",
+        "One or more {filter, offset, count} pages. filter is a substring/glob on the symbol name ('' or '*' = all); offset/count drive offset/count pagination (count defaults to 100).",
     ],
 ) -> list[Page[Global]]:
-    """List globals with optional filtering and offset/count pagination."""
+    """WHAT: Enumerate named non-function symbols (data globals), name-filtered and paginated.
+
+    WHEN TO USE: To find global variables / data labels by name when chasing a referenced
+    datum (e.g. a config table or string pointer). For imports use imports/imports_query;
+    for functions use list_funcs/func_query.
+
+    RETURNS: One Page[Global] per query {data: [{addr, name}], next_offset}; next_offset
+    feeds the following page's offset, or is None when exhausted.
+
+    PITFALL: This lists only NAMED addresses that are not functions — unnamed data and
+    function entry points are excluded; if a global is missing, it likely has no name yet.
+    For a cross-kind sweep (globals + strings + imports + names) use entity_query.
+    """
     queries = normalize_dict_list(queries)
     all_globals: list[Global] = []
     for addr, name in idautils.Names():
@@ -683,15 +777,31 @@ def list_globals(
     return results
 
 
+@safety("READ")
+@title("Query IDB Entities (Functions/Globals/Imports/Strings/Names)")
 @tool
 @idasync
 def entity_query(
     queries: Annotated[
         list[EntityQuery] | EntityQuery,
-        "Generic entity query with filtering, projection, and pagination",
+        "One or more query objects. kind selects the entity set ('functions'|'globals'|'imports'|'strings'|'names', default 'functions'); then filter (substring on name/text), regex, segment (not for imports), module (imports only), min_addr/max_addr bounds, sort_by ('addr'|'size'|'length'|'name'|...), descending, fields (projection list of columns to keep), and offset/count pagination.",
     ],
 ) -> list[EntityQueryPage]:
-    """Query IDB entities with typed filters, projection, and pagination."""
+    """WHAT: One unified, filterable, projectable, paginated query over five entity kinds
+    — functions, globals, imports, strings, and all named addresses.
+
+    WHEN TO USE: The general-purpose explorer when you want to slice across a kind with
+    address bounds, segment/module scoping, regex, custom sort, and a trimmed column set,
+    or when you don't know yet which specialized lister (list_funcs/list_globals/imports/
+    find_regex) fits — entity_query subsumes them with one schema.
+
+    RETURNS: One EntityQueryPage per query {kind, data, next_offset, total, error}; total
+    is the full filtered count (pre-pagination), useful for sizing further pages.
+
+    PRO-TIP: Use fields to project just the columns you need (e.g. ['addr','name']) to
+    shrink payloads on big result sets; an unsupported kind returns an error row rather
+    than throwing, and 'strings' is served from the warm strings cache.
+    """
     queries = normalize_dict_list(queries)
     results: list[dict] = []
 
@@ -788,25 +898,51 @@ def entity_query(
     return results
 
 
+@safety("READ")
+@title("List Imports")
 @tool
 @idasync
 def imports(
-    offset: Annotated[int, "Starting pagination index (default: 0)"],
-    count: Annotated[int, "Maximum rows (0 returns all imports)"],
+    offset: Annotated[int, "Zero-based index of the first import row to return (pass 0 to start)."],
+    count: Annotated[int, "Maximum number of rows to return; pass 0 to return ALL imports in one page."],
 ) -> Page[Import]:
-    """List imports with module names using offset/count pagination."""
+    """WHAT: List the binary's imported symbols with their resolving module names, paginated.
+
+    WHEN TO USE: Quick "what does this binary import" census, or to confirm a specific API
+    (e.g. recv/CreateFileW) is imported before xref'ing it. For name/module FILTERING use
+    imports_query instead of paging through everything here.
+
+    RETURNS: A Page[Import] {data: [{addr, imported_name, module}], next_offset}; ordinal-only
+    imports surface as imported_name '#<ordinal>' and modules with no name as '<unnamed>'.
+
+    PRO-TIP: count=0 dumps the entire import table in a single page — convenient on small
+    binaries, but prefer paging (or imports_query with a filter) on large ones.
+    """
     return paginate(_collect_imports(), offset, count)
 
 
+@safety("READ")
+@title("Query Imports With Filters")
 @tool
 @idasync
 def imports_query(
     queries: Annotated[
         list[ImportQuery] | ImportQuery,
-        "Import query with import/module filters and pagination",
+        "One or more query objects: filter (substring on the imported symbol name), module (substring on the resolving DLL/module name), and offset/count pagination (count defaults to 100).",
     ],
 ) -> list[ImportsQueryPage]:
-    """Query imports with richer filtering than imports(offset,count)."""
+    """WHAT: Filterable, paginated import lookup — richer than imports(offset, count).
+
+    WHEN TO USE: To find imports by symbol substring (e.g. all 'Crypt*' APIs) and/or by
+    module (e.g. everything from ws2_32.dll) without paging the whole table. Plain
+    enumeration with no filtering is fine via imports.
+
+    RETURNS: One ImportsQueryPage per query {data: [{addr, imported_name, module}],
+    next_offset}; next_offset feeds the following page's offset, or is None when exhausted.
+
+    PRO-TIP: filter and module are combined with AND, so {filter:'recv', module:'ws2_32'}
+    narrows to socket-recv APIs in one go; both are case-insensitive substring matches.
+    """
     queries = normalize_dict_list(queries)
     all_imports = _collect_imports()
     results = []
@@ -828,13 +964,31 @@ def imports_query(
     return results
 
 
+@safety("WRITE")
+@title("Save IDB to Disk")
 @tool
 @idasync
 def idb_save(
-    path: Annotated[str, "Optional destination path (default: current IDB path)"] = "",
+    path: Annotated[
+        str,
+        "Optional destination path for the saved database; empty means save in place to the currently open IDB path.",
+    ] = "",
 ) -> IdbSaveResult:
-    """Save active IDB to disk, optionally to a provided path.
+    """WHAT: Persist the active IDB (all renames, comments, types, patches) to disk,
+    either in place or as a copy at a new path.
 
+    WHEN TO USE: After a batch of IDB-mutating tools to durably checkpoint your work, or to
+    snapshot the database to a new file. Read-only analysis tools do not need this.
+
+    RETURNS: {ok, path, error?}; ok is False with an error string when the path can't be
+    resolved or save_database reports failure.
+
+    PITFALL: In the GUI this performs a native in-place save (Ctrl+W) and, for a different
+    path, a compressed snapshot — it deliberately never kills the live loose working files
+    (.id0/.id1/.nam/...), which would corrupt the open database (issue #446). Only headless
+    idalib packs into a single compressed .i64/.idb and removes the loose files.
+
+    Original behavioral notes:
     In the GUI (idaq) the open database is backed by loose working files
     (.id0/.id1/.id2/.nam/.til) that IDA actively manages; packing+killing them
     out from under the running GUI corrupts the database on the next reopen
@@ -881,14 +1035,28 @@ def idb_save(
         return {"ok": False, "path": path or None, "error": str(e)}
 
 
+@safety("READ")
+@title("Find Strings by Regex")
 @tool
 @idasync
 def find_regex(
-    pattern: Annotated[str, "Regex pattern to search for in strings"],
-    limit: Annotated[int, "Max matches (default: 30, max: 500)"] = 30,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
+    pattern: Annotated[str, "Python regular expression matched (case-insensitively) against each extracted string's text."],
+    limit: Annotated[int, "Maximum matches to return per page; clamped to 1..500 (default 30)."] = 30,
+    offset: Annotated[int, "Number of leading matches to skip for pagination (default 0)."] = 0,
 ) -> FindRegexResult:
-    """Search strings by case-insensitive regex with offset/limit pagination."""
+    """WHAT: Search the binary's extracted string literals by case-insensitive Python regex,
+    with offset/limit pagination.
+
+    WHEN TO USE: To locate strings by pattern (URLs, format specifiers, error messages,
+    file extensions) as a fast entry point into a subsystem. For the rendered LISTING
+    (disassembly text + comments) rather than string literals, use search_text instead.
+
+    RETURNS: {n, matches: [{addr, string}], cursor}; cursor is {next: <offset>} when more
+    results remain, else {done: true}.
+
+    PRO-TIP: Strings come from a warm cache built once per session, so repeated regex
+    searches are cheap; the match is always case-insensitive, so don't add inline (?i).
+    """
     if limit <= 0:
         limit = 30
     if limit > 500:
@@ -994,19 +1162,34 @@ def _all_segments() -> list[tuple[int, int]]:
     return ranges
 
 
+@safety("READ")
+@title("Search Disassembly Listing Text")
 @tool
 @idasync
 def search_text(
-    pattern: Annotated[str, "Text to search for in the rendered listing (literal substring by default)"],
-    limit: Annotated[int, "Max hits per page (default: 30, max: 500)"] = 30,
-    start: Annotated[str, "Lower bound (hex or symbol). Empty = first segment."] = "",
-    end: Annotated[str, "Upper bound (hex or symbol, exclusive). Empty = last segment."] = "",
-    regex: Annotated[bool, "Treat pattern as a Python regex"] = False,
-    case_sensitive: Annotated[bool, "Case-sensitive match (default: false)"] = False,
-    include: Annotated[str, "'disasm' | 'comments' | 'all' (default: all)"] = "all",
-    code_only: Annotated[bool, "Restrict search to executable segments (default: true)"] = True,
+    pattern: Annotated[str, "Text to find in the rendered listing; a literal substring by default, or a Python regex when regex=True."],
+    limit: Annotated[int, "Maximum hits per page; clamped to 1..500 (default 30)."] = 30,
+    start: Annotated[str, "Inclusive lower address bound, hex or symbol; empty = start of the first (in-scope) segment."] = "",
+    end: Annotated[str, "Exclusive upper address bound, hex or symbol; empty = end of the last (in-scope) segment."] = "",
+    regex: Annotated[bool, "Treat pattern as a Python regular expression instead of a literal substring."] = False,
+    case_sensitive: Annotated[bool, "Match case-sensitively (default False = case-insensitive)."] = False,
+    include: Annotated[str, "Which listing lines to match: 'disasm', 'comments', or 'all' (default 'all')."] = "all",
+    code_only: Annotated[bool, "Restrict the scan to executable segments (default True); set False to also scan data segments."] = True,
 ) -> SearchTextResult:
-    """Search the rendered listing for `pattern` over [start, end).
+    """WHAT: Search the RENDERED disassembly listing (instruction text and/or comments) for
+    a substring or regex over an address range, returning located hits.
+
+    WHEN TO USE: To find text that only exists in the rendered view — an operand mnemonic,
+    an immediate, an auto/repeatable comment, an analyst note — which a raw string search
+    (find_regex) can't see. Use include='comments' to grep your own annotations.
+
+    RETURNS: {n, hits: [{addr, function?, segment?, matches:[{kind, text}]}], cursor};
+    cursor is {done:true}, {next:<ea>} for the next page, or {next:<ea>, cancelled:true}
+    when the per-tool deadline or UI Cancel interrupted a long scan (resume from next).
+
+    PRO-TIP: ALWAYS scope big binaries with start/end (and keep code_only=True) — the scan
+    walks heads in pure Python so it's interruptible, but unscoped it covers the whole image
+    and is slow. A cursor with cancelled=true is a partial result, not a failure.
 
     Iterates `idautils.Heads()` in pure Python and renders each via
     `ida_lines.generate_disassembly()`. Per-head iteration is cheap and
@@ -1098,7 +1281,7 @@ def search_text(
             if cancelled or len(hits) >= limit:
                 break
             if (deadline is not None and time.monotonic() >= deadline) \
-                    or ida_kernwin.user_cancelled():
+                or ida_kernwin.user_cancelled():
                 cancelled = True
                 next_cursor = chunk_ea
                 break

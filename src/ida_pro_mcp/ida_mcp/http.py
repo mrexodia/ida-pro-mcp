@@ -2,13 +2,13 @@ import html
 import json
 import logging
 import re
-import ida_netnode
-from urllib.parse import urlparse, parse_qs
-from typing import TypeVar, cast
 from http.server import HTTPServer
+from typing import TypeVar, cast
+from urllib.parse import urlparse, parse_qs
+
+import ida_netnode
 
 from .profile import dump_profile, parse_profile
-from .sync import idasync
 from .rpc import (
     McpRpcRegistry,
     McpHttpRequestHandler,
@@ -16,7 +16,7 @@ from .rpc import (
     MCP_UNSAFE,
     get_cached_output,
 )
-
+from .sync import idasync
 
 logger = logging.getLogger(__name__)
 
@@ -439,6 +439,7 @@ input[type="submit"]:hover {
             for name, func in ORIGINAL_TOOLS.items()
             if enabled_tools.get(name)
         }
+        self.mcp_server.invalidate_tool_schema_cache()
         config_json_set("enabled_tools", enabled_tools)
 
         # Redirect back to the config page

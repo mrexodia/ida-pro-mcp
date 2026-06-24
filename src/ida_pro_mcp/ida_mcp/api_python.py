@@ -1,9 +1,9 @@
-from typing import Annotated, TypedDict
 import ast
 import io
+import os
 import sys
-import idaapi
-import idc
+from typing import Annotated, TypedDict
+
 import ida_bytes
 import ida_dbg
 import ida_entry
@@ -18,12 +18,13 @@ import ida_name
 import ida_segment
 import ida_typeinf
 import ida_xref
+import idaapi
+import idc
 
-import os
-
-from .rpc import tool, unsafe
+from .rpc import tool, safety, title
 from .sync import idasync
 from .utils import parse_address, get_function
+
 
 # ============================================================================
 # Shared execution context
@@ -32,6 +33,7 @@ from .utils import parse_address, get_function
 
 def _make_exec_globals() -> dict:
     """Build an execution context with all IDA modules available."""
+
     def lazy_import(module_name):
         try:
             return __import__(module_name)
@@ -107,13 +109,23 @@ class PythonExecResult(TypedDict):
 # ============================================================================
 
 
+@safety("EXECUTE")
+@title("Evaluate Python (IDA Context)")
 @tool
 @idasync
-@unsafe
 def py_eval(
-    code: Annotated[str, "Python code"],
+    code: Annotated[
+        str,
+        "Python source to run inside IDA. May be a single expression, a block of statements, or statements with a trailing expression (Jupyter-style); the trailing expression's value, or a top-level `result` variable, becomes the returned result.",
+    ],
 ) -> PythonExecResult:
-    """Execute Python in IDA context and return result/stdout/stderr."""
+    """WHAT: Execute an inline Python snippet in the live IDA process with every common `ida_*` module (plus `idaapi`, `idc`, `idautils`, and the `parse_address`/`get_function` helpers) pre-injected into a single shared namespace, capturing the computed value, stdout, and stderr.
+
+    WHEN-TO-USE: For one-off IDAPython probes and scripted edits that are too specific for a dedicated tool — querying or mutating the database, walking xrefs, reading bytes, driving the decompiler. Prefer `py_exec_file` instead when the script is large or multi-line enough to be unwieldy as an inline string.
+
+    RETURNS: A PythonExecResult with `result` (stringified value of the trailing expression or of a `result` variable, else ""), `stdout`, and `stderr`. Exceptions do not raise — the full traceback is returned in `stderr` with `result`/`stdout` blanked.
+
+    PITFALL: This is arbitrary code execution against the open database and can irreversibly modify or corrupt the IDB; there is no sandbox and no undo. To return a value from a statement block (no trailing expression), assign it to a variable literally named `result` — the old "last assigned variable" heuristic was removed, so nothing else is auto-returned."""
     # Capture stdout/stderr
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
@@ -124,30 +136,29 @@ def py_eval(
         sys.stdout = stdout_capture
         sys.stderr = stderr_capture
 
-        exec_globals = _make_exec_globals()
+        # Single shared namespace for globals and locals so closures,
+        # recursion and comprehensions resolve names correctly (matching
+        # how py_exec_file runs). Using two separate dicts breaks any code
+        # that relies on top-level names being visible from nested scopes.
+        ns = _make_exec_globals()
 
         result_value = None
-        exec_locals = {}
 
         # Parse code with AST to properly handle execution
         try:
             tree = ast.parse(code)
         except SyntaxError:
             # If parsing fails, fall back to direct exec
-            exec(code, exec_globals, exec_locals)
-            exec_globals.update(exec_locals)
-            if "result" in exec_locals:
-                result_value = str(exec_locals["result"])
-            elif exec_locals:
-                last_key = list(exec_locals.keys())[-1]
-                result_value = str(exec_locals[last_key])
+            exec(code, ns, ns)
+            if "result" in ns:
+                result_value = str(ns["result"])
         else:
             if not tree.body:
                 # Empty code
                 pass
             elif len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr):
                 # Single expression - use eval
-                result_value = str(eval(code, exec_globals))
+                result_value = str(eval(code, ns, ns))
             elif isinstance(tree.body[-1], ast.Expr):
                 # Multiple statements, last one is an expression (Jupyter-style)
                 # Execute all statements except the last
@@ -155,26 +166,22 @@ def py_eval(
                     exec_tree = ast.Module(body=tree.body[:-1], type_ignores=[])
                     exec(
                         compile(exec_tree, "<string>", "exec"),
-                        exec_globals,
-                        exec_locals,
+                        ns,
+                        ns,
                     )
-                    exec_globals.update(exec_locals)
                 # Eval only the last expression
                 eval_tree = ast.Expression(body=tree.body[-1].value)
                 result_value = str(
-                    eval(compile(eval_tree, "<string>", "eval"), exec_globals)
+                    eval(compile(eval_tree, "<string>", "eval"), ns, ns)
                 )
             else:
                 # All statements (no trailing expression)
-                exec(code, exec_globals, exec_locals)
-                exec_globals.update(exec_locals)
-                # Return 'result' variable if explicitly set
-                if "result" in exec_locals:
-                    result_value = str(exec_locals["result"])
-                # Return last assigned variable
-                elif exec_locals:
-                    last_key = list(exec_locals.keys())[-1]
-                    result_value = str(exec_locals[last_key])
+                exec(code, ns, ns)
+                # Return 'result' variable only if explicitly set. The old
+                # "last assigned variable" heuristic was order-dependent and
+                # unreliable, so it is dropped.
+                if "result" in ns:
+                    result_value = str(ns["result"])
 
         # Collect output
         stdout_text = stdout_capture.getvalue()
@@ -199,18 +206,23 @@ def py_eval(
         sys.stderr = old_stderr
 
 
+@safety("EXECUTE")
+@title("Execute Python Script File (IDA Context)")
 @tool
 @idasync
-@unsafe
 def py_exec_file(
-    file_path: Annotated[str, "Absolute path to a Python script to execute"],
+    file_path: Annotated[
+        str,
+        "Absolute path to a UTF-8 Python script file on the IDA host's filesystem. Read and executed as if it were the main module.",
+    ],
 ) -> PythonExecResult:
-    """Execute a Python script file in IDA context and return stdout/stderr.
+    """WHAT: Read a Python script from disk and execute its entire contents in the live IDA process via `exec()`, using one shared globals dict (the same pre-injected `ida_*`/`idaapi`/`idc`/helper context as `py_eval`) with `__name__` set to "__main__", capturing the script's stdout and stderr.
 
-    Unlike py_eval, this runs the entire file with exec() using a single shared
-    globals dict (no locals split), so top-level definitions are visible to all
-    code in the script. Handles large scripts that would be unwieldy as inline code.
-    """
+    WHEN-TO-USE: For larger or multi-line IDAPython scripts that would be awkward or error-prone to pass as an inline string to `py_eval`. Because it runs with a single namespace (no separate locals dict), top-level `def`/`class`/imports are visible to all nested code in the script — making it the right choice when a snippet relies on its own helper functions or recursion.
+
+    RETURNS: A PythonExecResult with `result` (str of a top-level `result` variable if the script sets one to a non-None value, else ""), `stdout`, and `stderr`. A missing file or any raised exception is reported in `stderr` (partial stdout preserved) rather than raising.
+
+    PITFALL: The path is resolved on the machine running IDA, not the MCP client — pass an absolute path that exists there. Like `py_eval`, this is unsandboxed arbitrary execution that can permanently alter the IDB."""
     if not os.path.isfile(file_path):
         return {"result": "", "stdout": "", "stderr": f"File not found: {file_path}"}
 

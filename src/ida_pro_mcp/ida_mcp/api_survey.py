@@ -7,10 +7,10 @@ import re
 from itertools import islice
 from typing import Annotated, TypedDict
 
-from .rpc import tool
-from .sync import idasync, tool_timeout
 from . import compat
 from .api_core import _get_strings_cache
+from .rpc import safety, title, tool
+from .sync import idasync, tool_timeout
 from .utils import get_image_size
 
 
@@ -95,6 +95,7 @@ class SurveyBinaryResult(TypedDict, total=False):
     call_graph_summary: SurveyCallGraphSummary
     _note: str
 
+
 # Max functions to iterate for xref counting on large binaries.
 _MAX_FUNC_ITER = 10_000
 
@@ -111,7 +112,8 @@ _IMPORT_CATEGORIES: list[tuple[str, re.Pattern[str]]] = [
     ("network", re.compile(r"socket|connect|send|recv|http|url|internet|ws2|winsock", re.IGNORECASE)),
     ("process", re.compile(r"process|thread|terminate|execute|shell|pipe|virtual", re.IGNORECASE)),
     ("registry", re.compile(r"reg|registry|hkey", re.IGNORECASE)),
-    ("file_io", re.compile(r"file|path|directory|fopen|fclose|fread|fwrite|readfile|writefile|deletefile|createfile", re.IGNORECASE)),
+    ("file_io", re.compile(r"file|path|directory|fopen|fclose|fread|fwrite|readfile|writefile|deletefile|createfile",
+                           re.IGNORECASE)),
 ]
 
 
@@ -391,20 +393,41 @@ def _build_call_graph_summary(func_eas: list[int]) -> dict:
     }
 
 
-
+@safety("READ")
+@title("Survey Binary (One-Call Triage)")
 @tool
 @idasync
 @tool_timeout(120.0)
 def survey_binary(
-    detail_level: Annotated[str, "Detail level: 'standard' or 'minimal'"] = "standard",
+    detail_level: Annotated[
+        str,
+        "Triage depth: 'standard' (full report) or 'minimal' (metadata + statistics "
+        "+ segments + entrypoints only, skipping the xref-heavy strings/functions/"
+        "imports/call-graph sections). Use 'minimal' on very large binaries.",
+    ] = "standard",
 ) -> SurveyBinaryResult:
-    """Get a compact overview of the binary in one call. Returns file metadata,
-    segment layout, entry points, statistics, top 15 strings and functions ranked
-    by xref count (functions include classification: thunk/wrapper/leaf/dispatcher/
-    complex), imports by category, and call graph summary. Use this as your FIRST
-    tool call when starting analysis. Do not call list_funcs, imports, or find_regex
-    separately for triage — this returns all of that. Use detail_level='minimal'
-    for binaries with >10k functions."""
+    """WHAT: Compact whole-binary triage in a single call. Bundles file metadata
+    (path, module, arch, imagebase, image size, MD5/SHA-256), segment layout with
+    permissions, entry points, function/string/segment statistics, the top 15
+    strings and top 15 functions ranked by inbound xref count (each function tagged
+    thunk/wrapper/leaf/dispatcher/complex), imports grouped into crypto/network/
+    file_io/process/registry/other, and a call-graph summary (edge count, root
+    functions, leaf count).
+
+    WHEN TO USE: Make this your FIRST call when opening an unfamiliar database — it
+    replaces firing list_funcs, imports, and find_regex separately just to get
+    oriented. Use the categorized imports and top-xref functions/strings to pick the
+    subsystem worth drilling into next.
+
+    RETURNS: a SurveyBinaryResult mapping. 'standard' populates every section;
+    'minimal' returns only metadata, statistics, segments, and entrypoints. When the
+    binary exceeds the internal function cap a '_note' field explains that xref
+    analysis was limited to the first slice of functions for performance.
+
+    PITFALL: on large binaries the xref-based rankings (interesting_functions,
+    call_graph_summary) are computed over only the first ~10k functions, so the
+    "top" lists are an approximation, not a global maximum — switch to 'minimal' to
+    skip that work entirely, or follow up with func_query for an exhaustive scan."""
     import idautils
 
     minimal = detail_level == "minimal"

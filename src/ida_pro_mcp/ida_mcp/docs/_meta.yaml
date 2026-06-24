@@ -1,0 +1,89 @@
+overview:
+    title: IDA Pro MCP Overview
+    description: What the IDA Pro MCP server is, how tools/resources/prompts fit together, and where to start.
+    priority: 100
+
+getting-started:
+    title: Getting Started
+    description: First-session checklist for driving this server - connect, confirm the DB, survey, then drill in - with the right tool for each step.
+    priority: 95
+
+ida-pro-essentials:
+    title: IDA Pro 9.3 Essentials
+    description: Core IDA Pro RE concepts (disassembly, pseudocode, structures, xrefs, naming, types, auto-analysis) each mapped to this server's MCP tools.
+    priority: 92
+
+re-methodology:
+    title: A Disciplined RE Methodology
+    description: The hypothesis -> static read -> dynamic confirm loop, working outward from strings/imports/dispatch, clean-room note-taking, and which server tools fit each step.
+    priority: 90
+
+tools-reference:
+    title: Tools Reference
+    description: How tools are organized, the safety classes, and the ?ext extension gating model.
+    priority: 80
+
+idapython-cookbook:
+    title: IDAPython Cookbook
+    description: Copy-paste IDAPython recipes (idautils/ida_funcs/ida_bytes/xrefs/ida_typeinf/idc) plus execute_sync, BADADDR, and CP949 gotchas.
+    priority: 72
+
+ida-domain-sdk:
+    title: The ida-domain SDK
+    description: Practical guide to the modern Pythonic ida-domain API (Database.open, functions/strings/xrefs/types/segments/bytes, flowchart, pseudocode) and when to prefer it over raw IDAPython.
+    priority: 70
+
+opcode-and-packet-re:
+    title: Opcode & Packet Protocol Recovery
+    description: End-to-end recipe - find the recv dispatch/switch, map opcode->handler, infer packet field layouts, and confirm live with probe_net pre/post capture.
+    priority: 68
+
+struct-and-vtable-recovery:
+    title: C++ Struct, vtable & RTTI Recovery
+    description: Recover C++ object layouts from this+offset patterns, declare_type them, confirm at a live pointer with read_struct/dbg_read, and walk vtables/RTTI.
+    priority: 66
+
+crypto-hunting:
+    title: 'Crypto Hunting: Ciphers and Key Schedules'
+    description: Find packet ciphers and key schedules - crypto-shaped XOR/ROL/ROR loops, S-box/constant-table detection, walking out from the recv/decrypt path, and proving the boundary live with a buffer pre/post probe.
+    priority: 64
+
+debugging-and-tracing:
+    title: Live Debugging and Tracing
+    description: Driving a live IDA debugger via the dbg_* tools plus the non-stopping PROBE/AUTOPILOT model - instrument, run free, drain, reason.
+    priority: 62
+
+probe-toolkit:
+    title: Probe / Watch / Autopilot Toolkit
+    description: The non-stopping live-debugger probe layer and the instrument -> run -> drain loop.
+    priority: 60
+
+watchpoints-and-tracepoints:
+    title: Watchpoints & Tracepoints Deep Dive
+    description: Non-stopping tracepoints, HW data watchpoints as struct-field spies, conditional capture, ring/dropped semantics, runtime call graphs, and HW-slot limits.
+    priority: 58
+
+appcall-guide:
+    title: 'Appcall: Calling Functions in the Live Process'
+    description: Use appcall to invoke a debuggee function with your own args to test a parser/decryptor directly - prototype setup, suspended-state requirement, dry-run-first, exceptions, and safety caveats.
+    priority: 50
+
+mcp-server-architecture:
+    title: MCP Server Architecture
+    description: How this stdlib-only MCP server works - the @tool/zeromcp idiom, schema engine, @idasync main-thread marshaling, @safety/@ext gating, resources/docs, and transports.
+    priority: 40
+
+tool-authoring-guide:
+    title: Tool Authoring Guide
+    description: How to add a high-quality MCP tool - verb_noun naming, @title/@safety/@idasync decorators, the WHAT/WHEN/RETURNS docstring, Annotated params, TypedDict output schema, registration, and a hermetic conftest-stubbed test.
+    priority: 38
+
+performance-and-scale:
+    title: 'Performance & Scale: Working Fast on Large Binaries'
+    description: Batching tools, the strings/schema caches, bulk byte reads, bounded probe rings, and keeping a live probe session stable on hot functions.
+    priority: 30
+
+pro-tips-and-pitfalls:
+    title: Pro-Tips & Pitfalls
+    description: A dense, scannable field guide of IDA + RE + this-server tips, tricks, and common traps (address math, types, debugging, caches, encoding, performance).
+    priority: 10

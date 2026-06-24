@@ -5,12 +5,12 @@ granularities (bytes, integers, strings) and patching binary data.
 """
 
 import re
-
 from typing import Annotated, NotRequired, TypedDict
+
 import ida_bytes
 import idaapi
 
-from .rpc import tool
+from .rpc import tool, safety, title
 from .sync import idasync
 from .utils import (
     IntRead,
@@ -67,10 +67,31 @@ class IntWriteResult(TypedDict):
 # ============================================================================
 
 
+@safety("READ")
+@title("Read Raw Bytes")
 @tool
 @idasync
-def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[BytesReadResult]:
-    """Read bytes from memory addresses"""
+def get_bytes(
+    regions: Annotated[
+        list[MemoryRead] | MemoryRead,
+        "One or more {addr, size} read requests; a single dict is accepted and wrapped",
+    ],
+) -> list[BytesReadResult]:
+    """Read raw bytes from one or more memory regions, returned as hex text.
+
+    WHAT: For each {addr, size} region, reads `size` bytes starting at `addr`
+    and returns them as a space-separated hex string (e.g. "0x4d 0x5a ..").
+    Reads are BSS-safe (uninitialized .bss bytes come back as zeros instead of
+    failing).
+    WHEN-TO-USE: Dumping an opcode/struct blob, sampling a buffer, or any time
+    you need exact byte values rather than a decoded integer or string.
+    RETURNS: One result per region, in input order: {addr, data} on success or
+    {addr, data: null, error} on failure. Per-region failures never abort the
+    batch.
+    PITFALL: `data` is a hex STRING, not a byte array; parse it before doing
+    arithmetic. For typed scalar reads prefer get_int (handles width/signedness/
+    endianness); reserve this for opaque byte spans.
+    """
     if isinstance(regions, dict):
         regions = [regions]
 
@@ -126,15 +147,31 @@ def _parse_int_value(text: str, signed: bool, bits: int) -> int:
     return value
 
 
+@safety("READ")
+@title("Read Typed Integers")
 @tool
 @idasync
 def get_int(
     queries: Annotated[
         list[IntRead] | IntRead,
-        "Integer read requests (ty, addr). ty: i8/u64/i16le/i16be/etc",
+        "One or more {ty, addr} read requests; ty selects width/sign/endianness "
+        "(i8/u8/i16/u16/i32/u32/i64/u64, optional le|be suffix, default le); "
+        "a single dict is accepted and wrapped",
     ],
 ) -> list[IntReadResult]:
-    """Read integer values from memory addresses"""
+    """Read width-, sign-, and endian-aware integers from memory.
+
+    WHAT: For each {ty, addr}, parses the `ty` class to derive byte width,
+    signedness, and byte order, reads that many bytes (BSS-safe), and decodes a
+    Python int. `ty` is normalized in the result (e.g. "u32" -> "u32le").
+    WHEN-TO-USE: Reading a scalar field at a known offset (length prefix, flag
+    word, pointer-sized value) when you want the decoded number, not raw bytes.
+    RETURNS: One result per query, in input order: {addr, ty, value} on success
+    (ty is the normalized class) or {addr, ty, value: null, error} on failure.
+    PITFALL: Endianness defaults to little-endian; pass an explicit be suffix
+    (e.g. "u32be") for big-endian data such as network byte order. Unsigned
+    classes always yield a non-negative value.
+    """
     if isinstance(queries, dict):
         queries = [queries]
 
@@ -161,12 +198,32 @@ def get_int(
     return results
 
 
+@safety("READ")
+@title("Read String Literals")
 @tool
 @idasync
 def get_string(
-    addrs: Annotated[list[str] | str, "Addresses to read strings from"],
+    addrs: Annotated[
+        list[str] | str,
+        "One or more addresses (hex or decimal) where a defined string literal "
+        "starts; a single string is accepted and wrapped",
+    ],
 ) -> list[StringReadResult]:
-    """Read strings from memory addresses"""
+    """Read defined string literals from memory.
+
+    WHAT: For each address, fetches the string-literal contents IDA recognizes
+    at that exact start address and decodes them as UTF-8 (undecodable bytes are
+    replaced, never raising).
+    WHEN-TO-USE: Resolving a string pointer/xref target to its text, or reading
+    a known string constant by address.
+    RETURNS: One result per address, in input order: {addr, value} on success or
+    {addr, value: null, error} on failure ("No string at address" when IDA has
+    no string item there).
+    PITFALL: This reads only IDA's DEFINED string item at the precise address;
+    it does not scan for an arbitrary null-terminated run, and an address in the
+    middle of a string yields no result. For non-UTF-8 encodings (e.g. CP949)
+    the replacement chars are expected; use get_bytes to recover the raw bytes.
+    """
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -216,14 +273,33 @@ def get_global_variable_value_internal(ea: int) -> str:
     return " ".join(hex(b) for b in read_bytes_bss_safe(ea, size))
 
 
+@safety("READ")
+@title("Read Global Variable Values")
 @tool
 @idasync
 def get_global_value(
     queries: Annotated[
-        list[str] | str, "Global variable addresses or names to read values from"
+        list[str] | str,
+        "One or more global variable references, each either an address (hex or "
+        "decimal) or a symbol name; a single string is accepted and wrapped",
     ],
 ) -> list[GlobalValueResult]:
-    """Read global variable values by address or symbol name."""
+    """Read global variable values by address or symbol name, type-aware.
+
+    WHAT: Resolves each query (address first when it looks like one, else a name
+    lookup), then renders the value using the variable's declared type/size:
+    char arrays come back as a quoted string, 1/2/4/8-byte scalars as a hex
+    number, and anything else as space-separated hex bytes.
+    WHEN-TO-USE: Inspecting a named global/config value or a data symbol without
+    having to know its width up front; the symbol-name path saves resolving the
+    address yourself.
+    RETURNS: One result per query, in input order: {query, value} on success or
+    {query, value: null, error} on failure ("Not found" when neither the address
+    nor the name resolves).
+    PITFALL: The rendering depends on IDA's type info for the symbol; an
+    untyped/mis-sized global may render as a hex scalar or raw bytes rather than
+    the logical value. When you need an exact width/sign decode, use get_int.
+    """
     from .utils import looks_like_address
 
     queries = normalize_list_input(queries)
@@ -261,10 +337,33 @@ def get_global_value(
 # ============================================================================
 
 
+@safety("DESTRUCTIVE")
+@title("Patch Bytes")
 @tool
 @idasync
-def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[PatchResult]:
-    """Patch bytes at memory addresses with hex data"""
+def patch(
+    patches: Annotated[
+        list[MemoryPatch] | MemoryPatch,
+        "One or more {addr, data} patches; data is a hex byte string (spaces "
+        "optional, e.g. '90 90' or '9090'); a single dict is accepted and wrapped",
+    ],
+) -> list[PatchResult]:
+    """Overwrite bytes in the database at one or more addresses (DESTRUCTIVE).
+
+    WHAT: For each {addr, data}, parses `data` as hex bytes, verifies the
+    address is mapped, and patches the bytes into the IDB at `addr`. The patch
+    length equals the number of hex bytes supplied.
+    WHEN-TO-USE: Applying a binary edit (NOP-ing an instruction, flipping a
+    constant, neutralizing a check) directly in the database.
+    RETURNS: One result per patch, in input order: {addr, size} on success
+    (size = bytes written) or {addr, size: 0, error} on failure (e.g. "Address
+    not mapped" or a malformed hex string). Per-patch failures never abort the
+    batch.
+    PITFALL: This mutates the IDB and does NOT auto-align to instruction
+    boundaries; patching a partial instruction leaves stale disassembly until
+    re-analyzed. To write a typed scalar with width/endianness handled for you,
+    prefer put_int over hand-encoding hex here.
+    """
     if isinstance(patches, dict):
         patches = [patches]
 
@@ -289,15 +388,36 @@ def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[PatchResult]:
     return results
 
 
+@safety("DESTRUCTIVE")
+@title("Write Typed Integers")
 @tool
 @idasync
 def put_int(
     items: Annotated[
         list[IntWrite] | IntWrite,
-        "Integer write requests (ty, addr, value). value is a string; supports 0x.. and negatives",
+        "One or more {ty, addr, value} writes; ty selects width/sign/endianness "
+        "(i8/u8/.../u64, optional le|be, default le); value is a STRING decimal "
+        "or 0x.. (negatives allowed for signed types); a single dict is accepted "
+        "and wrapped",
     ],
 ) -> list[IntWriteResult]:
-    """Write integer values to memory addresses"""
+    """Encode and write width-/sign-/endian-aware integers to memory (DESTRUCTIVE).
+
+    WHAT: For each {ty, addr, value}, parses the integer class and the string
+    value, encodes it to the target width/byte order (rejecting out-of-range or
+    wrongly-signed values), verifies the address is mapped, and patches the bytes
+    into the IDB at `addr`.
+    WHEN-TO-USE: Setting a scalar field/constant by its logical value without
+    hand-encoding hex; complements patch (raw bytes) and get_int (the read side).
+    RETURNS: One result per item, in input order: {addr, ty, value} on success
+    (ty normalized, value echoed as a string) or {addr, ty, value, error} on
+    failure (overflow, negative-into-unsigned, unmapped address, bad value).
+    Per-item failures never abort the batch.
+    PITFALL: `value` is a STRING, not a number, so quote it ("0x10", "-5"); a
+    bare unquoted int will be coerced but the string form is the contract.
+    Default endianness is little-endian; pass an explicit be class for
+    big-endian/network targets. This mutates the IDB.
+    """
     if isinstance(items, dict):
         items = [items]
 

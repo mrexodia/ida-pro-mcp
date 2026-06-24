@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Annotated, Any, TypedDict
 
-from .rpc import tool, unsafe
+from .rpc import tool, unsafe, safety, title
 from .sync import idasync, tool_timeout, IDAError
 from .utils import (
     parse_address,
-    get_function,
     get_prototype,
     get_callees,
     get_callers,
@@ -17,7 +16,6 @@ from .utils import (
     get_all_comments,
     extract_function_strings,
     extract_function_constants,
-    get_stack_frame_variables_internal,
     decompile_function_safe,
     get_assembly_lines,
     normalize_list_input,
@@ -272,14 +270,33 @@ def _analyze_function_internal(
 # ---------------------------------------------------------------------------
 
 
+@safety("READ")
+@title("Analyze One Function")
 @tool
 @idasync
 @tool_timeout(120.0)
 def analyze_function(
-    addr: Annotated[str, "Function address or name"],
-    include_asm: Annotated[bool, "Include full disassembly (default: false, saves tokens)"] = False,
+    addr: Annotated[str, "Function address (hex like '0x401000') or symbol name to analyze"],
+    include_asm: Annotated[bool, "Include full raw disassembly listing too; off by default because it is token-heavy and pseudocode usually suffices"] = False,
 ) -> AnalyzeFunctionResult:
-    """Compact single-function analysis: pseudocode, strings, constants, callers, callees, xrefs, blocks."""
+    """WHAT: One-shot deep-dive on a single function, aggregating everything you'd
+    otherwise gather with separate decompile/strings/constants/callers/callees/
+    xrefs/basic-blocks calls into one compact response.
+
+    WHEN TO USE: As the first call when you land on an unknown function and want
+    the full picture cheaply. Prefer this over chaining the individual tools — it
+    is token-budgeted (pseudocode capped at 100 lines, top ~10 deduped strings,
+    top ~10 non-trivial constants, callee/caller names only).
+
+    RETURNS: AnalyzeFunctionResult with addr/name/prototype/size, decompiled
+    pseudocode (decompile_truncated holds the true line count if it was capped),
+    strings, constants, callees, callers, xrefs, comments and a basic_blocks
+    summary (count + cyclomatic complexity). On failure only addr+error are set.
+
+    PRO-TIP: Leave include_asm off unless you specifically need register-level
+    detail — it roughly doubles the response size. PITFALL: if decompile_error is
+    present the function couldn't be decompiled (e.g. no Hex-Rays / bad bounds);
+    the rest of the fields are still populated from disassembly-level data."""
 
     try:
         ea = _resolve_addr(addr)
@@ -294,13 +311,34 @@ def analyze_function(
 # ---------------------------------------------------------------------------
 
 
+@safety("READ")
+@title("Analyze A Function Cluster")
 @tool
 @idasync
 @tool_timeout(180.0)
 def analyze_component(
-    addrs: Annotated[list[str] | str, "Function addresses (comma-separated or list)"],
+    addrs: Annotated[list[str] | str, "Two or more function addresses/names forming the candidate subsystem, as a list or a comma-separated string"],
 ) -> AnalyzeComponentResult:
-    """Analyze related functions as a group: per-function summaries, internal call graph, shared data."""
+    """WHAT: Analyze a set of related functions as one subsystem. Builds per-function
+    compact summaries, the call graph restricted to edges *between* the given
+    functions, the globals shared by two or more of them, an interface-vs-internal
+    split, and strings used across multiple members.
+
+    WHEN TO USE: Once analyze_function (or xref triage) has identified a handful of
+    functions that look like one component (e.g. a packet handler family or an
+    asset loader), pass them all here to see how they wire together and which are
+    the public entry points vs internal helpers.
+
+    RETURNS: AnalyzeComponentResult with functions (compact summaries),
+    internal_call_graph {nodes, edges}, shared_globals (accessed by >=2 members),
+    interface_functions (called from outside the set), internal_only, and
+    string_usage (strings seen in >=2 members). On failure only error is set.
+
+    PRO-TIP: interface_functions are your subsystem's API surface — start reading
+    there, then follow internal_call_graph down into internal_only helpers.
+    PITFALL: edges/shared_globals/string_usage are intentionally scoped to the set
+    you pass — give it the *complete* cluster or the graph will look sparser than
+    it is. Order of the input list is not preserved (functions are de-duplicated)."""
 
     import idaapi
     import idautils
@@ -445,23 +483,35 @@ def analyze_component(
 _VALID_ACTIONS = frozenset({"rename_func", "set_type", "set_comment"})
 
 
-
+@safety("DESTRUCTIVE")
+@title("Apply Edit And Diff Decompilation")
 @tool
 @unsafe
 @idasync
 @tool_timeout(120.0)
 def diff_before_after(
-    addr: Annotated[str, "Function address"],
-    action: Annotated[str, "Action: 'rename_func', 'set_type', 'set_comment'"],
-    action_args: Annotated[dict, "Arguments for the action"],
+    addr: Annotated[str, "Function address (hex) or name to edit"],
+    action: Annotated[str, "Which edit to apply: 'rename_func', 'set_type', or 'set_comment'"],
+    action_args: Annotated[dict, "Arguments for the chosen action: rename_func->{'name': str}, set_type->{'type': str}, set_comment->{'comment': str}"],
 ) -> DiffBeforeAfterResult:
-    """Rename a function, set its type, or add a comment, and immediately see the
-    before/after decompilation side by side. Use this instead of calling rename
-    then decompile separately when you want to verify that a rename or type change
-    actually improved readability. Actions: 'rename_func' (action_args: {name: str}),
-    'set_type' (action_args: {type: str}), 'set_comment' (action_args: {comment: str}).
-    Returns {before, after, action_applied, changes_detected}. Especially useful
-    during batch renaming to confirm each change had the intended effect."""
+    """WHAT: Apply ONE database edit (rename a function, set its prototype, or set a
+    repeatable comment) and return the decompilation captured immediately before and
+    after, so you can see exactly how the change affected readability.
+
+    WHEN TO USE: Instead of calling rename/set_type then decompile as separate
+    steps. Especially valuable during batch renaming/typing to confirm each edit
+    landed and improved the pseudocode rather than introducing a regression.
+
+    RETURNS: DiffBeforeAfterResult with before, after, action_applied (a human
+    summary of what was done) and changes_detected (whether the pseudocode text
+    actually changed). On any failure only error is set and NO edit is applied.
+
+    PRO-TIP: changes_detected==False after a valid edit usually means the change
+    was cosmetic to the DB but didn't alter the pseudocode (e.g. renaming a func
+    that Hex-Rays already inlined) — not necessarily a failure. PITFALL: this
+    MUTATES the IDB. set_type fails if the signature references types not present
+    in the local type library; declare them first. The Hex-Rays cache is
+    invalidated after the edit so 'after' reflects the new state."""
 
     import idaapi
     import ida_hexrays
@@ -549,23 +599,34 @@ _MAX_TRACE_NODES = 200
 _MAX_TRACE_EDGES = 500
 
 
-
+@safety("READ")
+@title("Trace Data Flow Through Xrefs")
 @tool
 @idasync
 @tool_timeout(120.0)
 def trace_data_flow(
-    addr: Annotated[str, "Starting address"],
-    direction: Annotated[str, "'forward' (xrefs from) or 'backward' (xrefs to)"] = "forward",
-    max_depth: Annotated[int, "Maximum traversal depth"] = 5,
+    addr: Annotated[str, "Starting address (hex) or name — typically a string, global, or constant you want to track"],
+    direction: Annotated[str, "'forward' to follow xrefs FROM the start (where data flows TO), or 'backward' to follow xrefs TO it (where data flows FROM)"] = "forward",
+    max_depth: Annotated[int, "How many xref hops to traverse; clamped to the range 1..20 (default 5)"] = 5,
 ) -> TraceDataFlowResult:
-    """Follow cross-references from or to an address, automatically traversing
-    multiple hops. Use 'forward' to see where data flows TO (xrefs-from), or
-    'backward' to see where data flows FROM (xrefs-to). At each node in the
-    traversal, returns the function name, instruction, and whether it's code or
-    data. Use this when you find an interesting string, constant, or global and
-    want to understand every code path that touches it without manually chaining
-    xrefs_to calls. Do not use for call graph traversal — use callgraph for that.
-    max_depth controls how many hops to follow (default 5, max 20)."""
+    """WHAT: Breadth-first traversal of cross-references from or to an address,
+    following multiple hops automatically so you don't have to chain xrefs_to /
+    xrefs_from by hand. Each visited address becomes a node (function name,
+    instruction text, code/data classification, symbol name, depth) and each hop
+    becomes an edge.
+
+    WHEN TO USE: When you find an interesting string, constant, or global and want
+    to see every code path that touches it. Use 'backward' to find who produces /
+    references a value, 'forward' to see where it propagates.
+
+    RETURNS: TraceDataFlowResult with start, direction, depth_reached, nodes and
+    edges. On bad input only error is set.
+
+    PRO-TIP: Start shallow (max_depth 2-3) on a hot global to keep the result
+    readable, then deepen on the branch you care about. PITFALL: this is data/xref
+    tracing, NOT call-graph traversal — for caller/callee structure use callgraph
+    instead. The walk is bounded (~200 nodes / ~500 edges) so on a heavily
+    referenced symbol the result may be truncated before depth_reached==max_depth."""
 
     import idaapi
     import idautils
