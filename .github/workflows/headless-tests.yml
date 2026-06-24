@@ -1,0 +1,45 @@
+name: headless-tests
+
+# Primary CI gate. Runs on a plain runner WITHOUT IDA Pro installed.
+# The test suite is green headless: tests/conftest.py stubs the native IDA
+# modules so the package imports, and auto-skips the IDA-runtime-only suite
+# (everything under src/ida_pro_mcp/ida_mcp/tests/ and the supervisor
+# import-isolation test) when no real IDA runtime is present.
+
+on:
+    push:
+    pull_request:
+
+permissions:
+    contents: read
+
+jobs:
+    headless-tests:
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                # 3.13 is the supported floor (pyproject requires-python is
+                # >=3.11,<3.14; ida-domain / idapro pin the 3.13 ceiling).
+                python-version: [ '3.13' ]
+        steps:
+            -   name: Checkout
+                uses: actions/checkout@v6
+
+            -   name: Install uv
+                uses: astral-sh/setup-uv@v8
+                with:
+                    python-version: ${{ matrix.python-version }}
+
+            -   name: Sync dependencies
+                run: uv sync
+
+            -   name: Byte-compile the package
+                run: uv run python -m compileall -q src/ida_pro_mcp -x zeromcp
+
+            -   name: Run headless test suite
+                run: uv run pytest -q
+
+            -   name: Lint (ruff, informational)
+                continue-on-error: true
+                run: uvx ruff check

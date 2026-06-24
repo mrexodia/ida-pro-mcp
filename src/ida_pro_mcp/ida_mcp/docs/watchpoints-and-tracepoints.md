@@ -7,10 +7,10 @@ watchpoints** (`watch_field`), and **runtime call graphs** (`trace_calls`) — p
 the conditional-capture engine, the ring-buffer / `dropped` accounting, and the
 hard CPU limits you *will* hit if you over-arm.
 
-Every tool here lives behind `?ext=probes` (the debugger helpers behind
-`?ext=dbg`) and **hard-requires a live session the maintainer already launched
-(F9)**. None of them ever call `dbg_start`. If the debugger is off you get an
-explanatory `{"error": ...}`, not a crash.
+Every tool here lives behind `?ext=dbg` (the same view as the debugger helpers)
+and **hard-requires a live session the maintainer already launched (F9)**. None
+of them ever call `dbg_start`. If the debugger is off you get an explanatory
+`{"error": ...}`, not a crash.
 
 ---
 
@@ -350,7 +350,7 @@ probe_clear()   // omit probe_id to clear ALL
   or you probed past the prologue. Probe the entry instruction.
 - **`dropped` keeps climbing** -> condition too loose / cap too small / draining
   too slowly. Tighten the condition, raise the cap, or go `linear`.
-- **Probe seems to do nothing** -> confirm a live session (`?ext=dbg,probes` and
+- **Probe seems to do nothing** -> confirm a live session (`?ext=dbg` and
   a process the maintainer F9-launched); these tools refuse to `dbg_start`.
 - **Don't `appcall` in a loop** — it executes target code; it's a single,
   human-confirmed action, never part of an automated probe flow.

@@ -10,16 +10,16 @@ The SDK is imported softly: if ``ida_domain`` is not installed the module
 still imports cleanly and every tool returns a structured error dict rather
 than raising, so the MCP server never crashes on a host that lacks the SDK.
 
-All tools are gated behind the ``domain`` extension group (``?ext=domain``)
-and classified READ. They open the *currently loaded* database with the
-in-GUI ``Database.open()`` form (no path), since this code runs inside IDA.
+All tools are part of the base ``/mcp`` view (no extension gate) and
+classified READ. They open the *currently loaded* database with the in-GUI
+``Database.open()`` form (no path), since this code runs inside IDA.
 """
 
 from __future__ import annotations
 
 from typing import Annotated, TypedDict
 
-from .rpc import ext, safety, title, tool
+from .rpc import safety, title, tool
 from .sync import idasync
 
 _UNLOADED = object()
@@ -215,7 +215,6 @@ def _xref_type_name(xref) -> str:
 # ============================================================================
 
 
-@ext("domain")
 @safety("READ")
 @title("Domain: List Functions")
 @tool
@@ -275,7 +274,6 @@ def domain_functions(
         return _exc_error("domain_functions_failed", exc)
 
 
-@ext("domain")
 @safety("READ")
 @title("Domain: Function Pseudocode")
 @tool
@@ -342,7 +340,6 @@ def domain_function_pseudocode(
         return _exc_error("domain_function_pseudocode_failed", exc)
 
 
-@ext("domain")
 @safety("READ")
 @title("Domain: Cross-References")
 @tool
@@ -418,7 +415,6 @@ def domain_xrefs(
         return _exc_error("domain_xrefs_failed", exc)
 
 
-@ext("domain")
 @safety("READ")
 @title("Domain: List Strings")
 @tool
@@ -473,7 +469,6 @@ def domain_strings(
         return _exc_error("domain_strings_failed", exc)
 
 
-@ext("domain")
 @safety("READ")
 @title("Domain: List Segments")
 @tool
@@ -515,7 +510,6 @@ def domain_segments() -> DomainSegmentsResult:
         return _exc_error("domain_segments_failed", exc)
 
 
-@ext("domain")
 @safety("READ")
 @title("Domain: List Types")
 @tool
@@ -568,7 +562,6 @@ def domain_types(
         return _exc_error("domain_types_failed", exc)
 
 
-@ext("domain")
 @safety("READ")
 @title("Domain: Entry Points")
 @tool

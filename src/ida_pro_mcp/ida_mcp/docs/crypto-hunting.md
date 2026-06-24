@@ -161,7 +161,7 @@ both directions pins the algorithm.
 Static analysis gives you the *shape*; only a live read proves "plaintext on one
 side, ciphertext on the other" and recovers the *runtime* key/state (KSA output,
 session keys, and tokens never exist on disk). Use the debugger
-(`?ext=dbg`) or, better, the **non-stopping probe** (`?ext=dbg,probes`).
+(`?ext=dbg`) or, better, the **non-stopping probe** (also `?ext=dbg`).
 **Never call `dbg_start`** — attach to the session the maintainer F9-launched.
 
 ### The pre/post pair
@@ -236,7 +236,7 @@ paste decompiler pseudo-C, autonames, or transcribed key bytes into a kept note
    256-permutation property; `xrefs_to` the table to land on the loop.
 4. `imports_query("recv")` → `xrefs_to` → `trace_data_flow` to the in-place
    transform; `xrefs_to` the state buffer to find the schedule (KSA).
-5. `?ext=dbg,probes`: pre/post buffer pair (`probe_net` / paired `probe_add` +
+5. `?ext=dbg`: pre/post buffer pair (`probe_net` / paired `probe_add` +
    `run_until` + `probe_drain`) to prove the boundary; `read_struct_live` /
    `dbg_read` to dump the runtime key/state.
 6. Reimplement neutrally, validate against the captured ciphertext↔plaintext

@@ -63,7 +63,7 @@ current wall. Tool names are this server's real tools (`decompile`, `set_type`,
 - **Read registers AT the breakpoint, before stepping.** `dbg_step_over` mutates `eax`/flags; capture `dbg_gpregs` first, then step.
 - **`argN` layout depends on convention.** cdecl/stdcall args are on the stack at entry; `__thiscall` puts `this` in `ecx`. Reading "arg1" as a stack slot for a thiscall method gives you the wrong value.
 - **`caller` = `[esp]` at function entry** (the return address) — only valid *at entry*, before the prologue pushes. After prologue, recompute via the frame.
-- **Use probes to watch a value flow without halting** (`?ext=probes`): probes return `False` so the process keeps running — far better than single-stepping a hot loop.
+- **Use probes to watch a value flow without halting** (`?ext=dbg`): probes return `False` so the process keeps running — far better than single-stepping a hot loop.
 - **Hardware data watchpoints are scarce: 4 DR slots, size 1/2/4 (8 on x64), naturally aligned.** Misaligned or oversized = silently no fire. `watch_field` records only on change.
 - **`appcall` EXECUTES target code** — single, human-confirmed, never in a loop; a bad prototype corrupts the stack and crashes the debuggee.
 

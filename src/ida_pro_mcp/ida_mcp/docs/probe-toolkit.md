@@ -1,9 +1,9 @@
 # Probe / Watch / Autopilot Toolkit
 
-The probe toolkit (`api_probes`, gated behind `?ext=probes`, debugger reachable
-via `?ext=dbg,probes`) lets you observe a **running** target without ever
-halting it and **without calling `dbg_start`**. It requires a live debugger
-session the maintainer already launched (F9) in IDA.
+The probe toolkit (`api_probes`, gated behind `?ext=dbg` — the same view as the
+debugger tools) lets you observe a **running** target without ever halting it and
+**without calling `dbg_start`**. It requires a live debugger session the
+maintainer already launched (F9) in IDA.
 
 ## The non-stopping probe
 

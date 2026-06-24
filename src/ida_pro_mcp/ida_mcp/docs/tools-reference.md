@@ -32,10 +32,12 @@ the client connects with the matching `?ext=group` query parameter. Calling a
 gated tool without enabling its group returns an `isError` response explaining
 how to enable it.
 
-- `@ext("dbg")` — debugger tools (`dbg_*`) and a few live-memory readers.
-- `@ext("probes")` — the non-stopping probe / watch / autopilot toolkit.
+- `@ext("dbg")` — debugger tools (`dbg_*`), live-memory readers, **and the entire
+  non-stopping probe / watch / autopilot toolkit**. This is the sole extension
+  group; the probes share it because they are meaningless without a live debugger.
 
-Combine groups with a comma: `?ext=dbg,probes`.
+The base `/mcp` view exposes all static-analysis tools (including the `ida-domain`
+`domain_*` tools); `?ext=dbg` is the only superset.
 
 ## Titles and descriptions
 

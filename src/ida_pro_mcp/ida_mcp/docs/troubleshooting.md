@@ -108,19 +108,17 @@ into the next tool.
 `tools/list`, OR calling one returns an `isError` response that explains how to
 enable its group.
 
-**Cause.** Those tools are decorated with `@ext("dbg")` / `@ext("probes")` and
-are **hidden by default**; they only register when the client connects with the
-matching `?ext=` query parameter. The committed `.mcp.json` should already use
-the debugger-extended endpoint, but a session connected to the bare `/mcp` is
-static-only.
+**Cause.** Those tools are decorated with `@ext("dbg")` and are **hidden by
+default**; they only register when the client connects with the `?ext=dbg` query
+parameter. The committed `.mcp.json` should already use the debugger-extended
+endpoint, but a session connected to the bare `/mcp` is static-only.
 
 **Fix.** Connect on the extension-enabled endpoint (the `?ext=dbg` endpoint is a
-**superset** — it surfaces the `dbg_*` and probe tools *in addition to* every
-static tool):
+**superset** — it surfaces the `dbg_*` debugger tools *and the entire probe
+toolkit* in addition to every static tool):
 
 ```
-http://127.0.0.1:13337/mcp?ext=dbg            # debugger tools
-http://127.0.0.1:13337/mcp?ext=dbg,probes      # debugger + non-stopping probes
+http://127.0.0.1:13337/mcp?ext=dbg            # debugger + non-stopping probe toolkit
 ```
 
 Re-register the server on the right endpoint if needed:
@@ -130,12 +128,13 @@ claude mcp add --transport http ida "http://127.0.0.1:13337/mcp?ext=dbg"
 ```
 
 Notes:
-- Combine groups with a comma (`?ext=dbg,probes`); order does not matter.
-- `probe_list` / `probe_drain` are ungated (`@safety("READ")`) — they work from a
-  static connection, but the *installers* (`probe_add`, `run_until`,
-  `watch_field`, `trace_calls`, `probe_net`, `appcall`) need `?ext=probes`.
-- If `dbg_*` is missing you are simply on the wrong endpoint — this is a
-  connection-string fix, not a server restart.
+- `dbg` is the sole extension group; the entire probe/watch/trace/appcall/
+  snapshot toolkit lives under it, including the read-only `probe_list` /
+  `probe_drain` / `probe_stats` / `trace_summary` / `diff_buffers` (they are
+  meaningless without a live debugger, so they share the gate).
+- The `ida-domain` `domain_*` tools are part of the base `/mcp` view (no ext).
+- If `dbg_*` / `probe_*` is missing you are simply on the wrong endpoint — this is
+  a connection-string fix, not a server restart.
 
 ## 5. Missing / unlicensed Hex-Rays decompiler
 
@@ -226,7 +225,7 @@ CP949 is also multi-byte, so character count != byte count.
 
 1. `server_health()` — is a DB even open and the server alive?
 2. `ida://idb/metadata` — is it the *right* binary (arch/base/hashes)?
-3. Missing `dbg_*`/`probe_*` tools -> reconnect on `?ext=dbg[,probes]` (§4).
+3. Missing `dbg_*`/`probe_*` tools -> reconnect on `?ext=dbg` (§4).
 4. `dbg_*` errors -> `dbg_status()`; act on `not_running`/`running`/`suspended` (§1, §2).
 5. `decompile` empty -> Hex-Rays license/arch, or just a stale cache (§5).
 6. `0xFFFFFFFF` back from a resolver -> it's `BADADDR`; the symbol isn't there (§3).

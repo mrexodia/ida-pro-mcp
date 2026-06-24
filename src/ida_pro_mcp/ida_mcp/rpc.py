@@ -246,7 +246,8 @@ def ext(group: str):
 
     The group string is arbitrary: MCP_EXTENSIONS is populated lazily here and the
     server resolves any group generically (_parse_extensions / _get_tool_extension),
-    so e.g. @ext("probes") exposes those tools under ?ext=probes with no extra wiring.
+    so any @ext("name") exposes those tools under ?ext=name with no extra wiring.
+    This server ships a single group, "dbg" (debugger + the probe/watch toolkit).
     """
 
     def decorator(func):

@@ -20,15 +20,16 @@ companion doc `probe-toolkit.md` for the full token grammar; this doc is about t
 The debugger and probe tools are gated behind MCP `?ext=` flags so a default
 connection stays read-only/static:
 
-- `?ext=dbg` — exposes `dbg_start`, `dbg_continue`, `dbg_run_to`, `dbg_step_*`,
-  `dbg_add_bp`, `dbg_regs*`, `dbg_read`, `dbg_write`, `read_struct_live`,
-  `appcall_inspect`.
-- `?ext=probes` — exposes `probe_add`, `run_until`, `watch_field`, `trace_calls`,
-  `probe_net`, `appcall`, `snapshot_*`.
-- Combine them: `?ext=dbg,probes`.
+- `?ext=dbg` — the single debugger view. Exposes `dbg_start`, `dbg_continue`,
+  `dbg_run_to`, `dbg_step_*`, `dbg_add_bp`, `dbg_regs*`, `dbg_read`, `dbg_write`,
+  `read_struct_live`, `appcall_inspect`, **and the entire probe toolkit**
+  (`probe_add`, `run_until`, `watch_field`, `trace_calls`, `probe_net`,
+  `appcall`, `snapshot_*`, plus the read-only `probe_list` / `probe_drain` /
+  `probe_stats` / `trace_summary` / `diff_buffers`).
 
-`probe_list` / `probe_drain` are `@safety("READ")` and ungated — you can drain a
-ring even from a static connection.
+The whole probe/watch/trace toolkit lives under `?ext=dbg` — it is meaningless
+without a live debugger, so even its read-only drain/summary tools are gated
+there.
 
 ## The dbg_* tools (stop-the-world)
 

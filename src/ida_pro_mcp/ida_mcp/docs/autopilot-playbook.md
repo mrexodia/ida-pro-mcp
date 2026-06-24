@@ -4,7 +4,7 @@ This is the hands-on companion to `probe-toolkit.md` and `debugging-and-tracing.
 It walks two complete instrument -> run -> drain -> reason loops with the **exact
 tool calls and their returned shapes**, so you can copy the pattern for any new
 target. Both examples assume a live debugger session the maintainer already
-F9-launched in IDA, reachable over `?ext=dbg,probes`. None of these tools call
+F9-launched in IDA, reachable over `?ext=dbg`. None of these tools call
 `dbg_start` — if there is no live session every `@safety("EXECUTE")` probe tool
 returns `{"error": "No live debugger session..."}`.
 

@@ -20,9 +20,9 @@ a specific reversing workflow:
   the intended runtime — use `idapyswitch` to select the newest interpreter).
 - **The `@safety` / `@ext` model.** Every tool declares a safety class
   (`READ` / `WRITE` / `DESTRUCTIVE` / `EXECUTE`) that maps to MCP tool
-  annotations and the unsafe gate, and optional extension groups (`@ext("dbg")`,
-  `@ext("probes")`) keep the debugger and instrumentation tools hidden until a
-  client opts in via `?ext=`.
+  annotations and the unsafe gate, and a single extension group (`@ext("dbg")`)
+  keeps the entire debugger + instrumentation toolkit hidden until a client opts
+  in via `?ext=dbg`.
 - **The probe / autopilot toolkit.** A non-stopping live-debugger probe layer
   (`api_probes`) that instruments a *running* target without ever calling
   `dbg_start` and without halting it — instrument → run → drain.
@@ -120,22 +120,22 @@ xrefs_to("ImportantExport", database="binary_a")
 ## Capability / extension groups
 
 The HTTP transport accepts an `?ext=<group>` query parameter that reveals tools
-hidden behind an extension gate. The base endpoint exposes the static-analysis
-tools only; the gated groups are a **superset** on top of that:
+hidden behind an extension gate. The model is **two views**: the base endpoint
+exposes every static-analysis tool (including the `ida-domain`-backed `domain_*`
+tools), and the single `dbg` gate is a **superset** that adds the entire
+live-debugger and instrumentation toolkit on top:
 
 | Endpoint | Surfaces |
 |---|---|
-| `http://127.0.0.1:13337/mcp` | static analysis tools only |
-| `…/mcp?ext=dbg` | + the debugger tools (`dbg_*`) and live-memory readers |
-| `…/mcp?ext=probes` | + the non-stopping probe / watch / autopilot toolkit |
-| `…/mcp?ext=domain` | + the `ida-domain`-backed static-analysis tools (`domain_*`) |
-| `…/mcp?ext=dbg,probes,domain` | groups combined |
+| `http://127.0.0.1:13337/mcp` | all static-analysis tools (incl. the `ida-domain` `domain_*` tools) |
+| `…/mcp?ext=dbg` | + the debugger tools (`dbg_*`), live-memory readers, and the non-stopping probe / watch / autopilot toolkit |
 
-Groups combine with a comma (`?ext=dbg,probes,domain`). Calling a gated tool
-without enabling its group returns an error explaining how to enable it. The
-shipped groups are `dbg`, `probes`, and `domain`; the last gates the
-`ida-domain`-backed `domain_*` tools, which degrade gracefully (a clean error,
-never a crash) when the ida-domain SDK is unavailable.
+There is exactly one extension group, `dbg`, and the entire probe/watch/trace/
+appcall/snapshot toolkit lives under it (it is meaningless without a live
+debugger). Calling a gated tool without enabling `dbg` returns an error
+explaining how to enable it. The `ida-domain`-backed `domain_*` tools are part of
+the base view and degrade gracefully (a clean error, never a crash) when the
+ida-domain SDK is unavailable.
 
 ## Tools & docs overview
 
@@ -157,9 +157,9 @@ Representative families:
 - **Search:** `find_regex`, `find_bytes`, `find_insns`, `find`.
 - **Debugger (`?ext=dbg`):** `dbg_start`, `dbg_continue`, `dbg_run_to`,
   `dbg_step_*`, breakpoint / register / stack / memory tools.
-- **Probes (`?ext=probes`):** `probe_add`, `trace_calls`, `watch_field`,
+- **Probes (`?ext=dbg`):** `probe_add`, `trace_calls`, `watch_field`,
   `probe_net`, `run_until`, `probe_drain`, `probe_list`, `probe_clear`.
-- **ida-domain (`?ext=domain`):** `domain_functions`, `domain_function_pseudocode`,
+- **ida-domain (base `/mcp`):** `domain_functions`, `domain_function_pseudocode`,
   `domain_xrefs`, `domain_strings`, `domain_segments`, `domain_types`,
   `domain_entry_points`.
 

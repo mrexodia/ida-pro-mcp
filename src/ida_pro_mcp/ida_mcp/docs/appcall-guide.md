@@ -13,7 +13,7 @@ tools:
 | Tool | Ext | Safety | What it does |
 |------|-----|--------|--------------|
 | `appcall_inspect` | `?ext=dbg` | READ | Parse the prototype, report the arg/return types. **Never executes.** |
-| `appcall` | `?ext=probes` | EXECUTE | Resolve+marshal args; with `confirm=True` on a suspended process, **actually calls the function.** |
+| `appcall` | `?ext=dbg` | EXECUTE | Resolve+marshal args; with `confirm=True` on a suspended process, **actually calls the function.** |
 
 > EXECUTE-class. `appcall(confirm=True)` runs target code on the target's own
 > threads. Treat every call as a deliberate, human-confirmed action — see
@@ -45,9 +45,9 @@ less reproducible a manual call becomes (see caveats).
    Confirm with `dbg_status` first — it should report `state: suspended`.
    `appcall_inspect` and the `appcall` dry-run only need the session to exist;
    they don't require suspension.
-3. The right `?ext=` flag on the MCP connection: `appcall_inspect` needs
-   `?ext=dbg`, the executing `appcall` needs `?ext=probes`. A combined
-   `?ext=dbg,probes` connection has both.
+3. The right `?ext=` flag on the MCP connection: both `appcall_inspect` and the
+   executing `appcall` live under `?ext=dbg` — a single `?ext=dbg` connection has
+   both.
 
 ## Step 1 — Write the prototype, inspect it
 

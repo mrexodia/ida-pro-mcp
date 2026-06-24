@@ -43,7 +43,7 @@ register and classify it by stacking decorators. The canonical full stack, from
 from .rpc import tool, safety, title, ext
 from .sync import idasync, tool_timeout
 
-@ext("probes")          # optional: hide behind ?ext=probes
+@ext("dbg")             # optional: hide behind ?ext=dbg (the sole group)
 @safety("EXECUTE")      # optional: safety class + MCP annotations
 @title("Run until hit") # optional: human-friendly toolDef.title
 @tool                   # REQUIRED: registers into MCP_SERVER.tools
@@ -221,15 +221,15 @@ config UI (`/config.html`) flags `MCP_UNSAFE` tools with a ⚠️ and offers a
 does not itself refuse unsafe calls; gating is left to the client / operator and
 to the per-tool enable list.
 
-## `@ext` capability gating (`?ext=dbg,probes`)
+## `@ext` capability gating (`?ext=dbg`)
 
-By default the heavy/dangerous tool groups are **hidden**. `@ext("group")`
+By default the heavy/dangerous live-debugger tools are **hidden**. `@ext("group")`
 registers a tool into `MCP_EXTENSIONS[group]`; it is invisible in `tools/list`
 and refused by `tools/call` unless the request URL carries `?ext=group`.
 
 How it flows:
 
-- The HTTP handler parses `?ext=dbg,probes` once per request
+- The HTTP handler parses `?ext=dbg` once per request
   (`_parse_extensions`) into a set and stashes it in a `threading.local`
   (`_enabled_extensions`).
 - `tools/list` skips any tool whose group isn't enabled
@@ -237,14 +237,14 @@ How it flows:
 - `tools/call` on a hidden tool returns an error: *"Tool 'x' requires extension
   'dbg'. Enable with ?ext=dbg"*.
 
-Groups are **arbitrary strings, wired lazily** — `@ext("dbg")` and
-`@ext("probes")` need no extra registration; the server resolves any group
-generically. The two in use:
+Groups are **arbitrary strings, wired lazily** — `@ext("dbg")` needs no extra
+registration; the server resolves any group generically. There is exactly one
+group in use:
 
 - `?ext=dbg` — the live debugger toolset (`api_debug.py`: breakpoints, registers,
-  step, `dbg_read`/`dbg_write`, stacktrace).
-- `?ext=probes` — the non-stopping probe / watch / autopilot toolkit
-  (`api_probes.py`).
+  step, `dbg_read`/`dbg_write`, stacktrace) **plus the entire non-stopping
+  probe / watch / autopilot toolkit** (`api_probes.py`), which is meaningless
+  without a live debugger and so shares the gate.
 
 The repo's `.mcp.json` registers the URL `http://127.0.0.1:13337/mcp?ext=dbg` so
 the static **and** debugger tools are both visible from one connection.
@@ -326,7 +326,7 @@ Security hardening baked into the handler:
 1. Pick the right `api_*.py` module (or make one and import it in `__init__.py`).
 2. Write a function with `Annotated` params and a `TypedDict`/typed return.
 3. Stack decorators: `@safety(...)` → (`@title`) → `@tool` → `@idasync` →
-   (`@tool_timeout`). Add `@ext("dbg"|"probes")` if it should be hidden.
+   (`@tool_timeout`). Add `@ext("dbg")` if it should be hidden (the sole group).
 4. Touch IDA only through `idaapi`/`ida_*`/`ida-domain` *inside* the body — never
    from module top level, never from another `@idasync` body.
 5. Return small; large results auto-truncate with a download link.

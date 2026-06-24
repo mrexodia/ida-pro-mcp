@@ -188,9 +188,12 @@ resource touches it (`disasm`, `decompile`, `xrefs_to`, `dbg_read`, `read_struct
   **EXECUTE** (runs code / resumes the debuggee — python eval, appcall,
   `run_until`). See **tools-reference**.
 - **ext group (`?ext`)** — the `@ext("group")` gate that hides tools until the
-  client connects with the matching query param: **`?ext=dbg`** surfaces the
-  `dbg_*` debugger tools, **`?ext=probes`** the probe toolkit. Combine with a
-  comma: `?ext=dbg,probes`. The committed config registers the superset endpoint.
+  client connects with the matching query param. There is exactly one group:
+  **`?ext=dbg`** surfaces the `dbg_*` debugger tools **and the entire probe
+  toolkit** (the probes are meaningless without a live debugger, so they share
+  the gate). The base `/mcp` view exposes all static-analysis tools (including
+  the `ida-domain` `domain_*` tools). The committed config registers the
+  `?ext=dbg` superset endpoint.
 - **structured output** — a tool result returned as a typed object (from its
   TypedDict output schema) rather than free text, so the client can index fields
   directly. Large payloads are auto-truncated inline and cached; the full result

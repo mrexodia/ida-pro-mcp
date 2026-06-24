@@ -173,7 +173,7 @@ dbg_stacktrace()                 # confirm the caller chain
 
 `dbg_run_to(<ea>)` runs to a one-shot address. To watch values flow **without
 ever halting the target**, prefer the non-stopping probe toolkit
-(`?ext=dbg,probes`): `probe_add` / `watch_field` / `run_until` / `probe_drain`,
+(`?ext=dbg`): `probe_add` / `watch_field` / `run_until` / `probe_drain`,
 and live overlays like `read_struct_live`. See `ida://docs/probe-toolkit` for
 the instrument -> run -> drain loop. Probes are ideal for confirming a struct
 layout or a cipher boundary on real traffic while the process keeps running.

@@ -22,10 +22,10 @@ hidden behind an extension gate. The most important is the debugger extension:
 http://127.0.0.1:13337/mcp?ext=dbg
 ```
 
-This is a **superset** endpoint — it surfaces the `dbg_*` debugger tools and the
-probe toolkit in addition to all static-analysis tools. The base `/mcp`
-endpoint exposes static tools only. Multiple groups can be combined:
-`?ext=dbg,probes`.
+This is a **superset** endpoint — `?ext=dbg` surfaces the `dbg_*` debugger tools
+and the entire probe toolkit in addition to all static-analysis tools. The base
+`/mcp` endpoint exposes every static-analysis tool (including the `ida-domain`
+`domain_*` tools); `dbg` is the sole extension group.
 
 ## Where to start
 

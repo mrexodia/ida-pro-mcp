@@ -32,7 +32,7 @@ src/ida_pro_mcp/ida_mcp/
   api_resources.py  # @resource definitions (browsable IDB state)
   api_survey.py
   api_composite.py
-  api_probes.py     # probe/watch/autopilot toolkit (@ext("probes"))
+  api_probes.py     # probe/watch/autopilot toolkit (@ext("dbg"))
   api_sigmaker.py
   api_docs.py       # search_docs tool + ida://docs resources
   prompts.py        # @prompt slash-command guides
@@ -107,7 +107,7 @@ def verb_noun(target: str, limit: int = 5) -> MyResult:
 Canonical decorator order (outermost → innermost):
 
 ```python
-@ext("probes")        # optional: extension gating
+@ext("dbg")           # optional: extension gating (the sole group is "dbg")
 @safety("EXECUTE")    # safety class (emits annotations, may mark unsafe)
 @title("...")         # optional display title
 @tool                 # registration (required, must be directly above the fn body wrappers)
@@ -247,7 +247,7 @@ def my_workflow() -> str:
 | Resource       | `@resource(uri, mime=...)`                      | `MCP_SERVER` resources        | `resources/list`, `resources/read`                                       |
 | Prompt         | `@prompt`                                       | `MCP_SERVER` prompts          | `prompts/list`, `prompts/get`                                            |
 | Unsafe gate    | `@safety("DESTRUCTIVE"\|"EXECUTE")` / `@unsafe` | `MCP_UNSAFE` set              | filtered out under idalib `--unsafe` gating; ⚠️ in HTTP listing          |
-| Extension gate | `@ext("group")`                                 | `MCP_EXTENSIONS[group]`       | hidden until client uses `?ext=group` (shipped groups: `dbg`, `probes`, `domain`; comma-combine: `?ext=dbg,probes,domain`) |
+| Extension gate | `@ext("dbg")`                                   | `MCP_EXTENSIONS["dbg"]`       | hidden until client uses `?ext=dbg` (the sole shipped group is `dbg`; it gates the entire debugger + probe toolkit) |
 | Title          | `@title("...")`                                 | `func.__mcp_title__`          | `title` field in tool schema                                             |
 | Annotations    | `@safety(...)`                                  | `func.__mcp_annotations__`    | `annotations` (readOnly/destructive/idempotent/openWorld hints)          |
 | Output limit   | (automatic)                                     | `_output_cache`               | truncated inline + `_meta.ida_mcp.download_url`                          |

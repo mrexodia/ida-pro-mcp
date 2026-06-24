@@ -18,12 +18,13 @@ Layers:
   ida_dbg.is_debugger_on() and NEVER calls dbg_start.
 
 Decorator idiom (outer -> inner):
-    @ext("probes") -> @safety(...) -> @title("...") -> @tool -> @idasync
+    @ext("dbg") -> @safety(...) -> @title("...") -> @tool -> @idasync
     (+ @tool_timeout innermost for the waiting tools).
 
-Read-only tools use @safety("READ") and skip the @ext gate (or keep it for
-cohesion); state-mutating/execute tools use @ext("probes") + @safety("EXECUTE")
-or @safety("DESTRUCTIVE").
+The ENTIRE probe toolkit lives under the debugger view (?ext=dbg): every tool
+here is meaningless without a live debugger session, so read-only tools carry
+@ext("dbg") + @safety("READ") and state-mutating/execute tools carry
+@ext("dbg") + @safety("EXECUTE") or @safety("DESTRUCTIVE").
 
 All debugger work uses raw idapython (ida_dbg / ida_idd / idc / idaapi), NOT
 ida-domain.
@@ -923,7 +924,7 @@ def _install_code_probe(
 # ============================================================================
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Install a non-stopping capture probe")
 @tool
@@ -984,6 +985,7 @@ def probe_add(
     return ref
 
 
+@ext("dbg")
 @safety("READ")
 @title("List installed probes")
 @tool
@@ -996,6 +998,7 @@ def probe_list() -> ProbeListResult:
     return {"probes": _trace.list_probes()}
 
 
+@ext("dbg")
 @safety("READ")
 @title("Drain captured probe records")
 @tool
@@ -1034,7 +1037,7 @@ def probe_drain(
     return {"records": records, "cursor": cursor, "dropped": stats["dropped"]}
 
 
-@ext("probes")
+@ext("dbg")
 @safety("DESTRUCTIVE")
 @title("Remove probes")
 @tool
@@ -1072,7 +1075,7 @@ def probe_clear(probe_id: str | None = None) -> ProbeClearResult:
     return {"removed": removed}
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Run until a probe hits, an address, or timeout")
 @tool
@@ -1147,7 +1150,7 @@ def run_until(
     }
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Watch a memory field for changes")
 @tool
@@ -1246,7 +1249,7 @@ def watch_field(
     return ref
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Watch a memory RANGE for changes")
 @tool
@@ -1344,7 +1347,7 @@ def watch_region(
     return ref
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Trace calls with args and return value")
 @tool
@@ -1487,7 +1490,7 @@ def _resolve_import_ea(name: str) -> dict:
     return {"func_ea": func_ea, "iat_ea": iat_ea, "via": via}
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Probe an imported API by name")
 @tool
@@ -1663,7 +1666,7 @@ def _resolve_ptr_chain(expr: str) -> int | None:
     return acc
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Appcall a function in the debuggee")
 @tool
@@ -1794,7 +1797,7 @@ def appcall_inspect(ea: str, prototype: str) -> AppcallInspectResult:
     }
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Install recv/decrypt/send buffer probes")
 @tool
@@ -2012,7 +2015,7 @@ _snapshots: dict[str, dict] = {}
 _snapshots_lock = threading.Lock()
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Save a best-effort register+memory snapshot")
 @tool
@@ -2073,7 +2076,7 @@ def snapshot_save(name: str, ranges: list[dict] | None = None) -> SnapshotResult
     }
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Restore a best-effort register+memory snapshot")
 @tool
@@ -2120,6 +2123,7 @@ def snapshot_restore(name: str) -> SnapshotResult:
     }
 
 
+@ext("dbg")
 @safety("READ")
 @title("List in-process snapshots")
 @tool
@@ -2144,7 +2148,7 @@ def snapshot_list() -> SnapshotListResult:
     return {"snapshots": out}
 
 
-@ext("probes")
+@ext("dbg")
 @safety("DESTRUCTIVE")
 @title("Delete an in-process snapshot")
 @tool
@@ -2169,6 +2173,7 @@ def snapshot_delete(name: str) -> SnapshotDeleteResult:
 # ============================================================================
 
 
+@ext("dbg")
 @safety("READ")
 @title("Probe + ring health summary")
 @tool
@@ -2186,6 +2191,7 @@ def probe_stats() -> ProbeStatsResult:
     return _trace.aggregate_probe_stats(probes, ring.stats())  # type: ignore[return-value]
 
 
+@ext("dbg")
 @safety("READ")
 @title("Summarize captured probe records")
 @tool
@@ -2228,6 +2234,7 @@ def trace_summary(
     return summary  # type: ignore[return-value]
 
 
+@ext("dbg")
 @safety("READ")
 @title("Byte-diff two captured buffers")
 @tool
@@ -2243,7 +2250,7 @@ def diff_buffers(a_hex: str, b_hex: str) -> BufferDiffResult:
     return _trace.diff_buffers(a_hex, b_hex)  # type: ignore[return-value]
 
 
-@ext("probes")
+@ext("dbg")
 @safety("DESTRUCTIVE")
 @title("Arm or disarm a probe")
 @tool
@@ -2302,7 +2309,7 @@ def probe_arm(probe_id: str, armed: bool = True) -> ProbeRef:
     }
 
 
-@ext("probes")
+@ext("dbg")
 @safety("EXECUTE")
 @title("Sequence safe pilot primitives (autopilot)")
 @tool

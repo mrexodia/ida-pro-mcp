@@ -9,7 +9,7 @@ length-prefixed, opcode-dispatched binary protocol.
 > Tool names below are bare `@tool` names. Over the wire they are
 > `mcp__ida__<name>` (e.g. `mcp__ida__xrefs_to`). The schemas in `tools/list`
 > are always authoritative. The `probe_*` / `probe_net` tools live behind the
-> `?ext=probes` gate and **hard-require a live debugger session the maintainer
+> `?ext=dbg` gate and **hard-require a live debugger session the maintainer
 > already launched (F9)** — they never call `dbg_start`.
 
 The golden rule: **static analysis forms the hypothesis; the live debugger

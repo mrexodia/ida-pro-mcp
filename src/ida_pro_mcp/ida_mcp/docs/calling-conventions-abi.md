@@ -9,7 +9,7 @@ calling conventions onto the exact capture specs you feed `trace_calls` /
 
 > Tool names below are bare `@tool` names; over the wire they are
 > `mcp__ida__<name>` (e.g. `mcp__ida__trace_calls`). The probe/debug tools are
-> gated — connect with `?ext=dbg,probes`. `tools/list` is authoritative for schemas.
+> gated — connect with `?ext=dbg`. `tools/list` is authoritative for schemas.
 
 ---
 

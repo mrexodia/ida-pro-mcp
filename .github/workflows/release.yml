@@ -1,0 +1,39 @@
+name: release
+
+# Build the sdist + wheel and publish them on a GitHub Release whenever a
+# version tag (v*) is pushed. No PyPI publish step: this fork ships releases as
+# attached build artifacts only (no PyPI token assumed).
+
+on:
+    push:
+        tags:
+            - 'v*'
+
+permissions:
+    contents: write
+
+jobs:
+    release:
+        runs-on: ubuntu-latest
+        steps:
+            -   name: Checkout
+                uses: actions/checkout@v6
+
+            -   name: Install uv
+                uses: astral-sh/setup-uv@v8
+
+            -   name: Build sdist and wheel
+                run: uv build
+
+            -   name: List build artifacts
+                run: ls -l dist
+
+            -   name: Create GitHub Release
+                uses: softprops/action-gh-release@v2
+                with:
+                    name: ${{ github.ref_name }}
+                    tag_name: ${{ github.ref_name }}
+                    generate_release_notes: true
+                    files: |
+                        dist/*.whl
+                        dist/*.tar.gz

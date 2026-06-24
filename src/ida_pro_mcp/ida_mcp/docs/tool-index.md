@@ -15,18 +15,18 @@ family's deep-dive doc for usage.
   - `EXECUTE` — runs code or resumes the debuggee (py_eval, appcall, run_until).
     Flagged **unsafe + openWorld**. Treat as a deliberate, confirmed action.
 - **Ext group** (`@ext(...)`) — hidden unless the client connects with the
-  matching query param. No ext = always visible.
-  - `dbg` — debugger control + a few live-memory readers. Connect `?ext=dbg`.
-  - `domain` — the ida-domain SDK mirror tools. Connect `?ext=domain`.
-  - `probes` — non-stopping probe / watch / autopilot toolkit. Connect
-    `?ext=probes` (needs a live session, so practically `?ext=dbg,probes`).
-  - Combine: `?ext=dbg,probes,domain`.
+  matching query param. No ext = always visible. There is exactly one group:
+  - `dbg` — debugger control + live-memory readers **and the entire non-stopping
+    probe / watch / autopilot toolkit** (the probes share the gate because they
+    are meaningless without a live debugger). Connect `?ext=dbg`.
+  - The `ida-domain` SDK mirror tools (`domain_*`) are part of the base view —
+    they need **no** ext param.
 
 Pro-tip: the committed `.mcp.json` registers `?ext=dbg` — that is a **superset**
-(static tools + debugger tools). If `dbg_*` are missing you are on the bare base
-endpoint; re-register on `?ext=...`. Always-on families (core/query, memory,
-modify, types, stack, analysis, composite, survey, sigmaker, probes-listing,
-docs) need **no** ext param.
+(all static tools + debugger + probe tools). If `dbg_*` / `probe_*` are missing
+you are on the bare base endpoint; re-register on `?ext=dbg`. Always-on families
+(core/query, memory, modify, types, stack, analysis, composite, survey, sigmaker,
+domain, docs) need **no** ext param.
 
 ---
 
@@ -86,7 +86,7 @@ C type / struct / enum reconstruction and application.
   `infer_types`.
 - DESTRUCTIVE: `declare_type`, `enum_upsert`, `set_type`, `type_apply_batch`.
 - Pro-tip: `read_struct` overlays an IDB type onto a static EA's bytes into a
-  named-field dict; the live twin is `read_struct_live` (probes/dbg).
+  named-field dict; the live twin is `read_struct_live` (a probe, `?ext=dbg`).
   `type_apply_batch` applies many type assignments in one call.
 
 ### Stack — `api_stack` (no ext)
@@ -134,12 +134,12 @@ on this project (it exists but is the wrong door for the live-attach workflow).
 - Pro-tip: `dbg_read` reads **through** PAGE_NOACCESS — use it to read live
   packet buffers a normal read would fault on.
 
-### Probes — `api_probes` (**`?ext=probes`**; live readers under `dbg`)
+### Probes — `api_probes` (**`?ext=dbg`** — entire toolkit, including read-only tools)
 The non-stopping observe-while-running layer + live-memory helpers.
-- READ: `probe_list`, `probe_drain`, `trace_summary`, `diff_buffers`,
-  `appcall_inspect`, `read_struct_live` (`dbg`).
+- READ: `probe_list`, `probe_drain`, `probe_stats`, `trace_summary`,
+  `diff_buffers`, `snapshot_list`, `appcall_inspect`, `read_struct_live`.
 - EXECUTE: `probe_add`, `run_until`, `watch_field`, `watch_region`,
-  `trace_calls`, `probe_net`, `appcall` (`dbg`), `snapshot_save`,
+  `trace_calls`, `probe_net`, `appcall`, `snapshot_save`,
   `snapshot_restore`, `autopilot_run`.
 - DESTRUCTIVE: `probe_clear`, `probe_arm`.
 - Pro-tip: the loop is **instrument → run → drain** — `probe_add`/`trace_calls`/
@@ -148,13 +148,13 @@ The non-stopping observe-while-running layer + live-memory helpers.
   halts. `appcall` actually CALLS debuggee code — single, human-confirmed only,
   never in a loop.
 
-### Domain — `api_domain` (**`?ext=domain`**, all READ)
+### Domain — `api_domain` (base `/mcp`, no ext, all READ)
 A Pythonic ida-domain SDK mirror of the core queries.
 - `domain_functions`, `domain_function_pseudocode`, `domain_xrefs`,
   `domain_strings`, `domain_segments`, `domain_types`, `domain_entry_points`.
 - Pro-tip: these overlap the core/analysis tools; reach for them when you want
-  the ida-domain object model's shape. Gated off by default to keep the default
-  toolset lean.
+  the ida-domain object model's shape. Part of the base static view (no ext
+  param); they degrade gracefully when the ida-domain SDK is unavailable.
 
 ### Python — `api_python` (no ext, EXECUTE)
 - `py_eval` — run an inline IDAPython snippet (the escape hatch for any one-off
