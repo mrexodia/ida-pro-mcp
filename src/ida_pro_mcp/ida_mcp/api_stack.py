@@ -5,12 +5,13 @@ including reading, creating, and deleting stack variables in functions.
 """
 
 from typing import Annotated, NotRequired, TypedDict
-import ida_typeinf
+
 import ida_frame
+import ida_typeinf
 import idaapi
 
 from .compat import tinfo_get_udm
-from .rpc import tool
+from .rpc import tool, safety, title
 from .sync import idasync
 from .utils import (
     normalize_list_input,
@@ -41,12 +42,23 @@ class StackMutationResult(TypedDict):
 # ============================================================================
 
 
+@safety("READ")
+@title("Read Stack Frame Variables")
 @tool
 @idasync
 def stack_frame(
-    addrs: Annotated[list[str] | str, "Address(es)"]
+    addrs: Annotated[
+        list[str] | str,
+        "One function address, or a list of them (hex/decimal/symbol). Any address inside a function resolves to its frame.",
+    ]
 ) -> list[StackFrameResult]:
-    """Return stack variables for function address(es)."""
+    """WHAT: Read the stack-frame layout (local variables and saved arguments) of one or more functions.
+
+    WHEN-TO-USE: To inspect a function's locals before renaming/retyping them, to confirm an offset before calling `declare_stack`/`delete_stack`, or to understand how a routine lays out its stack while reverse-engineering it. Accepts a batch of addresses in a single call to amortize round-trips.
+
+    RETURNS: A list parallel to the input, one StackFrameResult per address with `addr` (the address you passed) and `vars` (a list of {name, offset, size, type}); on a per-address failure `vars` is None and `error` carries the reason.
+
+    PITFALL: Each result is reported independently — a bad address yields an `error` entry rather than failing the whole batch, so always check each element. Requires IDA 9+; on older versions frames come back empty. Offsets are frame offsets (the same ones `declare_stack`/`delete_stack` expect), not file addresses."""
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -61,12 +73,23 @@ def stack_frame(
     return results
 
 
+@safety("DESTRUCTIVE")
+@title("Declare Stack Variables")
 @tool
 @idasync
 def declare_stack(
-    items: list[StackVarDecl] | StackVarDecl,
+    items: Annotated[
+        list[StackVarDecl] | StackVarDecl,
+        "One declaration or a list of them. Each is {addr: function address, offset: stack offset, name: variable name, ty: type name}.",
+    ],
 ) -> list[StackMutationResult]:
-    """Create stack variables from typed stack declarations."""
+    """WHAT: Define (create/rename/retype) named, typed stack variables in function frames from a batch of typed declarations.
+
+    WHEN-TO-USE: After recovering a local's purpose and type, to give it a meaningful name and C type at its frame offset so the decompiler renders it cleanly. Use `stack_frame` first to find the exact offset, then declare it here.
+
+    RETURNS: A list parallel to the input, one StackMutationResult per item with `addr` and `name`; a failed item additionally carries `error` (e.g. no function at `addr`, unresolved type, or define failure).
+
+    PITFALL: This MUTATES the IDB — defining a variable at an occupied offset overwrites the existing member there, so confirm the offset with `stack_frame` first. `ty` must resolve via the type system (a known builtin or an existing local type); an unknown type name fails that item without aborting the rest of the batch."""
     items = normalize_dict_list(items)
     results = []
     for item in items:
@@ -106,12 +129,23 @@ def declare_stack(
     return results
 
 
+@safety("DESTRUCTIVE")
+@title("Delete Stack Variables")
 @tool
 @idasync
 def delete_stack(
-    items: list[StackVarDelete] | StackVarDelete,
+    items: Annotated[
+        list[StackVarDelete] | StackVarDelete,
+        "One deletion or a list of them. Each is {addr: function address, name: stack variable name to remove}.",
+    ],
 ) -> list[StackMutationResult]:
-    """Delete stack variables by name or offset."""
+    """WHAT: Delete user-defined stack variables from function frames by name, freeing the frame bytes they occupied.
+
+    WHEN-TO-USE: To undo a bad/obsolete stack declaration or clean up a frame before re-laying it out. Look up the exact variable name with `stack_frame` first.
+
+    RETURNS: A list parallel to the input, one StackMutationResult per item with `addr` and `name`; a failed item additionally carries `error` (no function found, name not present in the frame, the member is a special/argument member, or the delete failed).
+
+    PITFALL: This MUTATES the IDB and is irreversible via this tool. It deliberately refuses to delete special frame members (saved registers / return address) and function arguments (`is_funcarg_off`) — those return an `error` instead of being removed. Match by name, not offset; an unknown name fails only that item, leaving the rest of the batch intact."""
 
     items = normalize_dict_list(items)
     results = []

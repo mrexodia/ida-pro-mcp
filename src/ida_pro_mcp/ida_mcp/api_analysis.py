@@ -1,21 +1,24 @@
-from itertools import islice
 import struct
+from itertools import islice
 from typing import Annotated, Any, NotRequired, Optional, TypedDict
-import ida_lines
-import ida_funcs
-import idaapi
-import idautils
-import ida_typeinf
-import ida_nalt
+
 import ida_bytes
+import ida_funcs
 import ida_ida
 import ida_idaapi
 import ida_kernwin
-import ida_xref
-import ida_ua
+import ida_lines
+import ida_nalt
 import ida_name
-from .rpc import tool
-from .sync import idasync, tool_timeout, IDAError
+import ida_typeinf
+import ida_ua
+import ida_xref
+import idaapi
+import idautils
+
+from . import compat
+from .rpc import safety, title, tool
+from .sync import idasync, tool_timeout
 from .utils import (
     parse_address,
     normalize_list_input,
@@ -46,7 +49,6 @@ from .utils import (
     FuncProfileQuery,
     AnalyzeBatchQuery,
 )
-from . import compat
 
 
 class DecompileResult(TypedDict):
@@ -750,16 +752,25 @@ def _profile_function(
 # ============================================================================
 
 
+@safety("READ")
+@title("Decompile Function To Pseudocode")
 @tool
 @idasync
 @tool_timeout(90.0)
 def decompile(
-    addr: Annotated[str, "Function address or name to decompile"],
+    addr: Annotated[str, "Function address (hex like '0x401000') or symbol name to decompile"],
     include_addresses: Annotated[
-        bool, "Append /*0xNNNN*/ markers per line (default: true). Set false to save tokens."
+        bool,
+        "Append /*0xNNNN*/ line-address markers to each line (default: true). Set false to save tokens when you only need the logic, not addresses to pivot on.",
     ] = True,
 ) -> DecompileResult:
-    """Decompile function(s) at address(es); returns pseudocode and per-item errors."""
+    """WHAT: Runs the Hex-Rays decompiler on one function and returns its C-like pseudocode, plus the global/string objects it references (`refs`).
+
+WHEN TO USE: The primary way to understand what a single function does. Reach for this before `disasm` unless you specifically need raw instructions or a function the decompiler refuses.
+
+RETURNS: {addr, code, refs?, error?}. `code` is null with `error` set when decompilation fails (no Hex-Rays license, undefined function, or a decompiler error). `refs` (when present) lists referenced named objects/strings so you can pivot with `xrefs_to`/`decompile` without re-parsing the text.
+
+PRO-TIP: Keep `include_addresses=true` while exploring so you can copy a `/*0xNNNN*/` marker straight into `disasm`/`xrefs_to`; flip it off only for a final clean read. PITFALL: this takes one address, not a list -- call it once per function."""
     try:
         start = parse_address(addr)
         code, err = decompile_function_safe(start, include_addresses=include_addresses)
@@ -782,20 +793,28 @@ def decompile(
         return {"addr": addr, "code": None, "error": str(e)}
 
 
+@safety("READ")
+@title("Disassemble To Annotated Instructions")
 @tool
 @idasync
 @tool_timeout(90.0)
 def disasm(
-    addr: Annotated[str, "Function address or name to disassemble"],
+    addr: Annotated[str, "Function address (hex like '0x401000') or symbol name. If it lands inside a function, items are walked from here to the function end; otherwise instructions are decoded sequentially to the end of the segment."],
     max_instructions: Annotated[
-        int, "Max instructions per function (default: 5000, max: 50000)"
+        int, "Max instructions to return in this page (default: 5000, clamped to 1..50000). Use with `offset` to page large functions."
     ] = 5000,
-    offset: Annotated[int, "Skip first N instructions (default: 0)"] = 0,
+    offset: Annotated[int, "Skip the first N instructions before collecting (default: 0). Feed the cursor's `next` here to continue."] = 0,
     include_total: Annotated[
-        bool, "Compute total instruction count (default: false)"
+        bool, "Also count every instruction past the page to populate `total_instructions` (default: false; costs a full walk)."
     ] = False,
 ) -> DisasmResult:
-    """Disassemble function with offset/max_instructions pagination and optional total count."""
+    """WHAT: Disassembles a function (or a raw run of code) into per-line records carrying the address, instruction text, any label, inline comments, and resolved cross-references.
+
+WHEN TO USE: When you need exact instruction-level detail -- operands, addresses to set breakpoints on, or a function Hex-Rays cannot decompile. For understanding logic, prefer `decompile`.
+
+RETURNS: {addr, asm:{name,start_ea,segment,lines[],stack_frame?,return_type?,arguments?}, instruction_count, total_instructions?, cursor}. `cursor` is {next:N} when more remain or {done:true} at the end.
+
+PRO-TIP: The richer per-line `comments`/`refs`/`label` fields make this strictly more informative than plain text -- use the `refs` to pivot without a second lookup. PITFALL: leave `include_total=false` while paging hot; it forces a full second pass just to compute the grand total."""
 
     # Enforce max limit
     if max_instructions <= 0 or max_instructions > 50000:
@@ -937,16 +956,24 @@ def disasm(
 # ============================================================================
 
 
+@safety("READ")
+@title("Profile Functions With Metrics")
 @tool
 @idasync
 @tool_timeout(120.0)
 def func_profile(
     queries: Annotated[
         list[FuncProfileQuery] | FuncProfileQuery,
-        "Function profiling query (supports name/address filters + pagination)",
+        "One or more profile queries. Each: {addr:'*'|name|hex, filter?:wildcard-on-name, offset?, count?:<=1000, sort_by?:'addr'|'name'|'size', descending?, include_lists?, max_items?, include_prototype?}. `addr='*'` profiles every function in the database.",
     ],
 ) -> list[FuncProfileResult]:
-    """Profile functions with summary metrics and optional sampled details."""
+    """WHAT: Computes per-function summary metrics -- size, instruction/basic-block counts, caller/callee/string/constant counts, has_type, optional prototype -- across many functions at once, with filtering, sorting, and pagination.
+
+WHEN TO USE: To triage or rank a whole binary or a name-filtered subset (e.g. "biggest functions", "functions touching the most strings") before deep-diving individual ones with `decompile`/`analyze_batch`.
+
+RETURNS: list of {target, data:[FuncProfileItem...], next_offset, error}. With `include_lists=true` each item also carries the actual caller/callee/string/constant lists (each capped at `max_items` with a *_truncated flag); leave it false for pure counts.
+
+PRO-TIP: Use `addr='*'` + `sort_by='size'` + `descending=true` to surface the heavyweight functions first. PITFALL: `include_lists=true` over `addr='*'` is expensive -- narrow with `filter` or page with `count`/`offset`."""
     queries = normalize_dict_list(queries)
 
     results: list[dict] = []
@@ -1038,16 +1065,24 @@ def func_profile(
     return results
 
 
+@safety("READ")
+@title("Deep Analyze Functions (All Sections)")
 @tool
 @idasync
 @tool_timeout(120.0)
 def analyze_batch(
     queries: Annotated[
         list[AnalyzeBatchQuery] | AnalyzeBatchQuery,
-        "Comprehensive per-function analysis with selectable sections",
+        "One or more analysis queries. Each: {addr:name|hex (required)} plus toggles include_decompile/include_disasm/include_xrefs/include_callers/include_callees/include_strings/include_constants/include_basic_blocks/include_proto and the matching max_* caps. Every section except disasm defaults ON.",
     ],
 ) -> list[AnalyzeBatchResult]:
-    """Run comprehensive analysis over one or more target functions."""
+    """WHAT: One-shot, all-in-one read of a function -- prototype, decompilation, optional disassembly, xrefs to/from, callers, callees, referenced strings, constants, and basic blocks -- assembled per target with truncation flags.
+
+WHEN TO USE: The fastest way to fully understand a function (or a handful) without firing `decompile`, `xrefs_to`, `callees`, `callgraph` separately. Ideal as the first deep call once `func_profile` or a search has pointed you at a target.
+
+RETURNS: list of {target, addr, name, analysis:{...}, error}. Each section is null when its include_* toggle is off; lists carry *_count plus *_truncated so you know when a max_* cap clipped them.
+
+PRO-TIP: Turn OFF sections you do not need (e.g. include_disasm stays off by default; set include_basic_blocks=false) to slash token cost on large functions. PITFALL: `include_decompile` needs Hex-Rays -- a missing license shows up as `analysis.decompile_error`, not a top-level error."""
     queries = normalize_dict_list(queries)
 
     results: list[dict] = []
@@ -1230,13 +1265,22 @@ def analyze_batch(
 # ============================================================================
 
 
+@safety("READ")
+@title("Find Cross-References To Addresses")
 @tool
 @idasync
 def xrefs_to(
-    addrs: Annotated[list[str] | str, "Addresses or function names to find cross-references to (e.g. '0x11a9', 'check_pw', 'main')"],
-    limit: Annotated[int, "Max xrefs per address (default: 100, max: 1000)"] = 100,
+    addrs: Annotated[
+        list[str] | str, "One address/name or a list of them to find inbound cross-references to (e.g. '0x11a9', 'check_pw', 'main'). Resolves names and hex."],
+    limit: Annotated[int, "Max xrefs returned per target (default: 100, clamped to 1..1000)."] = 100,
 ) -> list[XrefsToResult]:
-    """Return xrefs to address(es) or named symbols, capped per target with truncation flag."""
+    """WHAT: Lists every location that references the given address(es) -- who calls a function, who reads/writes a global, who jumps to a label -- each tagged code/data and resolved to its enclosing function.
+
+WHEN TO USE: The go-to "who uses this?" lookup -- find callers of a function, all readers of a global/string, or usages of a constant address. For richer filtering/pagination use `xref_query`; for struct fields use `xrefs_to_field`.
+
+RETURNS: list of {addr, xrefs:[{addr,type,fn}], more, xref_count} (or {addr, xrefs:null, error}). `more=true` means the per-target `limit` clipped results; raise `limit` or switch to `xref_query` to page.
+
+PRO-TIP: Pass several targets at once to fan out usage discovery in a single call. PITFALL: this is inbound-only (refs TO the target). For outbound refs (what a function references) use `xref_query` with direction='from' or read `decompile`/`disasm` refs."""
     addrs = normalize_list_input(addrs)
 
     if limit <= 0 or limit > 1000:
@@ -1285,15 +1329,23 @@ def xrefs_to(
     return results
 
 
+@safety("READ")
+@title("Query Cross-References (Filtered)")
 @tool
 @idasync
 def xref_query(
     queries: Annotated[
         list[XrefQuery] | XrefQuery,
-        "Generic xref query with direction/type filters and pagination",
+        "One or more xref queries. Each: {addr:name|hex (required), direction?:'to'|'from'|'both', xref_type?:'any'|'code'|'data', offset?, count?:<=5000, include_fn?, dedup?, sort_by?:'addr'|'type', descending?}.",
     ],
 ) -> list[XrefQueryResult]:
-    """Query xrefs with direction/type filters and pagination."""
+    """WHAT: The full-featured cross-reference query -- inbound and/or outbound refs for an address, filtered by code/data, deduplicated, sorted, and paginated.
+
+WHEN TO USE: When the simple `xrefs_to` is not enough: you want OUTBOUND refs (direction='from'), both directions at once, only data vs only code refs, sorting, or paging through a hot symbol with thousands of references.
+
+RETURNS: list of {target, resolved_addr, direction, xref_type, data:[{direction,addr,from,to,type,fn?}], next_offset, total, error}. `next_offset` is non-null when more rows remain -- feed it back as `offset`.
+
+PRO-TIP: direction='from' turns this into "what does this function reference" without decompiling. PITFALL: `total` is the count after dedup/filter for the whole result, not just the returned page -- page with `offset`/`count` rather than cranking `count` to the max."""
     queries = normalize_dict_list(queries)
 
     results: list[dict] = []
@@ -1409,12 +1461,23 @@ def xref_query(
     return results
 
 
+@safety("READ")
+@title("Find Cross-References To Struct Field")
 @tool
 @idasync
 def xrefs_to_field(
-    queries: list[StructFieldQuery] | StructFieldQuery,
+    queries: Annotated[
+        list[StructFieldQuery] | StructFieldQuery,
+        "One or more {struct:'TypeName', field:'memberName'} pairs naming a struct member to find references to. The struct must already exist in the IDB type library.",
+    ],
 ) -> list[StructFieldXrefsResult]:
-    """Get cross-references to structure fields"""
+    """WHAT: Lists every code/data location that references a specific structure member, by resolving the member's type-id (tid) and walking its xrefs.
+
+WHEN TO USE: After a struct is recovered/declared, to find where one field is actually read or written -- e.g. which functions touch `Packet.opcode` or `Actor.hp`. This is field-granular; `xrefs_to` only works on addresses.
+
+RETURNS: list of {struct, field, xrefs:[{addr,type,fn}], message?, error?}. `message` ("No cross-references...") appears when the field exists but is unreferenced; `error` when the struct/field/type-library cannot be resolved.
+
+PRO-TIP: Pair with `read_struct`/`type_inspect` to confirm the member name first -- the lookup is exact on `struct.field`. PITFALL: only members IDA has applied as offsets in code produce xrefs; a field never accessed via the struct type returns empty even if the raw address is used elsewhere."""
     if isinstance(queries, dict):
         queries = [queries]
 
@@ -1510,13 +1573,21 @@ def xrefs_to_field(
 # ============================================================================
 
 
+@safety("READ")
+@title("List Functions Called By Target")
 @tool
 @idasync
 def callees(
-    addrs: Annotated[list[str] | str, "Function addresses or names to get callees for (e.g. '0x123e', 'main')"],
-    limit: Annotated[int, "Max callees per function (default: 200, max: 500)"] = 200,
+    addrs: Annotated[list[str] | str, "One function address/name or a list (e.g. '0x123e', 'main') whose call targets you want."],
+    limit: Annotated[int, "Max unique callees returned per function (default: 200, clamped to 1..500)."] = 200,
 ) -> list[CalleesResult]:
-    """Return unique callees per function, capped by limit."""
+    """WHAT: Scans a function's instructions for call sites and returns the unique set of targets it calls, each tagged 'internal' (a known function in the IDB) or 'external' (import/thunk).
+
+WHEN TO USE: To see a single function's immediate outgoing calls -- its direct dependencies. For multi-level/depth traversal use `callgraph`; for the reverse (who calls this) use `xrefs_to`.
+
+RETURNS: list of {addr, callees:[{addr,name,type}], more} (or {addr, callees:null, error}). `more=true` means the `limit` clipped the set.
+
+PRO-TIP: The 'external' tag quickly surfaces which API/imports a function leans on (e.g. recv/decrypt). PITFALL: only direct, statically-resolvable call targets are found -- indirect calls through a register/vtable will not appear; recover those via `decompile` or `analyze_batch`."""
     addrs = normalize_list_input(addrs)
 
     if limit <= 0 or limit > 500:
@@ -1592,16 +1663,24 @@ def callees(
 # ============================================================================
 
 
+@safety("READ")
+@title("Search Binary For Byte Pattern")
 @tool
 @idasync
 def find_bytes(
     patterns: Annotated[
-        list[str] | str, "Byte patterns to search for (e.g. '48 8B ?? ??')"
+        list[str] | str, "One or more space-separated hex byte patterns; '??' is a wildcard byte (e.g. '48 8B ?? ??', 'E8 ?? ?? ?? ??'). Searches the whole address range min_ea..max_ea."
     ],
-    limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
+    limit: Annotated[int, "Max matches per pattern (default: 1000, clamped to 1..10000)."] = 1000,
+    offset: Annotated[int, "Skip the first N matches before collecting (default: 0). Feed the cursor's `next` here to continue."] = 0,
 ) -> list[FindBytesResult]:
-    """Search byte patterns (supports ??) with offset/limit pagination."""
+    """WHAT: Byte-signature search across the entire binary with masked-wildcard support, returning the address of each match with offset/limit pagination.
+
+WHEN TO USE: To locate code/data by a known byte signature -- a call sequence, a prologue, a magic constant, or a relocatable pattern where some bytes vary ('??'). For instruction-semantic matching (mnemonic + operand) use `insn_query`; for values/strings/refs use `find`.
+
+RETURNS: list of {pattern, matches:[hexaddr...], n, cursor, error?}. `cursor` is {next:N} for more, {done:true} when exhausted, or {next:N, cancelled:true} if a deadline interrupted the scan (partial results -- resume from `next`).
+
+PRO-TIP: Mask out displacement/immediate bytes with '??' to make a signature survive relocation/recompiles. PITFALL: a `cancelled` cursor means the scan was cut short, not finished -- do not treat the result as the complete match set; re-issue from the cursor."""
     patterns = normalize_list_input(patterns)
 
     # Enforce max limit
@@ -1689,16 +1768,24 @@ def find_bytes(
 # ============================================================================
 
 
+@safety("READ")
+@title("Get Function Basic Blocks (CFG)")
 @tool
 @idasync
 def basic_blocks(
-    addrs: Annotated[list[str] | str, "Function addresses or names to get basic blocks for (e.g. '0x123e', 'main')"],
+    addrs: Annotated[list[str] | str, "One function address/name or a list (e.g. '0x123e', 'main') whose control-flow graph blocks you want."],
     max_blocks: Annotated[
-        int, "Max basic blocks per function (default: 1000, max: 10000)"
+        int, "Max basic blocks returned per function (default: 1000, clamped to 1..10000)."
     ] = 1000,
-    offset: Annotated[int, "Skip first N blocks (default: 0)"] = 0,
+    offset: Annotated[int, "Skip the first N blocks before collecting (default: 0). Feed the cursor's `next` here to continue."] = 0,
 ) -> list[BasicBlocksResult]:
-    """Return function CFG blocks with offset/max_blocks pagination."""
+    """WHAT: Returns a function's control-flow graph as basic blocks -- each with start/end address, size, block type, and its successor/predecessor block addresses -- with pagination.
+
+WHEN TO USE: To reason about control flow explicitly: branch structure, loop bodies, fall-through vs jump targets, or to drive your own CFG analysis. For call-level structure use `callgraph`; for the linear instruction listing use `disasm`.
+
+RETURNS: list of {addr, blocks:[BasicBlock...], count, total_blocks, cursor} (or {addr, error, blocks:[], cursor}). `total_blocks` is the full CFG size; `cursor` is {next:N} or {done:true}.
+
+PRO-TIP: Use the successors/predecessors lists to walk the graph and identify loop back-edges without re-decoding instructions. PITFALL: `count` is the page size, `total_blocks` is the whole function -- compare them before assuming you have the full CFG."""
     addrs = normalize_list_input(addrs)
 
     # Enforce max limit
@@ -1738,7 +1825,7 @@ def basic_blocks(
 
             # Apply pagination
             total_blocks = len(all_blocks)
-            blocks = all_blocks[offset : offset + max_blocks]
+            blocks = all_blocks[offset: offset + max_blocks]
             more = offset + max_blocks < total_blocks
 
             results.append(
@@ -1769,19 +1856,29 @@ def basic_blocks(
 # ============================================================================
 
 
+@safety("READ")
+@title("Find Strings, Immediates Or Refs")
 @tool
 @idasync
 def find(
     type: Annotated[
-        str, "Search type: 'string', 'immediate', 'data_ref', or 'code_ref'"
+        str,
+        "What kind of search: 'string' (raw UTF-8 substring across the whole image), 'immediate' (an integer used as an immediate operand, executable segments only), 'data_ref' (data references to an address), or 'code_ref' (code references to an address).",
     ],
     targets: Annotated[
-        list[str | int] | str | int, "Search targets (strings, integers, or addresses)"
+        list[str | int] | str | int,
+        "One target or a list. For 'string': the text. For 'immediate': the integer (decimal or '0x..' string). For 'data_ref'/'code_ref': the address/name being referenced.",
     ],
-    limit: Annotated[int, "Max matches per target (default: 1000, max: 10000)"] = 1000,
-    offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
+    limit: Annotated[int, "Max matches per target (default: 1000, clamped to 1..10000)."] = 1000,
+    offset: Annotated[int, "Skip the first N matches before collecting (default: 0). Feed the cursor's `next` here to continue."] = 0,
 ) -> list[FindResult]:
-    """Search strings/immediates/refs for targets with offset/limit pagination."""
+    """WHAT: A four-mode locator -- find a UTF-8 string in the image, find where an integer appears as an instruction immediate, or find the data/code references to a given address -- all with offset/limit pagination.
+
+WHEN TO USE: Broad "where does X appear?" discovery. Use 'immediate' to hunt magic numbers/opcodes/constants in code, 'string' for raw text not yet typed as a strlit, and 'data_ref'/'code_ref' as a quick reference lookup (richer filtering lives in `xref_query`).
+
+RETURNS: list of {query, matches:[hexaddr...], count, cursor, error?}. `cursor` is {done:true}, {next:N}, or {next:N, cancelled:true} when a deadline cut a scan short.
+
+PRO-TIP: 'immediate' tries both 4- and 8-byte encodings and back-resolves to the instruction start, so a opcode constant is found even mid-instruction. PITFALL: 'string' is a raw byte substring, not the strings list -- it matches bytes regardless of typing, and a `cancelled` cursor means the scan is incomplete."""
     if not isinstance(targets, list):
         targets = [targets]
 
@@ -2160,15 +2257,23 @@ def _scan_insn_ranges(
     return matches, more, scanned, truncated, next_start
 
 
+@safety("READ")
+@title("Query Instructions By Mnemonic/Operand")
 @tool
 @idasync
 def insn_query(
     queries: Annotated[
         list[InsnPattern] | InsnPattern,
-        "Instruction query with mnemonic/operand filters and scoped scan",
+        "One or more instruction patterns. Each: {mnem?:'call'|'mov'|'*', op0?/op1?/op2?:int operand value, op_any?:int matched against any operand} + a scope (func | segment | start[/end]) and offset?/count?/max_scan_insns?/allow_broad?/include_fn?/include_disasm?.",
     ],
 ) -> list[InsnQueryResult]:
-    """Query instructions with mnemonic/operand filters and scoped scans."""
+    """WHAT: Semantic instruction search -- decodes instructions in a scoped range and matches on mnemonic and/or specific operand values (positional op0/op1/op2 or op_any), returning matching addresses.
+
+WHEN TO USE: When you need instruction meaning, not raw bytes -- e.g. "every `call` in this function", "every instruction with immediate 0x539", "all `mov` whose op1 is this global". Complements `find_bytes` (byte signatures) and `find type='immediate'` (immediate-only).
+
+RETURNS: list of {query, ranges, matches:[{addr,disasm?,fn?}], count, cursor, scanned, truncated, next_start, error?}. `truncated=true` with a `next_start` means the `max_scan_insns` budget was hit -- resume the scan from `next_start`.
+
+PRO-TIP: Always scope it (func/segment/start..end); the scan decodes every instruction, so a tight range is far cheaper and avoids needing `allow_broad`. PITFALL: a whole-binary scan requires `allow_broad=true` and can hit `max_scan_insns` -- distinguish `truncated` (scan budget) from `cursor.next` (result paging)."""
     queries = normalize_dict_list(queries)
 
     results: list[dict] = []
@@ -2279,15 +2384,24 @@ def insn_query(
 # ============================================================================
 
 
+@safety("READ")
+@title("Export Functions (JSON/Header/Protos)")
 @tool
 @idasync
 def export_funcs(
-    addrs: Annotated[list[str] | str, "Function addresses or names to export (e.g. '0x123e', 'main')"],
+    addrs: Annotated[list[str] | str, "One function address/name or a list (e.g. '0x123e', 'main') to export."],
     format: Annotated[
-        str, "Export format: json (default), c_header, or prototypes"
+        str,
+        "Output format: 'json' (default; full per-function dump with asm, decompilation, comments, xrefs), 'c_header' (a single string of `prototype;` lines), or 'prototypes' (name+prototype pairs only).",
     ] = "json",
 ) -> ExportFuncsJsonResult | ExportFuncsHeaderResult | ExportFuncsPrototypesResult:
-    """Export function data for addresses in json/c_header/prototypes formats."""
+    """WHAT: Bulk-exports one or more functions in a chosen shape -- a rich JSON record (prototype, size, comments, assembly, decompilation, xrefs), a synthesized C header of prototypes, or a compact prototype list.
+
+WHEN TO USE: To capture analysis results for many functions in one call -- e.g. snapshot a subsystem to JSON, or generate a `.h` of recovered signatures to import elsewhere. For interactive single-function reading prefer `decompile`/`analyze_batch`.
+
+RETURNS: shape depends on `format`: {format:'json', functions:[...]}, {format:'c_header', content:'...'}, or {format:'prototypes', functions:[{name,prototype}]}. In JSON, per-function failures appear as {addr, error} entries.
+
+PRO-TIP: Use 'prototypes'/'c_header' for a cheap signature survey; only reach for 'json' when you actually need the asm/decompile/xref payload (it is the heaviest). PITFALL: 'c_header'/'prototypes' silently skip functions with no recovered prototype -- a short header may just mean missing types, not missing functions."""
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -2346,24 +2460,32 @@ def export_funcs(
 # ============================================================================
 
 
+@safety("READ")
+@title("Build Bounded Call Graph")
 @tool
 @idasync
 def callgraph(
     roots: Annotated[
-        list[str] | str, "Root function addresses to start call graph traversal from"
+        list[str] | str, "One root function address/name or a list to start the outward (callees) traversal from."
     ],
-    max_depth: Annotated[int, "Maximum depth for call graph traversal"] = 5,
+    max_depth: Annotated[int, "How many call levels to descend from each root (default: 5; 0 = root only). Clamped to >=0."] = 5,
     max_nodes: Annotated[
-        int, "Max nodes across the graph (default: 1000, max: 100000)"
+        int, "Hard cap on total nodes in a graph (default: 1000, clamped to 1..100000). Hitting it sets truncated + limit_reason='nodes'."
     ] = 1000,
     max_edges: Annotated[
-        int, "Max edges across the graph (default: 5000, max: 200000)"
+        int, "Hard cap on total edges in a graph (default: 5000, clamped to 1..200000). Hitting it sets truncated + limit_reason='edges'."
     ] = 5000,
     max_edges_per_func: Annotated[
-        int, "Max edges per function (default: 200, max: 5000)"
+        int, "Cap on outgoing edges recorded per function (default: 200, clamped to 1..5000). Hitting it sets per_func_capped (a soft, local cap, not whole-graph truncation)."
     ] = 200,
 ) -> list[CallGraphResult]:
-    """Build bounded callgraph from roots with depth/node/edge limits."""
+    """WHAT: Builds a bounded, breadth-limited call graph by descending callees from each root, returning nodes (addr, name, depth) and call edges, with explicit limits so it never explodes.
+
+WHEN TO USE: To map how a function reaches a subsystem -- the transitive callee tree several levels deep. For a single level of callees use `callees`; for callers use `xrefs_to`.
+
+RETURNS: list of {root, nodes, edges, max_depth, truncated, limit_reason, per_func_capped, ...caps} (or {root, error, nodes:[], edges:[]}). Check `truncated`/`limit_reason` to know whether a global cap clipped the graph.
+
+PRO-TIP: Start with a small `max_depth` (2-3) and widen only if the graph is not yet truncated -- it is the cheapest knob. PITFALL: `per_func_capped=true` (from `max_edges_per_func`) is a per-node soft cap that can silently drop edges without setting `truncated`; raise it if a fan-out-heavy function looks under-connected."""
     roots = normalize_list_input(roots)
     if max_depth < 0:
         max_depth = 0

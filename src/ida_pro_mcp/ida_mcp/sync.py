@@ -1,13 +1,15 @@
-import logging
-import queue
 import functools
+import logging
 import os
+import queue
 import sys
 import threading
 import time
-import idaapi
+
 import ida_kernwin
+import idaapi
 import idc
+
 from .rpc import McpToolError
 from .zeromcp.jsonrpc import get_current_cancel_event, RequestCancelledError
 
@@ -41,7 +43,6 @@ logger = logging.getLogger(__name__)
 _TOOL_TIMEOUT_ENV = "IDA_MCP_TOOL_TIMEOUT_SEC"
 _DEFAULT_TOOL_TIMEOUT_SEC = 60.0
 
-
 # Thread-local: while a synchronized tool body is running, holds the monotonic
 # deadline (or None if no timeout). Tools can read this to self-monitor and
 # return partial results gracefully — useful when sync.py's Timer-fired
@@ -69,7 +70,12 @@ def _get_tool_timeout_seconds() -> float:
         return _DEFAULT_TOOL_TIMEOUT_SEC
 
 
-call_stack = queue.LifoQueue()
+# Thread-local re-entrancy guard. The previous implementation used a single
+# global LifoQueue shared across all requests, so concurrent @idasync calls
+# on different worker threads collided and spuriously raised "Call stack is
+# not empty". Re-entrancy is a per-thread property (a tool's ff() invoking
+# another @idasync on the same thread), so we track depth per-thread instead.
+_call_depth_state = threading.local()
 
 # Thread-local: while a synchronized tool body is running, holds the batch
 # value that was in effect *before* the sync wrapper bumped it to 1. Tools
@@ -108,18 +114,17 @@ def _sync_wrapper(ff, keep_batch=False):
     res_container = queue.Queue()
 
     def runned():
-        if not call_stack.empty():
-            # Non-blocking: a concurrent reentrant @idasync call from
-            # within another tool's ff() on the same main thread may
-            # have drained the queue between empty() and get().
-            try:
-                last_func_name = call_stack.get_nowait()
-            except queue.Empty:
-                last_func_name = "<empty>"
-            error_str = f"Call stack is not empty while calling the function {ff.__name__} from {last_func_name}"
+        # Re-entrancy guard, per-thread. depth > 0 means this thread is
+        # already inside an @idasync body and ff() recursively entered
+        # another one — that is the case we reject. Concurrent @idasync
+        # calls on *different* worker threads each have their own depth
+        # counter and no longer collide.
+        depth = getattr(_call_depth_state, "depth", 0)
+        if depth != 0:
+            error_str = f"Call stack is not empty while calling the function {ff.__name__} (depth {depth})"
             raise IDASyncError(error_str)
 
-        call_stack.put((ff.__name__))
+        _call_depth_state.depth = depth + 1
         # Enable batch mode for all synchronized operations
         old_batch = idc.batch(1)
         prev_pre_call = getattr(_sync_state, "pre_call_batch", None)
@@ -134,14 +139,7 @@ def _sync_wrapper(ff, keep_batch=False):
             if not (completed and keep_batch):
                 idc.batch(old_batch)
             _sync_state.pre_call_batch = prev_pre_call
-            # Non-blocking: a reentrant @idasync invoked synchronously
-            # inside ff() may have already popped our entry. Default
-            # block=True would freeze the IDA main thread on an empty
-            # queue and hang every subsequent @idasync call.
-            try:
-                call_stack.get_nowait()
-            except queue.Empty:
-                pass
+            _call_depth_state.depth = depth
 
     idaapi.execute_sync(runned, idaapi.MFF_WRITE)
     res = res_container.get()
@@ -197,6 +195,7 @@ def sync_wrapper(
                 def _fire_native_cancel():
                     cancel_fired_at[0] = time.monotonic()
                     ida_kernwin.set_cancelled()
+
                 native_timer = threading.Timer(timeout, _fire_native_cancel)
                 native_timer.daemon = True
                 native_timer.start()
@@ -218,12 +217,18 @@ def sync_wrapper(
             # Expose the deadline so tool bodies can self-monitor and
             # return partial results gracefully (independent of the Timer).
             _deadline_state.deadline = deadline
-            old_profile = sys.getprofile()
-            sys.setprofile(profilefunc)
+            # Only pay the per-call profiler overhead when a deadline or a
+            # cancel token is actually armed; otherwise there is nothing for
+            # profilefunc to enforce.
+            profiler_armed = deadline is not None or cancel_event is not None
+            old_profile = sys.getprofile() if profiler_armed else None
+            if profiler_armed:
+                sys.setprofile(profilefunc)
             try:
                 return ff()
             finally:
-                sys.setprofile(old_profile)
+                if profiler_armed:
+                    sys.setprofile(old_profile)
                 if native_timer is not None:
                     native_timer.cancel()
                 # Sticky flag: clear unconditionally so the next tool starts

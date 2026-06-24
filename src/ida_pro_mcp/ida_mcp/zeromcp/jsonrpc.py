@@ -1,12 +1,13 @@
-import json
 import inspect
+import json
 import logging
 import os
 import threading
 import time
 import traceback
-from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, is_typeddict
 from types import UnionType
+from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, \
+    is_typeddict
 
 JsonRpcId: TypeAlias = str | int | float | None
 
@@ -76,22 +77,26 @@ _LOG_SKIP_METHODS = {
 }
 JsonRpcParams: TypeAlias = dict[str, Any] | list[Any] | None
 
+
 class JsonRpcRequest(TypedDict):
     jsonrpc: str
     method: str
     params: NotRequired[JsonRpcParams]
     id: NotRequired[JsonRpcId]
 
+
 class JsonRpcError(TypedDict):
     code: int
     message: str
     data: NotRequired[Any]
+
 
 class JsonRpcResponse(TypedDict):
     jsonrpc: str
     result: NotRequired[Any]
     error: NotRequired[JsonRpcError]
     id: JsonRpcId
+
 
 class JsonRpcException(Exception):
     def __init__(self, code: int, message: str, data: Any = None):
@@ -104,6 +109,7 @@ class RequestCancelledError(Exception):
     """Base class for request cancellation errors (LSP error code -32800)."""
     pass
 
+
 class JsonRpcRegistry:
     def __init__(self):
         self.methods: dict[str, Callable] = {}
@@ -111,7 +117,7 @@ class JsonRpcRegistry:
         self.redact_exceptions = False
 
     def method(self, func: Callable, name: str | None = None) -> Callable:
-        self.methods[name or func.__name__] = func # type: ignore
+        self.methods[name or func.__name__] = func  # type: ignore
         return func
 
     def dispatch(self, request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
@@ -287,7 +293,7 @@ class JsonRpcRegistry:
                     type_matched = False
 
                     # HACK: Try to parse str as JSON for non-str unions
-                    # 
+                    #
                     # When JSON schema says one field is "object", Claude Code
                     # (and maybe other MCP clients) can't (or won't) detect
                     # that the field is actually a dict/list. Instead, they
@@ -296,7 +302,7 @@ class JsonRpcRegistry:
                     # To work around this, if the expected type is a Union
                     # that does not include str, and the provided value is
                     # a str, we try to parse it as JSON first.
-                    if type(str) not in args and isinstance(value, str):
+                    if str not in args and isinstance(value, str):
                         try:
                             value = json.loads(value)
                         except json.JSONDecodeError:

@@ -13,6 +13,7 @@ import idaapi
 import idautils
 import idc
 
+from . import compat
 from .rpc import resource
 from .sync import idasync
 from .utils import (
@@ -23,7 +24,6 @@ from .utils import (
     get_image_size,
     parse_address,
 )
-from . import compat
 
 
 # ============================================================================

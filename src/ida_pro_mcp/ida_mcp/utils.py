@@ -634,6 +634,11 @@ def read_bytes_bss_safe(ea: int, size: int) -> bytes:
     that here so reads of globals in .bss return the real zero-initialized
     value instead of 0xff garbage.
     """
+    if size <= 0:
+        return b""
+    bulk = ida_bytes.get_bytes(ea, size)
+    if bulk is not None and len(bulk) == size:
+        return bytes(bulk)
     out = bytearray(size)
     for i in range(size):
         if ida_bytes.is_loaded(ea + i):
@@ -798,82 +803,82 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT8)
     # 16-bit integers
     elif type_name in (
-        "int16",
-        "__int16",
-        "int16_t",
-        "short",
-        "short int",
-        "signed short",
-        "signed short int",
+            "int16",
+            "__int16",
+            "int16_t",
+            "short",
+            "short int",
+            "signed short",
+            "signed short int",
     ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT16)
     elif type_name in (
-        "uint16",
-        "__uint16",
-        "uint16_t",
-        "unsigned short",
-        "unsigned short int",
-        "word",
-        "WORD",
+            "uint16",
+            "__uint16",
+            "uint16_t",
+            "unsigned short",
+            "unsigned short int",
+            "word",
+            "WORD",
     ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT16)
     # 32-bit integers
     elif type_name in (
-        "int32",
-        "__int32",
-        "int32_t",
-        "int",
-        "signed int",
-        "long",
-        "long int",
-        "signed long",
-        "signed long int",
+            "int32",
+            "__int32",
+            "int32_t",
+            "int",
+            "signed int",
+            "long",
+            "long int",
+            "signed long",
+            "signed long int",
     ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT32)
     elif type_name in (
-        "uint32",
-        "__uint32",
-        "uint32_t",
-        "unsigned int",
-        "unsigned long",
-        "unsigned long int",
-        "dword",
-        "DWORD",
+            "uint32",
+            "__uint32",
+            "uint32_t",
+            "unsigned int",
+            "unsigned long",
+            "unsigned long int",
+            "dword",
+            "DWORD",
     ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT32)
     # 64-bit integers
     elif type_name in (
-        "int64",
-        "__int64",
-        "int64_t",
-        "signed __int64",
-        "long long",
-        "long long int",
-        "signed long long",
-        "signed long long int",
+            "int64",
+            "__int64",
+            "int64_t",
+            "signed __int64",
+            "long long",
+            "long long int",
+            "signed long long",
+            "signed long long int",
     ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT64)
     elif type_name in (
-        "uint64",
-        "__uint64",
-        "uint64_t",
-        "unsigned int64",
-        "unsigned __int64",
-        "unsigned long long",
-        "unsigned long long int",
-        "qword",
-        "QWORD",
+            "uint64",
+            "__uint64",
+            "uint64_t",
+            "unsigned int64",
+            "unsigned __int64",
+            "unsigned long long",
+            "unsigned long long int",
+            "qword",
+            "QWORD",
     ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT64)
     # 128-bit integers
     elif type_name in ("int128", "__int128", "int128_t", "__int128_t"):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT128)
     elif type_name in (
-        "uint128",
-        "__uint128",
-        "uint128_t",
-        "__uint128_t",
-        "unsigned int128",
+            "uint128",
+            "__uint128",
+            "uint128_t",
+            "__uint128_t",
+            "unsigned int128",
     ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT128)
     # Floating point types
@@ -917,7 +922,7 @@ def paginate(data: list[T], offset: int, count: int) -> Page[T]:
     if next_offset >= len(data):
         next_offset = None
     return {
-        "data": data[offset : offset + count],
+        "data": data[offset: offset + count],
         "next_offset": next_offset,
     }
 
@@ -933,7 +938,7 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
     if pattern.startswith("/") and pattern.count("/") >= 2:
         last_slash = pattern.rfind("/")
         body = pattern[1:last_slash]
-        flag_str = pattern[last_slash + 1 :]
+        flag_str = pattern[last_slash + 1:]
 
         flags = 0
         for ch in flag_str:
@@ -1375,6 +1380,29 @@ def extract_function_constants(ea: int) -> list[dict]:
 # ============================================================================
 
 
+def _prune_spill_dir(spill_dir: str, max_files: int = 32) -> None:
+    """Keep at most `max_files` spill files, deleting the oldest first."""
+    try:
+        entries = [
+            os.path.join(spill_dir, name)
+            for name in os.listdir(spill_dir)
+            if name.startswith("ida_mcp_") and name.endswith(".json")
+        ]
+    except OSError:
+        return
+    if len(entries) < max_files:
+        return
+    try:
+        entries.sort(key=lambda p: os.path.getmtime(p))
+    except OSError:
+        return
+    for stale in entries[: len(entries) - max_files + 1]:
+        try:
+            os.unlink(stale)
+        except OSError:
+            pass
+
+
 def handle_large_output(result: Any, line_threshold: int = 3000) -> Any:
     """
     Handle potentially large outputs by writing to temp file if needed.
@@ -1391,8 +1419,11 @@ def handle_large_output(result: Any, line_threshold: int = 3000) -> Any:
         line_count = serialized.count("\n") + 1
 
         if line_count > line_threshold:
+            spill_dir = os.path.join(tempfile.gettempdir(), "ida_mcp_large_output")
+            os.makedirs(spill_dir, exist_ok=True)
+            _prune_spill_dir(spill_dir, max_files=32)
             fd, temp_path = tempfile.mkstemp(
-                suffix=".json", prefix="ida_mcp_", text=True
+                suffix=".json", prefix="ida_mcp_", dir=spill_dir, text=True
             )
             try:
                 with os.fdopen(fd, "w") as f:

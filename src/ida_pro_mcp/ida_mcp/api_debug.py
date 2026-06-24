@@ -11,16 +11,16 @@ This module provides comprehensive debugging functionality including:
 import os
 from typing import Annotated, NotRequired, TypedDict
 
-import idc
 import ida_dbg
 import ida_entry
-import ida_idd
 import ida_idaapi
+import ida_idd
 import ida_kernwin
 import ida_name
 import idaapi
+import idc
 
-from .rpc import tool, unsafe, ext
+from .rpc import tool, safety, ext, title
 from .sync import idasync, keep_batch, get_pre_call_batch, IDAError
 from .utils import (
     RegisterValue,
@@ -347,6 +347,65 @@ class _DbgStartBatchHook(ida_dbg.DBG_Hooks):
 
 _dbg_start_batch_hook: _DbgStartBatchHook | None = None
 
+_CONTINUE_WAIT_POLL_MS = 100
+
+
+def _continue_and_wait(timeout_ms: int, *, target_ea: int | None = None) -> dict:
+    """Resume the debuggee and poll wait_for_next_event until it suspends again.
+
+    Pumps wait_for_next_event in poll-sized slices until the process suspends,
+    exits, or the timeout elapses. When target_ea is given, run_to that address;
+    otherwise continue_process. Returns {status, stopped_ea, elapsed_ms} where
+    status is one of "suspended", "exited", "timeout", "not_running", or
+    "failed_to_resume".
+    """
+    import time as _time
+
+    if not ida_dbg.is_debugger_on():
+        return {"status": "not_running", "stopped_ea": None, "elapsed_ms": 0}
+
+    if ida_dbg.get_process_state() != ida_dbg.DSTATE_SUSP:
+        return {"status": "not_running", "stopped_ea": None, "elapsed_ms": 0}
+
+    started_at = _time.monotonic()
+
+    if target_ea is not None:
+        resumed = idaapi.run_to(target_ea)
+    else:
+        resumed = idaapi.continue_process()
+
+    if not resumed:
+        elapsed = round((_time.monotonic() - started_at) * 1000, 2)
+        return {"status": "failed_to_resume", "stopped_ea": None, "elapsed_ms": elapsed}
+
+    deadline = started_at + max(0, timeout_ms) / 1000.0
+    while True:
+        remaining_ms = (deadline - _time.monotonic()) * 1000.0
+        if remaining_ms <= 0:
+            break
+        poll_ms = int(min(_CONTINUE_WAIT_POLL_MS, remaining_ms))
+        if poll_ms <= 0:
+            poll_ms = 1
+        ida_dbg.wait_for_next_event(
+            ida_dbg.WFNE_ANY | ida_dbg.WFNE_SUSP | ida_dbg.WFNE_SILENT,
+            poll_ms,
+        )
+        state = ida_dbg.get_process_state()
+        if state == ida_dbg.DSTATE_SUSP:
+            elapsed = round((_time.monotonic() - started_at) * 1000, 2)
+            ip = ida_dbg.get_ip_val()
+            return {
+                "status": "suspended",
+                "stopped_ea": hex(ip) if ip is not None else None,
+                "elapsed_ms": elapsed,
+            }
+        if state == ida_dbg.DSTATE_NOTASK or not ida_dbg.is_debugger_on():
+            elapsed = round((_time.monotonic() - started_at) * 1000, 2)
+            return {"status": "exited", "stopped_ea": None, "elapsed_ms": elapsed}
+
+    elapsed = round((_time.monotonic() - started_at) * 1000, 2)
+    return {"status": "timeout", "stopped_ea": None, "elapsed_ms": elapsed}
+
 
 def _arm_dbg_start_batch_hook(restore_batch: int) -> None:
     """Install the batch-restore hook before start_process is invoked."""
@@ -366,19 +425,30 @@ def _arm_dbg_start_batch_hook(restore_batch: int) -> None:
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Start Debugger Session")
 @tool
 @idasync
 @keep_batch
 def dbg_start() -> DebugControlResult:
-    """Start debugger session for current target.
+    """Launch the configured target under IDA's debugger and report its state.
 
-    Requires the user to have selected a debugger (Debugger -> Select debugger)
-    and configured the target (executable path, arguments, attach process,
-    remote host, etc.). If this call fails, do not retry repeatedly. Stop,
-    explain to the user that debugging is not yet configured, and ask them
-    to set up the debugger and dismiss any IDA dialogs (e.g. "matching
-    executable names") before trying again.
+    WHAT: Starts a fresh debug session for the currently configured target. If
+    no breakpoints exist yet, soft breakpoints are auto-planted at every entry
+    point so the process suspends at startup instead of running away. Returns
+    once the debugger has actually come up (state is trusted over start_process's
+    unreliable return code), batch mode auto-handles any startup dialogs.
+    WHEN-TO-USE: Only when the user has already selected a debugger
+    (Debugger -> Select debugger) and configured the target (executable path /
+    arguments / attach pid / remote host). For confirming a static hypothesis
+    against the live process.
+    RETURNS: A DebugControlResult with state ("running"/"suspended"), started=True,
+    and ip (current instruction pointer) when suspended.
+    PITFALL: If this fails, do NOT retry in a loop -- stop and ask the user to
+    configure the debugger and dismiss any IDA dialogs (e.g. "matching executable
+    names") first. In a clean-room RE workflow the maintainer usually F9-launches
+    the client manually and you drive the existing session; avoid dbg_start unless
+    explicitly asked to start it.
     """
     if len(list_breakpoints()) == 0:
         for i in range(ida_entry.get_entry_qty()):
@@ -451,20 +521,43 @@ def dbg_start() -> DebugControlResult:
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("Get Debugger Status")
 @tool
 @idasync
 def dbg_status() -> DebugControlResult:
-    """Return debugger lifecycle state and current IP if suspended."""
+    """Report whether a debug session is live and where it is stopped.
+
+    WHAT: Queries the debugger lifecycle without changing it -- returns the
+    process state ("not_running"/"running"/"suspended") plus the current
+    instruction pointer (ip) when the process is suspended.
+    WHEN-TO-USE: Before any other dbg_* call to confirm a session is active and
+    suspended, or after a continue/step to poll whether the process has come to
+    rest again.
+    RETURNS: A DebugControlResult: {state, running?/suspended?, ip?}.
+    PRO-TIP: Most inspection tools (dbg_regs*, dbg_stacktrace) require the
+    process to be SUSPENDED; check state=="suspended" here first to avoid a
+    "running; wait until it suspends" error.
+    """
     return _get_debug_state_result()
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Exit Debugger Session")
 @tool
 @idasync
 def dbg_exit() -> DebugControlResult:
-    """Terminate active debugger session."""
+    """Terminate the live debuggee and tear down the debug session.
+
+    WHAT: Kills the running/suspended process and ends the debugger session.
+    WHEN-TO-USE: When you are finished with live confirmation and want to return
+    IDA to static-analysis mode, or to recover from a wedged session.
+    RETURNS: {exited: True, state: "not_running"} on success.
+    PITFALL: This destroys all live state (registers, memory, stack) -- capture
+    anything you still need first. Requires an active session; errors if none is
+    running.
+    """
     dbg_ensure_active()
     if idaapi.exit_process():
         return {"exited": True, "state": "not_running"}
@@ -472,11 +565,24 @@ def dbg_exit() -> DebugControlResult:
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Continue Execution")
 @tool
 @idasync
 def dbg_continue() -> DebugControlResult:
-    """Resume execution in active debugger session."""
+    """Resume the suspended debuggee and let it run freely.
+
+    WHAT: Releases the process from its current breakpoint/step stop. The call
+    returns immediately after resuming -- it does NOT block until the next stop.
+    WHEN-TO-USE: After planting a breakpoint (dbg_add_bp) on an event of interest
+    (a recv path, an opcode handler, an asset load), to run until that breakpoint
+    fires.
+    RETURNS: A DebugControlResult with continued=True and the post-resume state
+    (typically "running").
+    PRO-TIP: Because this returns while the process is still running, poll
+    dbg_status until state=="suspended" before reading registers/memory. Requires
+    a SUSPENDED session to start from.
+    """
     dbg_ensure_suspended()
     if idaapi.continue_process():
         result = _get_debug_state_result()
@@ -486,13 +592,28 @@ def dbg_continue() -> DebugControlResult:
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Run To Address")
 @tool
 @idasync
 def dbg_run_to(
-    addr: Annotated[str, "Target execution address (hex or decimal)"],
+    addr: Annotated[
+        str, "Target execution address to run to, hex (0x..) or decimal"
+    ],
 ) -> DebugControlResult:
-    """Run debuggee until target address is reached."""
+    """Resume execution until the instruction pointer reaches a one-shot address.
+
+    WHAT: Sets a temporary run-to-cursor target at `addr` and resumes. Like
+    dbg_continue, it returns right after resuming rather than blocking until the
+    target is hit.
+    WHEN-TO-USE: To reach a specific instruction once (e.g. land just past a
+    decrypt loop, or at a dispatch site) without leaving a persistent breakpoint
+    behind via dbg_add_bp.
+    RETURNS: A DebugControlResult with continued=True and the post-resume state.
+    PITFALL: The target is one-shot and only fires if execution actually reaches
+    it -- if the path is never taken the process runs on. Poll dbg_status for
+    "suspended" before inspecting. Requires a SUSPENDED session.
+    """
     dbg_ensure_suspended()
     ea = parse_address(addr)
     if idaapi.run_to(ea):
@@ -503,11 +624,22 @@ def dbg_run_to(
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Step Into")
 @tool
 @idasync
 def dbg_step_into() -> DebugControlResult:
-    """Execute one instruction, stepping into calls."""
+    """Execute a single instruction, descending into any call.
+
+    WHAT: Single-steps one machine instruction; if it is a call, execution stops
+    at the first instruction of the callee.
+    WHEN-TO-USE: To trace into a subroutine you want to follow -- e.g. stepping
+    from a dispatch site into the actual opcode handler, or into a decrypt helper.
+    RETURNS: A DebugControlResult with continued=True and the post-step state.
+    PRO-TIP: Use dbg_step_over instead when you want to skip over CRT/library
+    calls (memcpy, malloc) that would otherwise drop you into uninteresting code.
+    Requires a SUSPENDED session.
+    """
     dbg_ensure_suspended()
     if idaapi.step_into():
         result = _get_debug_state_result()
@@ -517,11 +649,23 @@ def dbg_step_into() -> DebugControlResult:
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Step Over")
 @tool
 @idasync
 def dbg_step_over() -> DebugControlResult:
-    """Execute one instruction, stepping over calls."""
+    """Execute a single instruction, running any call to completion.
+
+    WHAT: Single-steps one machine instruction; if it is a call, the entire
+    callee runs and execution stops at the instruction after the call.
+    WHEN-TO-USE: To advance through a function body without diving into helper/
+    library calls -- the default stepping mode for following one routine's logic.
+    RETURNS: A DebugControlResult with continued=True and the post-step state.
+    PITFALL: If the stepped-over call never returns (or hits another breakpoint
+    inside it), the process won't come back to the next line as expected -- poll
+    dbg_status. Use dbg_step_into when you do need to enter the callee. Requires a
+    SUSPENDED session.
+    """
     dbg_ensure_suspended()
     if idaapi.step_over():
         result = _get_debug_state_result()
@@ -536,22 +680,51 @@ def dbg_step_over() -> DebugControlResult:
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("List Breakpoints")
 @tool
 @idasync
 def dbg_bps() -> list[Breakpoint]:
-    """List breakpoints with address, enabled status, condition, and language."""
+    """Enumerate every breakpoint currently defined in the database.
+
+    WHAT: Reads the IDB breakpoint set without changing it -- one entry per
+    breakpoint with its address, enabled flag, condition expression, and the
+    condition language.
+    WHEN-TO-USE: To audit what is planted before continuing, to confirm
+    dbg_add_bp / dbg_toggle_bp / dbg_set_bp_condition took effect, or to find an
+    address to delete.
+    RETURNS: A list of Breakpoint dicts: {addr, enabled, condition, language}.
+    Empty list means none are set.
+    PRO-TIP: Breakpoints live in the IDB and persist across debug sessions even
+    while the process is not running, so this works any time -- no live session
+    required.
+    """
     return list_breakpoints()
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Add Breakpoints")
 @tool
 @idasync
 def dbg_add_bp(
-    addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"],
+    addrs: Annotated[
+        list[str] | str,
+        "Address(es) to plant soft breakpoints at; hex (0x..) or decimal, a single string is accepted",
+    ],
 ) -> list[BreakpointResult]:
-    """Add breakpoints at one or more addresses."""
+    """Plant software breakpoints at one or more addresses.
+
+    WHAT: Adds a soft (INT3-style) breakpoint at each address. Idempotent -- an
+    address that already has a breakpoint is reported ok rather than failing.
+    WHEN-TO-USE: To stop the debuggee when execution reaches a function or
+    instruction of interest (a recv handler, an opcode dispatch case, a decrypt
+    routine) so you can then dbg_continue and inspect state at the hit.
+    RETURNS: One BreakpointResult per address, in input order: {addr, ok: True}
+    or {addr, error}. Per-address failures never abort the batch.
+    PRO-TIP: Breakpoints persist in the IDB and can be set before dbg_start; plant
+    them first, then start/continue. Verify with dbg_bps.
+    """
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -575,13 +748,27 @@ def dbg_add_bp(
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Delete Breakpoints")
 @tool
 @idasync
 def dbg_delete_bp(
-    addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"],
+    addrs: Annotated[
+        list[str] | str,
+        "Address(es) whose breakpoints should be removed; hex (0x..) or decimal, a single string is accepted",
+    ],
 ) -> list[BreakpointResult]:
-    """Delete breakpoints at one or more addresses."""
+    """Remove software breakpoints at one or more addresses.
+
+    WHAT: Deletes the breakpoint at each given address from the IDB.
+    WHEN-TO-USE: To clean up breakpoints you no longer need (e.g. one-shot
+    investigation points) so the debuggee stops flagging them on later runs.
+    RETURNS: One BreakpointResult per address, in input order: {addr, ok: True}
+    or {addr, error: "Failed to delete breakpoint"} when no breakpoint existed
+    there. Per-address failures never abort the batch.
+    PRO-TIP: To temporarily silence a breakpoint without losing its condition,
+    prefer dbg_toggle_bp(enabled=False) over deleting it.
+    """
     addrs = normalize_list_input(addrs)
     results = []
 
@@ -599,13 +786,28 @@ def dbg_delete_bp(
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Toggle Breakpoints")
 @tool
 @idasync
 def dbg_toggle_bp(
-    items: list[BreakpointOp] | BreakpointOp,
+    items: Annotated[
+        list[BreakpointOp] | BreakpointOp,
+        "One or more {addr, enabled} ops; enabled=True enables, False disables; a single dict is accepted",
+    ],
 ) -> list[BreakpointResult]:
-    """Enable or disable existing breakpoints in batch."""
+    """Enable or disable existing breakpoints in batch without deleting them.
+
+    WHAT: For each {addr, enabled} op, flips an already-defined breakpoint on or
+    off (enabled defaults to True). The breakpoint and its condition are
+    preserved -- only its active state changes.
+    WHEN-TO-USE: To temporarily mute a noisy breakpoint, or to re-arm one you
+    silenced earlier, without losing its address/condition.
+    RETURNS: One BreakpointResult per op, in input order: {addr, ok: True} or
+    {addr, error}. Per-op failures never abort the batch.
+    PITFALL: The breakpoint must already exist (use dbg_add_bp first); toggling a
+    non-existent address reports an error rather than creating one.
+    """
 
     items = normalize_dict_list(items)
 
@@ -632,13 +834,32 @@ def dbg_toggle_bp(
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Set Breakpoint Conditions")
 @tool
 @idasync
 def dbg_set_bp_condition(
-    items: list[BreakpointConditionOp] | BreakpointConditionOp,
+    items: Annotated[
+        list[BreakpointConditionOp] | BreakpointConditionOp,
+        "One or more {addr, condition, language?, low_level?} ops; condition is an IDC/Python expression, null/empty clears it; a single dict is accepted",
+    ],
 ) -> list[BreakpointResult]:
-    """Set or clear breakpoint conditions in batch."""
+    """Attach, change, or clear conditional expressions on existing breakpoints.
+
+    WHAT: For each op, sets a conditional expression on the breakpoint at `addr`
+    so it only stops when the expression is true (passing an empty/null condition
+    clears it). `language` selects IDC or Python; `low_level` evaluates the
+    condition in the debugger rather than after a context switch. The result is
+    validated -- a condition that fails to compile is reported as an error.
+    WHEN-TO-USE: To stop only on the interesting case of a hot function -- e.g.
+    break in a packet handler only when a register holds a specific opcode, or in
+    a loop only on the Nth iteration -- instead of halting on every hit.
+    RETURNS: One BreakpointResult per op: {addr, ok, condition, language} on
+    success or {addr, error}. Per-op failures never abort the batch.
+    PITFALL: The breakpoint must already exist (dbg_add_bp first). Switching the
+    condition language clears any existing condition before re-applying it, so
+    always supply the condition together with a new language.
+    """
 
     items = normalize_dict_list(items)
 
@@ -735,11 +956,24 @@ def dbg_set_bp_condition(
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("Read All Threads' Registers")
 @tool
 @idasync
 def dbg_regs_all() -> list[ThreadRegisters]:
-    """Return full register sets for all debugger threads."""
+    """Snapshot the full register file of every thread in the suspended debuggee.
+
+    WHAT: Reads all registers (GP, segment, flags, FPU/SIMD as exposed) for each
+    debugger thread. Values are returned as hex strings (or formatted text for
+    wide/non-integer registers).
+    WHEN-TO-USE: For a complete machine-state snapshot across threads, or when you
+    don't yet know which thread hit your breakpoint.
+    RETURNS: A list of ThreadRegisters, one per thread: {thread_id, registers:
+    [{name, value}, ...]}.
+    PRO-TIP: This is verbose; if you only care about the current thread or a few
+    registers, dbg_regs / dbg_gpregs / dbg_regs_named are far leaner. Requires a
+    SUSPENDED session.
+    """
     result: list[ThreadRegisters] = []
     dbg = dbg_ensure_suspended()
     for thread_index in range(ida_dbg.get_thread_qty()):
@@ -749,13 +983,26 @@ def dbg_regs_all() -> list[ThreadRegisters]:
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("Read Registers By Thread ID")
 @tool
 @idasync
 def dbg_regs_remote(
-    tids: Annotated[list[int] | int, "Thread ID(s) to get registers for"],
+    tids: Annotated[
+        list[int] | int, "Thread ID(s) to read full register sets for; a single int is accepted"
+    ],
 ) -> list[ThreadRegistersResult]:
-    """Return full register sets for specified thread IDs."""
+    """Read the full register file for one or more specific thread IDs.
+
+    WHAT: For each requested tid, returns its complete register set. Unknown
+    thread ids are reported per-entry rather than aborting the batch.
+    WHEN-TO-USE: When you already know the thread id(s) of interest (e.g. from
+    dbg_stacktrace or a prior dbg_regs_all) and want their state directly.
+    RETURNS: One ThreadRegistersResult per tid: {tid, regs} on success or
+    {tid, regs: null, error} when the thread isn't found.
+    PRO-TIP: Get valid thread ids from dbg_regs_all first; passing a stale tid
+    yields an error entry, not a crash. Requires a SUSPENDED session.
+    """
     if isinstance(tids, int):
         tids = [tids]
 
@@ -779,24 +1026,49 @@ def dbg_regs_remote(
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("Read Current Thread Registers")
 @tool
 @idasync
 def dbg_regs() -> ThreadRegisters:
-    """Return full registers for current debugger thread."""
+    """Read the full register file of the current (stopped) thread.
+
+    WHAT: Returns every register for the thread that is currently selected in the
+    debugger -- usually the one that hit the breakpoint or step.
+    WHEN-TO-USE: The default "where am I / what's in the registers" call right
+    after a breakpoint hit or a step.
+    RETURNS: A single ThreadRegisters: {thread_id, registers: [{name, value}, ...]}
+    with hex-string values.
+    PRO-TIP: Use dbg_gpregs to drop the segment/FPU noise, or dbg_regs_named to
+    pull just the registers you care about. Requires a SUSPENDED session.
+    """
     dbg = dbg_ensure_suspended()
     tid = ida_dbg.get_current_thread()
     return _get_registers_for_thread(dbg, tid)
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("Read GP Registers By Thread ID")
 @tool
 @idasync
 def dbg_gpregs_remote(
-    tids: Annotated[list[int] | int, "Thread ID(s) to get GP registers for"],
+    tids: Annotated[
+        list[int] | int,
+        "Thread ID(s) to read general-purpose registers for; a single int is accepted",
+    ],
 ) -> list[ThreadRegistersResult]:
-    """Get GP registers for threads"""
+    """Read just the general-purpose registers for one or more thread IDs.
+
+    WHAT: Like dbg_regs_remote but filtered to the GP set (E/RAX..E/RSP, E/RIP,
+    R8..R15), dropping segment/flags/FPU/SIMD registers.
+    WHEN-TO-USE: When you know the thread id(s) and only need integer/pointer
+    state -- the common case for following control flow and arguments.
+    RETURNS: One ThreadRegistersResult per tid: {tid, regs} or {tid, regs: null,
+    error} for unknown threads.
+    PRO-TIP: Source valid thread ids from dbg_regs_all/dbg_stacktrace. Requires a
+    SUSPENDED session.
+    """
     if isinstance(tids, int):
         tids = [tids]
 
@@ -820,27 +1092,50 @@ def dbg_gpregs_remote(
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("Read Current Thread GP Registers")
 @tool
 @idasync
 def dbg_gpregs() -> ThreadRegisters:
-    """Get current thread GP registers"""
+    """Read the general-purpose registers of the current (stopped) thread.
+
+    WHAT: Returns only the GP registers (E/RAX..E/RSP, E/RIP, R8..R15) for the
+    currently selected thread.
+    WHEN-TO-USE: The lean default for inspecting control flow and arguments right
+    after a breakpoint hit, without the segment/FPU clutter of dbg_regs.
+    RETURNS: A single ThreadRegisters: {thread_id, registers: [{name, value}, ...]}.
+    PRO-TIP: For just one or two specific registers, dbg_regs_named is even
+    tighter. Requires a SUSPENDED session.
+    """
     dbg = dbg_ensure_suspended()
     tid = ida_dbg.get_current_thread()
     return _get_registers_general_for_thread(dbg, tid)
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("Read Named Registers By Thread ID")
 @tool
 @idasync
 def dbg_regs_named_remote(
-    thread_id: Annotated[int, "Thread ID"],
+    thread_id: Annotated[int, "Thread ID to read registers from"],
     register_names: Annotated[
-        str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
+        str,
+        "Comma-separated register names to read (e.g. 'RAX, RBX, RCX'); matched case-sensitively against the platform register names",
     ],
 ) -> ThreadRegisters:
-    """Return selected registers for a specific thread ID."""
+    """Read a named subset of registers from a specific thread ID.
+
+    WHAT: Returns only the registers whose names appear in `register_names`, for
+    the given thread.
+    WHEN-TO-USE: When you know both the thread id and exactly which registers you
+    want (e.g. the argument registers of a particular handler).
+    RETURNS: A ThreadRegisters with just the requested {name, value} entries.
+    PITFALL: Names must match the platform's register names exactly; misspelled or
+    unsupported names are silently omitted (no error), so an empty result usually
+    means a name mismatch. Errors if the thread id is not found. Requires a
+    SUSPENDED session.
+    """
     dbg = dbg_ensure_suspended()
     if thread_id not in [
         ida_dbg.getn_thread(i) for i in range(ida_dbg.get_thread_qty())
@@ -851,15 +1146,27 @@ def dbg_regs_named_remote(
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("Read Named Registers")
 @tool
 @idasync
 def dbg_regs_named(
     register_names: Annotated[
-        str, "Comma-separated register names (e.g., 'RAX, RBX, RCX')"
+        str,
+        "Comma-separated register names to read (e.g. 'RAX, RBX, RCX'); matched case-sensitively against the platform register names",
     ],
 ) -> ThreadRegisters:
-    """Get specific current thread registers"""
+    """Read a named subset of registers from the current (stopped) thread.
+
+    WHAT: Returns only the registers named in `register_names`, for the currently
+    selected thread.
+    WHEN-TO-USE: The tightest register read -- when you want just a couple of
+    values (e.g. RIP and the register holding an opcode) after a breakpoint hit.
+    RETURNS: A ThreadRegisters with just the requested {name, value} entries.
+    PITFALL: Names must match the platform register names exactly; unknown names
+    are silently dropped, so an empty result means a name mismatch. Requires a
+    SUSPENDED session.
+    """
     dbg = dbg_ensure_suspended()
     tid = ida_dbg.get_current_thread()
     names = [name.strip() for name in register_names.split(",")]
@@ -872,11 +1179,24 @@ def dbg_regs_named(
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("Get Call Stack")
 @tool
 @idasync
 def dbg_stacktrace() -> list[StackFrameInfo]:
-    """Return current call stack with module and symbol context."""
+    """Collect the current thread's call stack with module + symbol context.
+
+    WHAT: Walks the current thread's frames innermost-first, resolving each return
+    address to its owning module and nearest symbol name.
+    WHEN-TO-USE: At a breakpoint hit to understand how execution got here -- which
+    caller invoked the handler, whether you are inside a library call, where to
+    plant the next breakpoint up the chain.
+    RETURNS: A list of StackFrameInfo: {addr, module, symbol}. Unresolved fields
+    come back as "<unknown>"/"<unnamed>" rather than failing; returns an empty
+    list if the stack can't be collected.
+    PRO-TIP: Use the returned addresses as dbg_add_bp / dbg_run_to targets to step
+    back out to a caller of interest. Requires a SUSPENDED session.
+    """
     callstack = []
     try:
         tid = ida_dbg.get_current_thread()
@@ -924,13 +1244,32 @@ def dbg_stacktrace() -> list[StackFrameInfo]:
 
 
 @ext("dbg")
-@unsafe
+@safety("READ")
+@title("Read Debuggee Memory")
 @tool
 @idasync
 def dbg_read(
-    regions: list[MemoryRead] | MemoryRead,
+    regions: Annotated[
+        list[MemoryRead] | MemoryRead,
+        "One or more {addr, size} read requests against LIVE process memory; a single dict is accepted",
+    ],
 ) -> list[DebugMemoryReadResult]:
-    """Read debuggee memory from one or more regions."""
+    """Read live debuggee memory from one or more regions, returned as hex.
+
+    WHAT: For each {addr, size} region, reads `size` bytes from the RUNNING
+    process's address space (post-relocation, post-decryption, live heap/stack) --
+    not the static IDB image. Reads go through the debugger, which can reach pages
+    the static view marks PAGE_NOACCESS.
+    WHEN-TO-USE: To inspect a buffer at a live pointer -- a received packet before/
+    after decryption, a struct at a register-held address, a string the program
+    just built -- exactly the ground-truth confirmation step of live RE.
+    RETURNS: One DebugMemoryReadResult per region, in order: {addr, size, data
+    (hex string), error: null} on success or {addr, size: 0, data: null, error}
+    on failure. Per-region failures never abort the batch.
+    PITFALL: `data` is a hex STRING. Addresses are only meaningful while the
+    session is live; resolve dynamic pointers from a fresh register read each
+    stop. Requires an ACTIVE session (running or suspended).
+    """
 
     regions = normalize_dict_list(regions)
     dbg_ensure_active()
@@ -970,13 +1309,30 @@ def dbg_read(
 
 
 @ext("dbg")
-@unsafe
+@safety("EXECUTE")
+@title("Write Debuggee Memory")
 @tool
 @idasync
 def dbg_write(
-    regions: list[MemoryPatch] | MemoryPatch,
+    regions: Annotated[
+        list[MemoryPatch] | MemoryPatch,
+        "One or more {addr, data} writes against LIVE process memory; data is a hex string of the bytes to write; a single dict is accepted",
+    ],
 ) -> list[DebugMemoryWriteResult]:
-    """Write bytes to debuggee memory regions."""
+    """Write bytes into the live debuggee's memory at one or more regions.
+
+    WHAT: For each {addr, data} region, decodes the hex `data` and writes it into
+    the RUNNING process's address space, mutating live state.
+    WHEN-TO-USE: To patch the live process for an experiment -- e.g. flip a branch
+    condition, neutralize a check, or feed a crafted value to confirm a hypothesis
+    about how the code reacts. Does NOT modify the on-disk binary or the IDB.
+    RETURNS: One DebugMemoryWriteResult per region, in order: {addr, size, ok,
+    error: null} on success or {addr, size: 0, error} on failure. Per-region
+    failures never abort the batch.
+    PITFALL: This is destructive to live execution and easily crashes the target
+    if you write the wrong width/location; snapshot the original bytes with
+    dbg_read first so you can restore them. Requires an ACTIVE session.
+    """
 
     regions = normalize_dict_list(regions)
     dbg_ensure_active()

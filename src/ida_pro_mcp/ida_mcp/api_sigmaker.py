@@ -9,15 +9,13 @@ This module integrates sigmaker.py functionality to provide:
 
 from typing import Annotated, NotRequired, TypedDict
 
-import idaapi
 import ida_funcs
-
-from .rpc import tool
-from .sync import idasync
-from .utils import parse_address, normalize_list_input
+import idaapi
 
 from . import _sigmaker as _sm
-
+from .rpc import safety, title, tool
+from .sync import idasync
+from .utils import parse_address, normalize_list_input
 
 # ---------------------------------------------------------------------------
 # Output format helpers
@@ -96,10 +94,16 @@ class MakeSigForFunctionResult(TypedDict):
     error: NotRequired[str]
 
 
+class XrefSigEntry(TypedDict):
+    xref_addr: str | None
+    signature: str
+    length: int
+
+
 class XrefSigResult(TypedDict):
     query: str
     addr: str | None
-    signatures: list[dict] | None
+    signatures: list[XrefSigEntry] | None
     total_xrefs: NotRequired[int]
     error: NotRequired[str]
 
@@ -109,6 +113,8 @@ class XrefSigResult(TypedDict):
 # ---------------------------------------------------------------------------
 
 
+@safety("READ")
+@title("Make Unique Signatures")
 @tool
 @idasync
 def make_signature(
@@ -119,21 +125,32 @@ def make_signature(
     ],
     format: Annotated[
         str,
-        "Output format: 'ida' (default), 'x64dbg', 'mask', or 'bitmask'",
+        "Output format: one of 'ida' (default), 'x64dbg', 'mask', or 'bitmask'",
     ] = "ida",
     wildcard_operands: Annotated[
         bool,
-        "Wildcard instruction operands for relocatable signatures (default: true)",
+        "Wildcard instruction operands so the signature survives relocation/rebuild (default: true)",
     ] = True,
     max_length: Annotated[
         int,
-        "Maximum signature length in bytes before giving up (default: 1000)",
+        "Maximum signature length in bytes before giving up on uniqueness (default: 1000)",
     ] = 1000,
 ) -> list[MakeSigResult]:
-    """Create unique byte signatures for addresses. Generates the shortest
-    unique signature starting at each address by walking instructions and
-    wildcarding operands. Useful for finding stable patterns that survive
-    recompilation."""
+    """WHAT: Builds the shortest UNIQUE byte-pattern signature starting at each given address by
+    walking instructions forward and wildcarding operands until the pattern matches exactly one
+    place in the image.
+
+    WHEN TO USE: When you need a stable, relocation-tolerant locator for an in-function code site
+    (not the function entry — use make_signature_for_function for that, and find_xref_signatures
+    for data/strings that have no signaturable bytes of their own).
+
+    RETURNS: One MakeSigResult per input. Each carries the resolved `addr`, the rendered
+    `signature` in the requested `format`, and a `unique` flag (uniqueness is re-verified by an
+    actual scan). Failed entries instead carry an `error` string and null signature.
+
+    PITFALL: `unique` can be false if max_length was hit before a distinguishing pattern emerged —
+    raise max_length or pick a more distinctive start address. Names are resolved via the IDB, so a
+    stale/renamed symbol will fail to resolve."""
     sm = _sm
     fmt = _resolve_format(format)
     cfg = _make_config(fmt, wildcard_operands=wildcard_operands, max_length=max_length)
@@ -166,6 +183,8 @@ def make_signature(
     return results
 
 
+@safety("READ")
+@title("Make Function Signatures")
 @tool
 @idasync
 def make_signature_for_function(
@@ -176,20 +195,32 @@ def make_signature_for_function(
     ],
     format: Annotated[
         str,
-        "Output format: 'ida' (default), 'x64dbg', 'mask', or 'bitmask'",
+        "Output format: one of 'ida' (default), 'x64dbg', 'mask', or 'bitmask'",
     ] = "ida",
     wildcard_operands: Annotated[
         bool,
-        "Wildcard instruction operands for relocatable signatures (default: true)",
+        "Wildcard instruction operands so the signature survives relocation/rebuild (default: true)",
     ] = True,
     max_length: Annotated[
         int,
-        "Maximum signature length in bytes before giving up (default: 1000)",
+        "Maximum signature length in bytes before giving up on uniqueness (default: 1000)",
     ] = 1000,
 ) -> list[MakeSigForFunctionResult]:
-    """Create unique byte signatures for function entry points. Resolves each
-    name/address to a function, then generates the shortest unique signature
-    starting at the function start."""
+    """WHAT: Resolves each input to its enclosing function and builds the shortest UNIQUE signature
+    starting at that function's entry point (start_ea), regardless of where inside the function the
+    input address landed.
+
+    WHEN TO USE: The go-to for signaturing a whole function by name or by any address within it.
+    Prefer this over make_signature when you want the canonical entry-point pattern rather than a
+    mid-function one.
+
+    RETURNS: One MakeSigForFunctionResult per input, with the function `addr` (start_ea), its
+    `name`, and the rendered `signature`. Entries where no function contains the address, or where
+    resolution fails, carry an `error` and null signature.
+
+    PITFALL: An address inside a chunk/thunk that IDA has not attached to a function yields
+    "No function at ..." — define the function first. Unlike make_signature, the result has no
+    `unique` flag, though uniqueness is still the generation goal."""
     sm = _sm
     fmt = _resolve_format(format)
     cfg = _make_config(fmt, wildcard_operands=wildcard_operands, max_length=max_length)
@@ -236,23 +267,35 @@ def make_signature_for_function(
     return results
 
 
+@safety("READ")
+@title("Make Range Signature")
 @tool
 @idasync
 def make_signature_for_range(
-    start: Annotated[str, "Start address or name (e.g. '0x401000')"],
-    end: Annotated[str, "End address or name (exclusive, e.g. '0x401020')"],
+    start: Annotated[str, "Start address or name, inclusive (e.g. '0x401000')"],
+    end: Annotated[str, "End address or name, EXCLUSIVE (e.g. '0x401020')"],
     format: Annotated[
         str,
-        "Output format: 'ida' (default), 'x64dbg', 'mask', or 'bitmask'",
+        "Output format: one of 'ida' (default), 'x64dbg', 'mask', or 'bitmask'",
     ] = "ida",
     wildcard_operands: Annotated[
         bool,
-        "Wildcard instruction operands for relocatable signatures (default: true)",
+        "Wildcard instruction operands so the signature survives relocation/rebuild (default: true)",
     ] = True,
 ) -> MakeSigResult:
-    """Create a byte signature for a specific address range (e.g. a selected
-    region). Unlike make_signature, this does NOT guarantee uniqueness — it
-    simply encodes the bytes in the range with optional operand wildcarding."""
+    """WHAT: Encodes the exact byte range [start, end) into a signature, wildcarding operands if
+    requested, and reports whether the resulting pattern happens to be unique.
+
+    WHEN TO USE: When you already know the precise span you want signatured (e.g. a region you
+    selected in the disassembly) and want full control over its bounds rather than letting the
+    maker auto-extend for uniqueness.
+
+    RETURNS: A single MakeSigResult with `addr` = start, the rendered `signature`, and a `unique`
+    flag from a real scan. On failure, `signature` is null and `error` is set.
+
+    PITFALL: Unlike make_signature, this does NOT extend the range to GUARANTEE uniqueness — a short
+    range can easily yield `unique: false`. Check the flag, and remember `end` is exclusive, so an
+    off-by-one drops the last instruction."""
     sm = _sm
     fmt = _resolve_format(format)
     cfg = _make_config(fmt, wildcard_operands=wildcard_operands)
@@ -281,17 +324,19 @@ def make_signature_for_range(
         }
 
 
+@safety("READ")
+@title("Find XREF Signatures")
 @tool
 @idasync
 def find_xref_signatures(
     addrs: Annotated[
         list[str] | str,
         "Address(es) or name(s) to find XREF signatures for "
-        "(e.g. a data address referenced by code)",
+        "(e.g. a data address, vtable slot, or string referenced by code)",
     ],
     format: Annotated[
         str,
-        "Output format: 'ida' (default), 'x64dbg', 'mask', or 'bitmask'",
+        "Output format: one of 'ida' (default), 'x64dbg', 'mask', or 'bitmask'",
     ] = "ida",
     top: Annotated[
         int,
@@ -299,14 +344,24 @@ def find_xref_signatures(
     ] = 5,
     max_length: Annotated[
         int,
-        "Maximum signature length in bytes (default: 250)",
+        "Maximum signature length in bytes for each xref-site signature (default: 250)",
     ] = 250,
 ) -> list[XrefSigResult]:
-    """Find signatures for code locations that reference an address. For each
-    input address, finds all code cross-references TO it, generates a unique
-    signature at each xref site, and returns the shortest ones. Ideal for
-    creating signatures for data addresses, vtable entries, or string
-    references that can't be signatured directly."""
+    """WHAT: For each input address, finds all CODE cross-references pointing AT it, builds a unique
+    signature at each referencing site, and returns the `top` shortest ones.
+
+    WHEN TO USE: The right tool when the target itself has no signaturable bytes — data addresses,
+    vtable entries, globals, or string literals. Instead of signaturing the datum, you signature the
+    code that touches it so you can relocate the datum indirectly.
+
+    RETURNS: One XrefSigResult per input. Its `signatures` is a list of XrefSigEntry (each with the
+    referencing `xref_addr`, the rendered `signature`, and its byte `length`), plus `total_xrefs`
+    (how many xrefs were found before the top-N cut). On failure, `signatures` is null and `error`
+    is set.
+
+    PITFALL: A target with no incoming code xrefs returns an empty `signatures` list — not an error.
+    Heavily-referenced data can be slow; keep `top` small. Only CODE xrefs are considered (data-to-
+    data references are ignored)."""
     sm = _sm
     fmt = _resolve_format(format)
     cfg = _make_config(fmt, max_length=max_length)

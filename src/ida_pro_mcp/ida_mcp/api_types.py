@@ -1,14 +1,16 @@
 from typing import Annotated, Any, TypedDict
 
-import idc
-import ida_typeinf
-import ida_hexrays
-import ida_nalt
 import ida_bytes
 import ida_frame
+import ida_hexrays
+import ida_nalt
+import ida_typeinf
 import idaapi
+import idc
 
-from .rpc import tool
+from . import compat
+from .compat import tinfo_get_udm
+from .rpc import tool, safety, title
 from .sync import idasync
 from .utils import (
     normalize_list_input,
@@ -29,8 +31,6 @@ from .utils import (
     TypeApplyBatch,
     EnumUpsert,
 )
-from . import compat
-from .compat import tinfo_get_udm
 
 
 class DeclareTypeResult(TypedDict, total=False):
@@ -155,12 +155,26 @@ class InferTypeResult(TypedDict, total=False):
 # ============================================================================
 
 
+@safety("DESTRUCTIVE")
+@title("Declare C Types")
 @tool
 @idasync
 def declare_type(
-    decls: Annotated[list[str] | str, "C type declarations"],
+    decls: Annotated[
+        list[str] | str,
+        "One C declaration per item (or a single string), e.g. "
+        "'struct Pkt { uint8_t op; uint16_t len; };' or 'typedef int MyInt;'. "
+        "Each is parsed independently and added to the local type library.",
+    ],
 ) -> list[DeclareTypeResult]:
-    """Declare C type definitions in local type library."""
+    """WHAT: Parse C type declarations (struct/union/enum/typedef) and register them in the IDB local type library so they can later be applied to globals/locals/stack with set_type.
+
+    WHEN TO USE: Define a recovered struct/enum BEFORE applying it as a type. Pass several declarations at once to satisfy inter-type dependencies in one call.
+
+    RETURNS: One entry per input declaration: {"decl": <source>} on success, or {"decl": <source>, "error": <parser messages>} on failure.
+
+    PITFALL: Declaration ORDER matters within a single call only if a later decl references an earlier one's name; declare base/referenced types first (or in earlier list items). This only DEFINES the type, it does not attach it to any address - use set_type / type_apply_batch for that. Re-declaring an identical type is harmless; a conflicting redefinition surfaces as a parse error rather than silently overwriting.
+    """
     decls = normalize_list_input(decls)
     results = []
 
@@ -182,15 +196,27 @@ def declare_type(
     return results
 
 
+@safety("DESTRUCTIVE")
+@title("Create or Extend Enums")
 @tool
 @idasync
 def enum_upsert(
     queries: Annotated[
         list[EnumUpsert] | EnumUpsert,
-        "Create enums if missing and upsert enum members without destructive replacement",
+        "One or more enum specs. Each: {'name': <enum name>, 'members': "
+        "[{'name': <const>, 'value': <int or '0x..' string>}, ...], "
+        "'bitfield': <bool, optional>}. Missing enums are created; existing "
+        "ones are extended in place.",
     ],
 ) -> list[EnumUpsertResult]:
-    """Create or extend local enums in an idempotent way."""
+    """WHAT: Idempotently create local enums and add members WITHOUT destructive replacement - existing members that already match are skipped, conflicting ones are reported, never overwritten.
+
+    WHEN TO USE: Build up a recovered enum/flags type incrementally (e.g. opcode tables) and re-run safely as you discover more constants. Set bitfield=true for flag enums.
+
+    RETURNS: One entry per enum spec with {name, enum_id, created, bitfield, members:[{name,value,created|skipped|error}], summary:{created,skipped,conflicts}}; a top-level "error" is set when any member conflicts (or for malformed input).
+
+    PITFALL: A member NAME that already exists in a DIFFERENT enum, or an enum VALUE already taken by a different member name, is reported as a conflict and left untouched - resolve the clash by hand rather than expecting an overwrite. Toggling bitfield on an existing enum is rejected (mismatch error) to avoid silently reinterpreting values. Values accept ints or base-prefixed strings ('0x10', '0b1', '8').
+    """
     queries = normalize_dict_list(queries)
     results = []
 
@@ -333,12 +359,26 @@ def _parse_enum_value(value: int | str | None) -> int:
 # ============================================================================
 
 
+@safety("READ")
+@title("Read Struct at Address")
 @tool
 @idasync
 def read_struct(
-    queries: list[StructRead] | StructRead,
+    queries: Annotated[
+        list[StructRead] | StructRead,
+        "One or more read requests. Each: {'addr': <ea or symbol name>, "
+        "'struct': <type name, optional>}. If 'struct' is omitted the type is "
+        "auto-detected from the type already applied at that address.",
+    ],
 ) -> list[ReadStructResult]:
-    """Read struct fields from memory at address; auto-detect type when possible."""
+    """WHAT: Overlay a named struct type onto the bytes at an address and return each member's offset, type, size, and decoded value.
+
+    WHEN TO USE: Inspect a live/static instance of a recovered struct (packet buffer, actor object, asset header). Omit 'struct' to reuse the type IDA already has at the address; pass a symbol name in 'addr' to resolve it automatically.
+
+    RETURNS: One entry per request: {addr, struct, members:[{offset,type,name,size,value}]} or {..., error}. Pointer/scalar members render as hex (scalars also show decimal); larger members show the first 16 bytes with an ellipsis.
+
+    PITFALL: Reads are BSS-aware - bytes in uninitialized segments resolve to zero (matching runtime zero-init) rather than failing, so an all-zero value may mean "unmapped" not "actually zero". The struct must already exist in the type library (declare_type first). 'offset' is the member's byte offset within the struct, not an absolute address.
+    """
 
     queries = normalize_dict_list(queries)
 
@@ -469,14 +509,25 @@ def read_struct(
     return results
 
 
+@safety("READ")
+@title("Search Structs by Name")
 @tool
 @idasync
 def search_structs(
     filter: Annotated[
-        str, "Case-insensitive substring to search for in structure names"
+        str,
+        "Case-insensitive substring matched against struct/union names "
+        "(e.g. 'pkt', 'actor'). Empty string matches every UDT.",
     ],
 ) -> list[SearchStructResult]:
-    """Search local structs/unions by name pattern."""
+    """WHAT: Find local struct/union types whose name contains a substring, returning a compact descriptor for each match.
+
+    WHEN TO USE: Discover which recovered aggregate types already exist before declaring a new one or before calling type_inspect/read_struct. Use the broader type_query for enums/typedefs/functions, kind filtering, pagination, or member projection.
+
+    RETURNS: A list of {name, size, cardinality (member count), is_union, ordinal}.
+
+    PITFALL: This is substring, not regex/glob - 'a*b' is treated literally. Only UDTs (structs/unions) are returned; enums and typedefs are skipped (use type_query for those). On large IDBs prefer a specific filter, as it scans the whole ordinal range.
+    """
     results = []
     limit = compat.get_ordinal_limit()
 
@@ -558,15 +609,28 @@ def _type_matches_kind(kind: str, tif: ida_typeinf.tinfo_t) -> bool:
 # ============================================================================
 
 
+@safety("READ")
+@title("Query Type Catalog")
 @tool
 @idasync
 def type_query(
     queries: Annotated[
         list[TypeQuery] | TypeQuery,
-        "Type catalog query with filtering, pagination, and optional relationships",
+        "One or more catalog queries. Each may set: filter (name substring/"
+        "pattern), kind ('any'|'struct'|'union'|'enum'|'typedef'|'func'|'ptr'|"
+        "'udt'), offset/count (pagination), sort_by ('name'|'size'|'ordinal') "
+        "+ descending, include_decl, include_members + max_members, "
+        "include_relationships.",
     ],
 ) -> list[TypeQueryResult]:
-    """Query local types with structured filters/projection-friendly output."""
+    """WHAT: Page and filter the entire local type catalog with projection-friendly output - the full-featured counterpart to search_structs (covers enums/typedefs/funcs/ptrs, supports sorting, pagination, member layout, and cross-type relationships).
+
+    WHEN TO USE: Browse or audit the type library at scale; enumerate all enums or all structs; pull member layouts in bulk; or map which types reference which (include_relationships). Reach for type_inspect instead when you already know the exact name.
+
+    RETURNS: One result per query: {kind, data:[rows], next_offset, total}. Each row carries ordinal/name/size/kind plus optional declaration, member_count/members(+members_truncated), and related_count/related_types(+related_truncated) depending on the include_* flags.
+
+    PITFALL: Member and relationship projection are OFF by default - set include_members / include_relationships to get them. max_members is clamped to [0,4096] and members beyond it set members_truncated=true; related_types is capped at 256. Page via next_offset (null means no more pages); 'total' is the post-filter count, not the page size.
+    """
     queries = normalize_dict_list(queries)
 
     # Build one local catalog and page/filter it per query.
@@ -705,15 +769,25 @@ def type_query(
     return results
 
 
+@safety("READ")
+@title("Inspect Named Type")
 @tool
 @idasync
 def type_inspect(
     queries: Annotated[
         list[TypeInspectQuery] | TypeInspectQuery,
-        "Inspect named types and optionally include member layout",
+        "One or more lookups. Each: {'name': <exact type name>, "
+        "'include_members': <bool, optional>, 'max_members': <int, optional>}.",
     ],
 ) -> list[TypeInspectResult]:
-    """Inspect named types (size/kind/declaration/members)."""
+    """WHAT: Look up one or more types BY EXACT NAME and report existence, size, kind flags (is_func/is_ptr/is_enum/is_udt), the C declaration, and (optionally) the member layout.
+
+    WHEN TO USE: Confirm a type exists and check its shape before applying it with set_type, or pull a single struct's member offset/size table. Use type_query instead to browse/filter many types at once.
+
+    RETURNS: One entry per name: {name, exists, declaration, size, is_func, is_ptr, is_enum, is_udt, member_count, members} - members is null unless include_members is set; on a miss {name, exists:false, error}.
+
+    PITFALL: Matching is EXACT (not substring) - use search_structs/type_query to find the right name first. max_members is clamped to [0,4096] and silently truncates a larger UDT. Members are only populated for UDTs even if include_members is true (enums/typedefs return member_count 0).
+    """
     queries = normalize_dict_list(queries)
     results = []
 
@@ -1024,23 +1098,52 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
         return {"edit": edit, "error": str(e)}
 
 
+@safety("DESTRUCTIVE")
+@title("Apply Types")
 @tool
 @idasync
-def set_type(edits: list[TypeEdit] | TypeEdit) -> list[SetTypeResult]:
-    """Apply types (function/global/local/stack)"""
+def set_type(
+    edits: Annotated[
+        list[TypeEdit] | TypeEdit,
+        "One or more type edits. Per kind: function -> {addr, signature}; "
+        "global -> {name or addr, type}; local (decompiler var) -> "
+        "{addr, variable, type}; stack (frame member) -> {addr, name, type}. "
+        "'kind' is optional and inferred when omitted. The 'addr:typename' "
+        "string shorthand is also accepted.",
+    ],
+) -> list[SetTypeResult]:
+    """WHAT: Apply a recovered type to a function signature, a global, a decompiler local variable, or a stack-frame member - the kind is inferred from the fields you supply unless you set it explicitly.
+
+    WHEN TO USE: Stamp types onto the IDB after declaring them (declare_type). For a function pass its full signature; for a global pass a name or address + type; for a Hex-Rays local pass addr + variable + type; for a frame slot pass addr + name + type.
+
+    RETURNS: One entry per edit: {edit, kind, ok} on success, or {..., error} with a kind-specific message (e.g. function/global not found, local var missing, referenced type not declared).
+
+    PITFALL: Every referenced type must already exist in the local type library or the apply fails - declare_type first. Kind inference is heuristic: addr+name resolves to 'stack' only when that name is a real frame member, otherwise it falls through to 'global'; set 'kind' explicitly to remove ambiguity. For atomic multi-edit application with stop-on-error and an aggregate summary, prefer type_apply_batch.
+    """
     normalized_edits = normalize_dict_list(edits, _parse_addr_type_shorthand)
     return [_apply_type_edit(edit) for edit in normalized_edits]
 
 
+@safety("DESTRUCTIVE")
+@title("Apply Types (Batch)")
 @tool
 @idasync
 def type_apply_batch(
     batch: Annotated[
         TypeApplyBatch,
-        "Batch type edits with optional stop_on_error behavior",
+        "{'edits': [<TypeEdit>, ...], 'stop_on_error': <bool, optional>}. "
+        "Each edit uses the same shape as set_type "
+        "(function/global/local/stack); 'addr:typename' shorthand is accepted.",
     ],
 ) -> TypeApplyBatchResult:
-    """Apply multiple type edits and return aggregate status."""
+    """WHAT: Apply many type edits in one call (same per-edit semantics as set_type) and return a rolled-up status with per-edit detail.
+
+    WHEN TO USE: Stamp a whole recovered cluster of types at once and get an aggregate pass/fail count. Set stop_on_error to halt at the first failure (e.g. when later edits depend on earlier ones succeeding).
+
+    RETURNS: {ok (all succeeded), applied, failed, stopped (true iff stop_on_error halted early), results:[<SetTypeResult>...]}.
+
+    PITFALL: This is NOT transactional - edits already applied before a failure stay applied even when stop_on_error halts the rest, so re-running may re-apply some. All referenced types must be declared first (declare_type). For a single edit, set_type is simpler.
+    """
     normalized_edits = normalize_dict_list(
         batch.get("edits", []), _parse_addr_type_shorthand
     )
@@ -1064,12 +1167,25 @@ def type_apply_batch(
     }
 
 
+@safety("READ")
+@title("Infer Likely Types")
 @tool
 @idasync
 def infer_types(
-    addrs: Annotated[list[str] | str, "Addresses to infer types for"],
+    addrs: Annotated[
+        list[str] | str,
+        "One or more addresses (ea or symbol names) to infer a type for; "
+        "accepts a single string or a list.",
+    ],
 ) -> list[InferTypeResult]:
-    """Infer and apply likely types at target addresses."""
+    """WHAT: Suggest the most likely type at each address, trying Hex-Rays inference first, then any type already applied, then a size-based scalar guess - and report which method/confidence produced it.
+
+    WHEN TO USE: Get a starting-point type for an untyped global/data item before committing it. This is advisory ONLY.
+
+    RETURNS: One entry per address: {addr, inferred_type, method ('hexrays'|'existing'|'size_based'|null), confidence ('high'|'low'|'none')} (+ error on failure).
+
+    PITFALL: Despite the action's name this does NOT modify the IDB - it only proposes a type. Feed the result into set_type / type_apply_batch to actually apply it, and treat 'size_based'/'low' confidence guesses skeptically (they only map item size to a uintN_t). A 'none' confidence with null type means nothing could be inferred.
+    """
     addrs = normalize_list_input(addrs)
     results = []
 

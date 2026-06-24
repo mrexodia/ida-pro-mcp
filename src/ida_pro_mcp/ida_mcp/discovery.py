@@ -126,6 +126,28 @@ def probe_instance(host: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
+_PROBE_CACHE_TTL = 1.0
+_probe_cache: dict[tuple[str, int], tuple[float, bool]] = {}
+
+
+def probe_instance_cached(host: str, port: int, timeout: float = 1.0) -> bool:
+    """Liveness probe with a short per-poll-window cache.
+
+    discover_instances() probes every registered instance on each call, and
+    callers poll it on a ~1s loop. Caching the result for a poll window avoids
+    re-running a serial, blocking TCP connect (each up to `timeout`s) for the
+    same instance on back-to-back calls.
+    """
+    now = time.monotonic()
+    key = (host, port)
+    cached = _probe_cache.get(key)
+    if cached is not None and now - cached[0] < _PROBE_CACHE_TTL:
+        return cached[1]
+    alive = probe_instance(host, port, timeout=timeout)
+    _probe_cache[key] = (now, alive)
+    return alive
+
+
 def discover_instances() -> list[InstanceInfo]:
     """Scan for registered instances, cleaning up stale entries."""
     instances_dir = get_instances_dir()
@@ -162,7 +184,7 @@ def discover_instances() -> list[InstanceInfo]:
         # Secondary check: verify the instance is actually listening.
         # Catches PID reuse (Windows can recycle PIDs quickly) and
         # cases where the process is alive but the server crashed.
-        if not probe_instance(info["host"], info["port"], timeout=1.0):
+        if not probe_instance_cached(info["host"], info["port"], timeout=1.0):
             try:
                 os.unlink(file_path)
             except OSError:
