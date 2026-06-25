@@ -639,13 +639,24 @@ def read_bytes_bss_safe(ea: int, size: int) -> bytes:
     if size <= 0:
         return b""
     bulk = ida_bytes.get_bytes(ea, size)
-    if bulk is not None and len(bulk) == size:
-        return bytes(bulk)
-    out = bytearray(size)
-    for i in range(size):
-        if ida_bytes.is_loaded(ea + i):
-            out[i] = ida_bytes.get_byte(ea + i)
-    return bytes(out)
+    if bulk is None or len(bulk) != size:
+        # Bulk read failed/short — build byte-by-byte, zero for unloaded bytes.
+        out = bytearray(size)
+        for i in range(size):
+            if ida_bytes.is_loaded(ea + i):
+                out[i] = ida_bytes.get_byte(ea + i)
+        return bytes(out)
+    # idalib's get_bytes returns the 0xFF sentinel for unloaded .bss bytes
+    # instead of failing, so the bulk read alone is NOT BSS-safe. The sentinel
+    # is 0xFF, so only 0xFF bytes are candidates: zero any that aren't actually
+    # loaded (a genuine 0xFF in initialized data stays, since it is_loaded).
+    if 0xFF in bulk:
+        out = bytearray(bulk)
+        for i in range(size):
+            if out[i] == 0xFF and not ida_bytes.is_loaded(ea + i):
+                out[i] = 0
+        return bytes(out)
+    return bytes(bulk)
 
 
 def read_int_bss_safe(ea: int, size: int) -> int:
