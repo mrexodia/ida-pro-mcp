@@ -1,0 +1,594 @@
+{
+  "summary": "Roadmap synthesized from 18 audits into 7 dependency-ordered batches. The owner's headline asks - DEBUG-RE capabilities and the nested russian-doll call-hierarchy view - come early (Batches 3-4), but two foundational batches precede them because they directly unblock those features and lock the axis-7 never-patch-unless-asked invariant. Batch 1 establishes the consent/guardrail layer and fixes confirmed binary-mutation bugs. Batch 2 fixes call-edge/decompiler/error-contract foundations the russian-doll and trace features depend on. Batch 3 delivers real DEBUG-RE primitives (true return capture, x64 args, watchpoints, blocking control, stop-context, snapshot-diff). Batch 4 builds the nested call-hierarchy view (wide+fine, conditions+jumps) on the now-correct edges and ctree access. Batch 5 deepens static comprehension (ctree/microcode/lvar/types/decode correctness). Batch 6 does the architecture reorg + naming taxonomy + manifest registration once behavior is stable. Batch 7 closes discoverability/docs/tests. Cross-cutting de-duplicated themes: one shared bounded-traversal primitive, one decompiler cache, one large-output strategy, structured error taxonomy, and eval()->AST-whitelist hardening. Every binary-mutating capability is fenced behind explicit per-call consent + dry-run + original-byte capture before any new feature ships.",
+  "batches": [
+    {
+      "name": "Batch 1: Axis-7 consent layer + confirmed mutation-safety fixes",
+      "goal": "Lock the never-patch-unless-requested invariant into infrastructure (not per-tool discretion), fix confirmed binary-mutation bugs, and unify the safety taxonomy so metadata edits stay available while byte-writers are truly fenced. Lands first because every later feature touches mutating or debug-mutating surfaces and the only current gate is registry --unsafe.",
+      "depends_on": "",
+      "items": [
+        {
+          "title": "Central server-side write/consent guard (require_consent + dry_run helper in core infra)",
+          "axis": "7",
+          "value": "high",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "Add a shared @mutates-style decorator / utils.guard_write(explicit) and a new PATCH/MUTATES_BINARY safety tier so patch/patch_asm/put_int refuse to write image bytes unless the call carried an explicit confirm token; default dry_run=True so the first call previews. http.py defaults every tool (incl. patchers) to enabled, so the gate must be server-side, not a UI hint.",
+          "files": "rpc.py, sync.py, utils.py, http.py"
+        },
+        {
+          "title": "patch_asm/patch/put_int: capture+return original bytes, dry-run preview, full-span mapped check, length-mismatch handling",
+          "axis": "7",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Read get_bytes before patch_bytes and return original_bytes hex for reversibility; validate every byte of the span is mapped (not just start ea); warn/NOP-pad on a shorter assembled instruction leaving an orphan tail; add revert_patch + list_patches via get_original_byte/visit_patched_bytes.",
+          "files": "api_memory.py, api_modify.py"
+        },
+        {
+          "title": "Reclassify metadata edits WRITE vs byte-writers DESTRUCTIVE/PATCH consistently across code and docs",
+          "axis": "4",
+          "value": "high",
+          "effort": "low",
+          "risk": "low",
+          "detail": "rename/set_comments/append_comments/define_* are metadata-only but tagged DESTRUCTIVE, hiding them behind --unsafe with real patchers; reclassify to WRITE. Reserve DESTRUCTIVE/PATCH for image-byte writes. Fix the contradiction where tool-index is right but tools-reference/getting-started/decompiler-mastery/tool-authoring-guide label rename WRITE.",
+          "files": "api_modify.py, api_types.py, docs"
+        },
+        {
+          "title": "Gate binary-patching from injected Python (py_eval/py_exec_file)",
+          "axis": "7",
+          "value": "high",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "Add allow_patch=False default that wraps the namespace so ida_bytes.patch_bytes/idc.patch_* raise unless enabled, and auto-create an ida_undo point before any mutating script. py_exec_file also needs an allow-listed script root + size/encoding guards (currently any absolute host path is executable on a network-reachable server).",
+          "files": "api_python.py"
+        },
+        {
+          "title": "Harden snapshot_restore + dbg_write: identity check, honest partial-failure, revert handle",
+          "axis": "7",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "snapshot_restore writes live memory+regs, swallows all errors yet returns restored:True and never verifies same-process identity; record pid/module-base at save and refuse on mismatch, report partial. dbg_write should auto-snapshot original bytes and return a revert handle; fix its inconsistent missing-ok result shape.",
+          "files": "api_probes.py, api_debug.py"
+        },
+        {
+          "title": "idb_save: bias is_idaq() exception to the SAFE GUI/no-kill branch and refuse silent overwrite",
+          "axis": "7",
+          "value": "medium",
+          "effort": "low",
+          "risk": "low",
+          "detail": "Exception fallback currently biases to the headless DBFL_KILL branch (the #446 corruption it tries to avoid); flip to safe. Refuse save-as to an existing different path unless explicit overwrite=True.",
+          "files": "api_core.py"
+        },
+        {
+          "title": "Make dbg_start entry-breakpoint planting opt-in and documented",
+          "axis": "7",
+          "value": "medium",
+          "effort": "low",
+          "risk": "low",
+          "detail": "dbg_start silently auto-plants soft bps at every entry point when none exist - an undocumented IDB mutation; gate behind plant_entry_bps=False and document in RETURNS.",
+          "files": "api_debug.py"
+        },
+        {
+          "title": "Replace eval() probe-predicate sandbox claim with a real AST-whitelist evaluator",
+          "axis": "8",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "_eval_predicate runs user strings via eval with only __builtins__ emptied (the noqa sandboxed comment is false; subclass-traversal escapes reach os/subprocess). Replace with ast.parse + node allowlist (Compare/BoolOp/BinOp, names limited to c/old/new + captured keys), used for predicates and conditions.",
+          "files": "api_probes.py"
+        },
+        {
+          "title": "Add a test encoding the axis-7 invariant + module-level READ-only assertions",
+          "axis": "7",
+          "value": "medium",
+          "effort": "low",
+          "risk": "low",
+          "detail": "Test that every binary-mutating tool carries the byte-write tier + is registered unsafe, that a read-only workflow leaves IDB bytes unchanged, and that every @tool in api_analysis.py is READ-only. Lock guardrails into CI so a regression is visible.",
+          "files": "tests/test_tool_metadata.py, tests/framework.py"
+        }
+      ]
+    },
+    {
+      "name": "Batch 2: Foundational fidelity - call edges, decompiler cache, error contracts, traversal primitive",
+      "goal": "Fix correctness foundations the russian-doll view (Batch 4) and trace tools (Batch 3) depend on: consistent call-edge semantics, a single decompiler cache, structured error contracts, and one budgeted bounded-traversal primitive. Without these the headline axis-2 features inherit silent over/under-reporting and stale pseudocode.",
+      "depends_on": "Batch 1: Axis-7 consent layer + confirmed mutation-safety fixes",
+      "items": [
+        {
+          "title": "Unify call-edge classification: chunk- and jmp-aware, call vs tailcall vs jump vs fallthrough vs indirect",
+          "axis": "8",
+          "value": "high",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "_direct_callees follows ALL CodeRefsFrom (counts tail-call jmps/jump-table targets as callees) while _direct_callers filters NN_call*, so the two directions are not transposes; this corrupts callees_recursive AND reaches. Add a shared classify_code_edge helper, walk func chunks (func_tail_iterator), resolve switch targets via get_switch_info, and surface unresolved indirect sites as explicit nodes.",
+          "files": "api_graph.py, api_analysis.py, utils.py"
+        },
+        {
+          "title": "Single-pass decompile with a shared cfunc cache + invalidation",
+          "axis": "8",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "decompile() decompiles twice (text then refs); analyze_batch and export_funcs add two more independent paths. Introduce a per-IDB cfunc cache keyed by func start_ea + dirty-counter in utils, invalidated on rename/retype. Wire force_recompile/mark_cfunc_dirty and auto-bump the dirty counter from modify/types edits so pseudocode is never stale.",
+          "files": "utils.py, api_analysis.py, api_modify.py, api_types.py"
+        },
+        {
+          "title": "Structured error taxonomy + consistent structured error fields",
+          "axis": "8",
+          "value": "high",
+          "effort": "low",
+          "risk": "low",
+          "detail": "Add NotFoundError/InvalidArgumentError/VersionUnsupportedError/FeatureUnavailableError subclassing McpToolError. Standardize tools that silently swallow errors (func_query bad regex, find_regex raw raise, entity_query bad min/max_addr, find string-mode swallow) onto a populated error field like search_text. Fix parse_address's misleading missing-0x message for not-found names.",
+          "files": "rpc.py, utils.py, api_core.py, api_analysis.py"
+        },
+        {
+          "title": "Budgeted recursive-walk primitive (deadline + node budget + cycle/SCC) shared by all graph tools",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Add walk_call_tree(ea, depth, node_budget, deadline=get_tool_deadline()) generator with cycle detection and back-edge flags so callgraph/callees_recursive/reaches and the new russian-doll tool share one deadline-aware bounded traversal. Standardize on BFS (callgraph's recursive DFS mislabels depth and risks RecursionError). Optional Tarjan SCC to collapse recursion clusters.",
+          "files": "utils.py, sync.py, api_graph.py, api_analysis.py"
+        },
+        {
+          "title": "Stabilize result schemas across success/error and add totals/truncation everywhere",
+          "axis": "8",
+          "value": "medium",
+          "effort": "low",
+          "risk": "low",
+          "detail": "api_graph error branches drop max_depth/max_nodes/truncated; build results through one constructor. Add total + truncated to list_funcs/func_query/list_globals/imports/imports_query (only entity_query has total). Surface lookup_funcs '*' 1000-cap truncation. Disclose+parameterize all silent caps (5k-string, 500-site, 50-caller, 200/500 node/edge).",
+          "files": "api_graph.py, api_core.py, api_composite.py, api_survey.py"
+        },
+        {
+          "title": "Fix immediate-search paging to linear next_start resumption",
+          "axis": "8",
+          "value": "high",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "find type=immediate rescans from each segment start every page with per-call seen_insn and cursor.next=offset+limit, giving quadratic cost and unstable offsets. Switch to insn_query-style next_start cursor resumption with persistent dedup within a scan.",
+          "files": "api_analysis.py"
+        },
+        {
+          "title": "Unify the two large-output strategies and harden output-limiting",
+          "axis": "1",
+          "value": "medium",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Collapse utils.handle_large_output (file-spill at 3000 lines) into rpc.py's truncation+download-URL path (50k chars) - one threshold, one envelope, one cache. Add a dict-key fan-out cap and switch the output cache from FIFO to LRU. Formalize the two registry tools/call monkeypatches into an ordered middleware chain (consent -> trace -> truncate -> handler).",
+          "files": "rpc.py, utils.py, trace.py"
+        },
+        {
+          "title": "Fix confirmed type-apply + parsing bugs (axis-8 sharp fixes)",
+          "axis": "8",
+          "value": "high",
+          "effort": "low",
+          "risk": "low",
+          "detail": "set_type passes PT_SIL (a parse flag) to apply_tinfo which expects TINFO_DEFINITE - applied types are non-definitive. type_query calls get_ordinal_limit() directly (breaks on IDA<8.4) while search_structs uses compat. int_convert auto-size raises spurious OverflowError for 0x80 and treats default size=64 as 64 bytes. declare_stack parses frame offset through parse_address (wrong for negative/decimal). Add post-apply re-read assertions.",
+          "files": "api_types.py, api_core.py, api_stack.py, compat.py"
+        }
+      ]
+    },
+    {
+      "name": "Batch 3: DEBUG-RE core - real captures, x64, watchpoints, blocking control, stop-context, snapshots",
+      "goal": "Deliver the owner's DEBUG-RE priority: turn the half-built dynamic toolkit into a faithful live-RE surface. Real return-value capture and correct x64 args are prerequisites for the russian-doll runtime overlay in Batch 4; blocking steps/run, memory watchpoints, stop-context, and snapshot-diff are the staple primitives flagged missing or fake. All @ext(dbg), read-only on the binary, debuggee mutations behind consent.",
+      "depends_on": "Batch 1: Axis-7 consent layer + confirmed mutation-safety fixes",
+      "items": [
+        {
+          "title": "Real return-value capture: true entry+return probe pairing",
+          "axis": "2",
+          "value": "high",
+          "effort": "high",
+          "risk": "medium",
+          "detail": "trace_calls capture_ret and probe_net pre_post are FAKE - they only append an English instruction string; no return-site probe is installed and no value recorded. On the entry hit, auto-install a non-stopping one-shot return probe at [esp]/[rsp] (always returns False, self-disarms), joining entry+leave by (tid, rsp/call-id) and recording rax/eax. Load-bearing fix for In/Out trees.",
+          "files": "api_probes.py, trace.py"
+        },
+        {
+          "title": "x64/auto calling-convention-aware argument capture",
+          "axis": "8",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "_stack_arg reads args off the stack even when ptr_size==8, so Win64 (rcx/rdx/r8/r9) and SysV register args are garbage - every 64-bit probe mislabels arguments. Add a conv-aware resolver keyed off detected ABI / the function's IDB type, with shadow-space handling for arg4+.",
+          "files": "api_probes.py"
+        },
+        {
+          "title": "Hardware breakpoints + data watchpoints (espions) with slot accounting",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "dbg_add_bp hardcodes BPT_SOFT - no HW bps or data watchpoints at all. Add BPT_WRITE/BPT_RDWR/BPT_EXEC with size; surface type/size/hw-mode in dbg_bps. Add DR-slot accounting (report used/free, fail loudly on the 5th) and a software-watch fallback for ranges larger than one aligned slot, since watch_region silently misses writes outside its single slot.",
+          "files": "api_debug.py, api_probes.py"
+        },
+        {
+          "title": "Make resume/step blocking via the orphaned _continue_and_wait; fix async step correctness",
+          "axis": "8",
+          "value": "high",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "_continue_and_wait is dead code; step_into/step_over are async so returned post-step ip is racy/stale. Wire the helper into dbg_continue/dbg_run_to and add wait_for_next_event after step with an optional wait_ms. Fix run_until status corruption (any drained record forces status=hit, clobbering exited/timeout).",
+          "files": "api_debug.py, api_probes.py"
+        },
+        {
+          "title": "stop_context: one fused where-am-I tool",
+          "axis": "2",
+          "value": "high",
+          "effort": "low",
+          "risk": "low",
+          "detail": "After every stop an agent fires regs+stacktrace+read+disasm separately. Add stop_context returning ip/fn, disasm window, regs, decoded EFLAGS, stack args, stacktrace, and per-register pointer classification (which region/module each reg points into with a byte preview). Highest-leverage debug tool. READ.",
+          "files": "api_debug.py, api_probes.py"
+        },
+        {
+          "title": "memory_map + pointer classification",
+          "axis": "2",
+          "value": "high",
+          "effort": "low",
+          "risk": "low",
+          "detail": "_live_memory_ranges enumerates ranges internally but no tool surfaces them. Expose memory_map (regions with perms/module/type + module bases) and classify_pointer(addr). Foundational memory comprehension and feeds stop_context.",
+          "files": "api_probes.py, api_debug.py"
+        },
+        {
+          "title": "snapshot_diff + auto-range + IDB-persistent snapshots",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Snapshots are in-process dicts with no diff, lost on restart. Add snapshot_diff (reg+range deltas via diff_buffers), auto_ranges mode (stack window + writable segments), and persist to the IDB netnode reusing trace.py plumbing. Snapshot-before/after a suspected mutator is the what-did-this-change primitive.",
+          "files": "api_probes.py, trace.py"
+        },
+        {
+          "title": "Register write, attach/detach, thread control, step-out, exception config",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "Add dbg_set_reg (set_reg_val), dbg_attach/dbg_detach (dbg_exit currently always kills target), dbg_threads/dbg_select_thread, dbg_step_out (run-to-return), and exception_config (first-chance catch/pass) for packed/anti-debug targets. Replace hardcoded x86 GP register allowlist with a processor-aware set so ARM/AArch64/MIPS work.",
+          "files": "api_debug.py"
+        },
+        {
+          "title": "Counting/Nth-hit breakpoints, true every_nth sampling, per-probe record eviction",
+          "axis": "2",
+          "value": "medium",
+          "effort": "low",
+          "risk": "low",
+          "detail": "Add break-on-Nth / count-only conditional breakpoints. Implement every_nth in _probe_dispatch (currently a no-op despite being advertised) via a per-probe skip counter. Evict a probe's ring records on probe_clear (currently orphaned). Remove or implement the inert buffer_mode param. Reconcile snapshot_delete/probe_arm DESTRUCTIVE mis-classification.",
+          "files": "api_probes.py, api_debug.py"
+        },
+        {
+          "title": "Add api_probes pure-helper unit tests + no-debugger-guard tests",
+          "axis": "8",
+          "value": "high",
+          "effort": "low",
+          "risk": "low",
+          "detail": "api_probes has ZERO coverage despite deterministic helpers (parse_capture_spec, parse_ptr_chain, build_probe_record, _stable_probe_id, validate_autopilot_step, plan_autopilot). Add unit tests for these and mock-based tests asserting _require_debugger() makes every probe/watch/trace entrypoint fail cleanly with no session. Add an opt-in headless live-debuggee smoke test (skip when no backend).",
+          "files": "tests/test_api_probes.py, tests/framework.py"
+        }
+      ]
+    },
+    {
+      "name": "Batch 4: Russian-doll nested call-hierarchy view (wide + fine, conditions + jumps)",
+      "goal": "The owner's flagship axis-2 capability: a zoomable nested In/Out call hierarchy giving both a wider (module/subsystem) and finer (intra-function branches/guards) view. Built on Batch 2's correct call edges + traversal primitive and able to overlay Batch 3's runtime data. Co-locates the scattered graph story (callees/callers/reaches/callgraph) into one owned module.",
+      "depends_on": "Batch 2: Foundational fidelity - call edges, decompiler cache, error contracts, traversal primitive",
+      "items": [
+        {
+          "title": "call_hierarchy: bidirectional depth-banded nested In/Out view rooted at a node",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "New api_hierarchy.py tool: call_hierarchy(root, direction in/out/both, depth, max_nodes, include_indirect, exclude globs, collapse_leaves). Reuse the budgeted BFS helper for both directions with identical (now-unified) edge semantics; return signed depth-band levels arrays (the dolls), nodes with is_leaf/is_recursive/indirect_only, and edges tagged call/jump/tailcall/indirect. READ.",
+          "files": "api_hierarchy.py, api_graph.py, utils.py"
+        },
+        {
+          "title": "function_skeleton: finer view - CFG with branch conditions and guarded calls",
+          "axis": "2",
+          "value": "high",
+          "effort": "high",
+          "risk": "medium",
+          "detail": "Enrich basic_blocks: per-block terminating branch with human condition (jz->if(var==0)), true/false successors, calls_here, loop-back/back-edge markers, cyclomatic complexity. When decompiler available, pull ctree (cot_if/cot_for/cot_while) to attach real guard expressions and a guarded_calls list (decrypt fires under if(g_init && argc>1)). The conditions+jumps half of the russian-doll ask.",
+          "files": "api_hierarchy.py, api_analysis.py"
+        },
+        {
+          "title": "Drill protocol: bounded outer view returns stable drill/expand cursors",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Every node/shell carries a drill handle {into:function_skeleton, addr} and expand {tool:call_hierarchy}; collapsed-leaf bundles and truncated shells carry continue cursors (mirroring basic_blocks next/done). Lets an agent zoom in (hierarchy node -> skeleton block -> guarded call) and out without dumping the whole closure.",
+          "files": "api_hierarchy.py"
+        },
+        {
+          "title": "module_hierarchy: subsystem/class-level russian-doll over a function set",
+          "axis": "2",
+          "value": "medium",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Rebuild analyze_component into a true nested view: auto-grow members from a seed (callees_recursive low depth, or class vtable/methods via domain_types), classify interface vs internal (fix the get_callers 50-cap/swallow mislabel), and emit inner intra-set graph + outer reaches-out (dependencies) + inner-reverse reached-by-in (API consumers) + shared globals. Drills into per-function call_hierarchy.",
+          "files": "api_hierarchy.py, api_composite.py, api_graph.py"
+        },
+        {
+          "title": "hierarchy_runtime_overlay: light up actually-taken edges/branches (ext dbg)",
+          "axis": "2",
+          "value": "medium",
+          "effort": "high",
+          "risk": "medium",
+          "detail": "Read-only overlay (sets bps/reads trace, never patches) merging probe/trace hit-counts onto a static call_hierarchy/function_skeleton by edge key, adding per-edge taken/hits and per-block executed. This guarded decrypt only fired when g_licensed!=0. Returns no_runtime_data when no session rather than implying coverage. Consumes Batch 3 real captures.",
+          "files": "api_hierarchy.py, api_probes.py"
+        },
+        {
+          "title": "Per-edge metadata + indirect-call surfacing + recursion/SCC representation",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "GraphEdge gains call-site EA, count, indirect flag; unresolved indirect/virtual calls become explicit leaf nodes (vtable-heavy classes no longer silently sparse). Mark back-edges and optionally collapse mutually-recursive clusters into one SCC doll instead of exploding the fan.",
+          "files": "api_hierarchy.py, api_graph.py, utils.py"
+        },
+        {
+          "title": "Resolve indirect/virtual call edges via the decompiler/ctree where possible",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "Add a decompiler-backed callee resolver walking cfunc cit_call nodes plus get_switch_info for jump-dispatch, unified with the mnemonic path, so the hierarchy/analyze tools recover indirect targets instead of dropping them. Prerequisite for faithful class/vtable hierarchies.",
+          "files": "api_hierarchy.py, api_analysis.py, utils.py"
+        },
+        {
+          "title": "eamap/boundaries bridge + russian-doll methodology doc",
+          "axis": "5",
+          "value": "medium",
+          "effort": "low",
+          "risk": "low",
+          "detail": "Add map_ea_to_pseudocode / map_pseudocode_line_to_eas (hexrays eamap/boundaries) and attach pseudo_line ranges to skeleton blocks. Write docs/call-hierarchy-russian-doll.md wiring survey -> module_hierarchy -> call_hierarchy -> function_skeleton -> reaches -> runtime overlay, with depth/cap heuristics and the indirect-call caveat.",
+          "files": "api_hierarchy.py, api_analysis.py, docs/call-hierarchy-russian-doll.md, docs/_meta.yaml"
+        }
+      ]
+    },
+    {
+      "name": "Batch 5: Deep static comprehension - ctree, microcode, lvars, types, decode correctness",
+      "goal": "Strengthen pseudocode and memory comprehension (axis-2) and fix the sharp decode/typing correctness bugs the audits flagged. Provides the structured ctree/microcode/lvar access the russian-doll finer view and trace overlays draw on, and makes value/struct/string decoding faithful.",
+      "depends_on": "Batch 2: Foundational fidelity - call edges, decompiler cache, error contracts, traversal primitive",
+      "items": [
+        {
+          "title": "pseudocode_query: ctree-backed AST queries (calls/loops/ifs/assignments/variable-uses)",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Wrap cfunc ctree (find_calls/find_loops/find_assignments/find_variables/walk_expressions) to return structured nodes with ea/line/parent/rendered subexpr instead of the current regex/heuristic text scraping. Backbone of reliable pseudocode comprehension and feeds function_skeleton guard extraction.",
+          "files": "api_analysis.py"
+        },
+        {
+          "title": "lvar_usage def-use map + persistent set_lvar (name/type/comment)",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "Expose per-reference lvar access type (read/write/addr) and context (call_arg/comparison/condition) - replaces heuristic trace_data_flow with decompiler-accurate def-use. Add set_lvar writing name/type/comment via modify_user_lvar_info/save_local_variable_info (currently only rename exists) so the read-then-annotate loop is complete. WRITE (metadata).",
+          "files": "api_analysis.py, api_modify.py"
+        },
+        {
+          "title": "Structured decompile output: line<->address map, lvars, warnings",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Beyond inline /*0xNNNN*/ markers, return {line_no:[eas], ea:line_no}, the lvar list (name/type/location), and cfunc warnings so the model knows when pseudocode is unreliable and can pivot programmatically. Refs visitor currently only handles cot_obj - broaden.",
+          "files": "api_analysis.py, utils.py"
+        },
+        {
+          "title": "Microcode access (text + resolved call args)",
+          "axis": "2",
+          "value": "medium",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Add microcode_text(func, maturity) and microcode_calls(func) over gen_microcode / MicroCallInfo. Cleanest IR for value-tracking, call-arg resolution, de-obfuscation; completely absent today.",
+          "files": "api_analysis.py"
+        },
+        {
+          "title": "Type-aware value decoding (read_struct/get_string/get_global_value/read_struct_live)",
+          "axis": "8",
+          "value": "high",
+          "effort": "high",
+          "risk": "low",
+          "detail": "read_struct decodes ALL members as unsigned ints; branch on is_floating/is_signed/is_bool/is_enum, recurse one level into nested UDTs, decode arrays element-wise, extract bitfields by bit offset/width. get_string/global char-arrays hardcode UTF-8/type 0 - use get_str_type and decode per STRTYPE_*. Fix get_global_value inverted char-array condition. Honor DB endianness in get_int/put_int and read_struct_live overlay.",
+          "files": "api_types.py, api_memory.py, api_probes.py"
+        },
+        {
+          "title": "Enum member inspection + bitfield-aware layout + typedef target resolution",
+          "axis": "2",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "type_inspect/type_query report enum member_count 0; enumerate edm_t members (name/value/mask). Report bit offset/width for bitfield members (begin()//8 currently collapses sub-byte fields everywhere incl. resources). Resolve typedef targets. Replace private member.type._print() with a compat.type_str helper.",
+          "files": "api_types.py, api_resources.py, compat.py"
+        },
+        {
+          "title": "enum_upsert on the 9.x tinfo enum API + correct bitfield masks",
+          "axis": "8",
+          "value": "high",
+          "effort": "high",
+          "risk": "medium",
+          "detail": "Reimplement off the legacy idc enum shim onto BTF_ENUM/edm_t; pass correct bitmasks instead of bmask=-1 (which mis-creates bitfield members and breaks value-conflict detection). Add mode (skip|update|error) for member value updates. Centralize any remaining shim in compat.",
+          "files": "api_types.py, compat.py"
+        },
+        {
+          "title": "Smarter, honestly-labeled inference + dry-run for type-apply",
+          "axis": "4",
+          "value": "medium",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "infer_types mislabels heuristic guess_tinfo as method=hexrays/confidence=high; relabel and add string (is_strlit)/pointer/code-ref/array-of-struct detection so a known ASCII string isnt reported uint8_t[N]. Add preview/dry-run to set_type/type_apply_batch (resolve+report current->new without applying). Make set_type kind inference explicit/cheaper (dont decompile on every addr+name edit).",
+          "files": "api_types.py"
+        },
+        {
+          "title": "Field-level struct editing, array stamping, and til import/list",
+          "axis": "2",
+          "value": "medium",
+          "effort": "high",
+          "risk": "medium",
+          "detail": "Add add/rename/retype individual struct members and stamp a type across N elements (array) instead of forcing whole-decl redeclaration. Expose add_til / list loaded type libraries so WinAPI/libc structs can be loaded - a core 9.x typing workflow absent today. declare_type should return the names of types actually created.",
+          "files": "api_types.py"
+        }
+      ]
+    },
+    {
+      "name": "Batch 6: Architecture reorg + naming taxonomy + manifest-driven registration",
+      "goal": "Now that behavior is stable and feature-complete, execute the axis-1 folder/subfolder reorg and axis-4 naming standard without breaking the @tool registry or @ext grouping. Replace the hand-maintained import block (a silent-drop foot-gun) with manifest-driven discovery, de-duplicate overlapping tool families, and split the oversized modules.",
+      "depends_on": "Batch 4: Russian-doll nested call-hierarchy view (wide + fine, conditions + jumps)",
+      "items": [
+        {
+          "title": "Subpackage reorg (_kernel/static/dynamic/types/scripting/workflows/knowledge) with compat shims",
+          "axis": "1",
+          "value": "high",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "Move api_*.py into capability subpackages and infra into _kernel/; keep __init__ import order/side-effects byte-equivalent (trace.configure_idb, init_caches, http patch ordering). Add thin top-level re-export shims to protect deep importers (idalib_server.py) and framework.py module-name parsing. One commit, green via headless tests, shims deleted in a follow-up.",
+          "files": "ida_mcp/__init__.py, all api_*.py, framework.py, idalib_server.py"
+        },
+        {
+          "title": "Manifest/importlib-driven module discovery",
+          "axis": "1",
+          "value": "high",
+          "effort": "low",
+          "risk": "low",
+          "detail": "Replace the 18-line hand-maintained import block with a declared TOOL_PACKAGES list iterated via importlib, so adding a module can no longer silently drop all its tools. Keep ordering-sensitive init explicit after the loop. Add a test asserting every test and tool module is discovered.",
+          "files": "ida_mcp/__init__.py"
+        },
+        {
+          "title": "Split oversized modules (api_probes 2500 LOC, api_analysis 2600, api_debug 1360, api_modify 1427)",
+          "axis": "1",
+          "value": "medium",
+          "effort": "high",
+          "risk": "medium",
+          "detail": "api_probes -> probes/ package (capture/install/watch/snapshot/calltree/autopilot sharing the pure dispatcher); api_analysis -> decompile/xrefs/search/callgraph; api_debug -> lifecycle/breakpoints/registers/memory; api_modify -> comments/names/layout/patch (isolating byte-writers). Promote shared private helpers (_resolve_addr, _cap_decompile, get_callees) to utils.",
+          "files": "api_probes.py, api_analysis.py, api_debug.py, api_modify.py, utils.py"
+        },
+        {
+          "title": "Naming taxonomy standard + 100% title/imperative-docstring enforcement",
+          "axis": "4",
+          "value": "high",
+          "effort": "low",
+          "risk": "low",
+          "detail": "Document verb_noun + capability-prefix rules (bare verbs for static default namespace; dbg_*; one shared family for probe/watch/snapshot/trace/appcall; py_*/recipe_*; list_<noun> vs <noun>_query vs <noun>_inspect for the three read patterns). Add a meta-test asserting every tool has @title and an imperative first-sentence docstring. Fix the _remote debug suffix (means by-tid) and forbid _internal-shaped registered names.",
+          "files": "docs/tool-authoring-guide.md, tests/test_tool_metadata.py, api_debug.py, api_core.py"
+        },
+        {
+          "title": "De-duplicate overlapping tool families (domain_*, function/xref enumeration)",
+          "axis": "4",
+          "value": "medium",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "domain_* names the backend not the capability and duplicates list_funcs/strings/xrefs/type_query; fold into canonical tools behind backend=domain or rename, keeping deprecated aliases. Pick canonical function-enumeration (from list_funcs/func_query/lookup_funcs/entity_query) and xref tools (xrefs_to/xref_query/xrefs_to_field/data_refs/domain_xrefs); demote the rest to documented aliases. Never rename in place.",
+          "files": "api_domain.py, api_core.py, api_graph.py, api_analysis.py"
+        },
+        {
+          "title": "Normalize xref vocabulary + enrich predicates + add domain timeouts/pagination",
+          "axis": "4",
+          "value": "medium",
+          "effort": "low",
+          "risk": "low",
+          "detail": "data_refs emits read/write/data, domain_xrefs emits raw SDK enum strings - pick one taxonomy (call/jump/read/write/offset/data) everywhere and add is_call/is_jump/is_read/is_write/is_flow/user booleans. Add tool_timeout + pagination to all api_domain tools (none have either) and replace the O(n) function-by-address linear scan with an SDK lookup; cache the db handle.",
+          "files": "api_graph.py, api_domain.py"
+        },
+        {
+          "title": "Extend compat.py to the IDA 9.3 API surface",
+          "axis": "1",
+          "value": "medium",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "compat tops out at 9.0 gating. Add feature-probes/wrappers for 9.3-era APIs the overhaul uses (ida_dirtree folders, newer parse_decls, microcode helpers) so higher layers query capability through one module instead of inline hasattr. Route ALL ordinal/enum SDK access through compat (type_query bypasses it today).",
+          "files": "compat.py, api_types.py, api_resources.py"
+        },
+        {
+          "title": "Add idasync read-only fast path",
+          "axis": "8",
+          "value": "medium",
+          "effort": "medium",
+          "risk": "medium",
+          "detail": "@idasync always takes MFF_WRITE, serializing every read behind the write lock. Offer idasync(write=False)->MFF_READ for genuinely read-only tools to improve concurrency under multi-client load.",
+          "files": "sync.py"
+        }
+      ]
+    },
+    {
+      "name": "Batch 7: Discoverability, in-tool docs, resources, and test/coverage closure",
+      "goal": "Close the axis-5 discoverability loop and the test gaps so the now-large, reorganized tool surface is navigable and regression-protected. Includes the high-leverage fictional-ext-group fix, a queryable tool catalog, doc accuracy, and coverage for the modules that ship untested.",
+      "depends_on": "Batch 6: Architecture reorg + naming taxonomy + manifest-driven registration",
+      "items": [
+        {
+          "title": "Fix the fictional ext-group guidance (ext=dbg,probes / ext=domain)",
+          "axis": "5",
+          "value": "high",
+          "effort": "low",
+          "risk": "low",
+          "detail": "Prompts and tool-index reference probes and domain ext groups that do not exist (only @ext(dbg)); a client following the probe prompts connects to a fictional gate. Replace every ext=dbg,probes with ext=dbg and fix the tool-index Ext columns. Single highest-leverage discoverability fix.",
+          "files": "prompts.py, docs/tool-index.md"
+        },
+        {
+          "title": "Queryable tool-catalog resource (ida://tools) + generate prompt ext line from MCP_EXTENSIONS",
+          "axis": "5",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Generate a resource from the live registry (name/title/safety/ext/family) so clients discover the real tool surface and ext groups - the single source of truth that prevents ext-drift recurring. Derive the connect ext sentence in prompts from rpc.MCP_EXTENSIONS so a prompt can never name a non-existent group.",
+          "files": "api_resources.py, prompts.py, rpc.py"
+        },
+        {
+          "title": "Make search_docs return concrete tool names + Annotated params, synonyms, no-results guidance",
+          "axis": "5",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Extend _meta.yaml with a per-topic tools list and surface it in hits so search-here-first returns callable tool names. Add Annotated descriptions (violates the convention today), an RE-domain synonym map + light stemming + length-normalization, and a synthetic see-ida://docs-index hit on zero matches.",
+          "files": "api_docs.py, docs/_meta.yaml"
+        },
+        {
+          "title": "Document the previously-invisible families + accuracy fixes",
+          "axis": "5",
+          "value": "medium",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "tool-index/tools-reference omit api_graph, api_recipes, memory_scan, probe_api_call, snapshot_delete despite claiming completeness; add them. Fix the rename/set_comments WRITE-vs-DESTRUCTIVE contradiction across 4+ docs and the tool-authoring-guide test example. Add the explicit never-patch-unless-asked policy section. Cross-link recipes from crypto/opcode playbooks.",
+          "files": "docs/tool-index.md, docs/tools-reference.md, docs/re-methodology.md, docs/pro-tips-and-pitfalls.md, docs/tool-authoring-guide.md"
+        },
+        {
+          "title": "Add ida://xrefs/to resource, enrich idb/metadata, paginate list resources, gate GUI-only resources",
+          "axis": "8",
+          "value": "medium",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Add the dominant xrefs/to direction (only /from exists). Populate arch/bitness/endianness/compiler in idb/metadata (docstring promises arch but returns none) and chunk-hash the input file. Paginate types/structs/xrefs resources. Detect headless and return not-available for cursor/selection. Verify read_range_selection and the get_ordinal_limit arg mismatch. Add enum resources + bitfield-accurate struct layout.",
+          "files": "api_resources.py, api_docs.py"
+        },
+        {
+          "title": "Cover the untested modules + meta-tests",
+          "axis": "8",
+          "value": "high",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "Add semantic tests for api_graph (callees_recursive nesting depth + cycle handling on the known crackme graph), api_hierarchy (russian-doll depth/conditions), api_recipes, api_domain parity, and a docs-corpus link-integrity test (every cross-link/search result resolves). Assert @ext(dbg) visibility gating (dbg tools absent from default tools/list). Add per-test timeout + explicit test autodiscovery assertion.",
+          "files": "tests/test_api_graph.py, tests/test_api_hierarchy.py, tests/test_api_recipes.py, tests/test_docs_integrity.py, tests/framework.py"
+        },
+        {
+          "title": "Trace-record redaction/size cap + faithful string/callee extraction",
+          "axis": "8",
+          "value": "medium",
+          "effort": "low",
+          "risk": "low",
+          "detail": "trace.traced writes full arguments/structuredContent (e.g. a py_exec_file blob) verbatim into the IDB netnode, bloating the DB permanently - cap/redact reusing rpc truncation. extract_function_strings only accepts STRTYPE_C (undercounts UTF-16/Pascal on Windows binaries) - accept all str types. Tag indirect callsites in get_callees so the hierarchy view isnt silently incomplete.",
+          "files": "trace.py, utils.py"
+        },
+        {
+          "title": "Per-section error isolation + scoping + basic_blocks loop tagging (residual robustness)",
+          "axis": "8",
+          "value": "medium",
+          "effort": "medium",
+          "risk": "low",
+          "detail": "analyze_batch wraps all sections in one try (a failing block discards prototype/decompile already computed) - wrap each include_* separately with a per-section error. Add func/segment/range scoping to find/find_bytes (insn_query already scopes). Decode basic_blocks block.type to a name and add back-edge/loop tagging the PRO-TIP implies. Stream/early-cap xref_query instead of materializing all rows.",
+          "files": "api_analysis.py"
+        }
+      ]
+    }
+  ]
+}
