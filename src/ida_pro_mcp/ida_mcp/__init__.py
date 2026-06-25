@@ -42,6 +42,7 @@ from . import api_probes
 from . import api_sigmaker
 from . import api_domain
 from . import api_graph
+from . import api_hierarchy
 from . import api_docs
 from . import prompts
 
@@ -76,6 +77,7 @@ __all__ = [
     "api_sigmaker",
     "api_domain",
     "api_graph",
+    "api_hierarchy",
     "api_docs",
     "prompts",
     # Re-exported components

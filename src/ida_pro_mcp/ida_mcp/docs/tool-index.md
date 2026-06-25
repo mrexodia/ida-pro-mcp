@@ -41,6 +41,7 @@ domain, docs) need **no** ext param.
 | Stack | `api_stack` | — | READ + DESTRUCTIVE | Inspect and declare/delete a function's stack-frame variables. |
 | Analysis | `api_analysis` | — | READ | Decompile/disasm, xrefs, callees/callgraph, byte/insn search, profiling. |
 | Composite | `api_composite` | — | READ (+1 DESTRUCTIVE) | One-call bundles: analyze a function/component, data-flow, before/after diff. |
+| Hierarchy | `api_hierarchy` | — (+`dbg` overlay) | READ | Russian-doll comprehension: nested In/Out call bands, per-function CFG skeleton + guarded calls, auto-grown subsystems, runtime overlay. |
 | Survey | `api_survey` | — | READ | Single broad first-look census of the whole binary. |
 | Sigmaker | `api_sigmaker` | — | READ | Synthesize AOB / wildcarded byte-pattern signatures to relocate code/data. |
 | Debugger | `api_debug` | **dbg** | READ + EXECUTE | Drive a live debugger: bps, step/continue, regs, stack, live read/write. |
@@ -111,6 +112,26 @@ High-level one-call bundles that fan several primitives internally.
   function" call; `trace_data_flow` follows a value forward/backward (where does
   this recv buffer go / what feeds this length field).
 
+### Hierarchy — `api_hierarchy` (no ext; one `?ext=dbg` overlay)
+The **russian-doll comprehension** layer — understand code by zooming in/out
+instead of dumping a flat closure. Each tool is a different granularity of the
+same call graph, and every node carries `drill`/`expand` payloads naming the next
+tool to call. Delegates all call-edge work to the Batch-2 `utils` seams, so In/Out
+are exact transposes and chunk/switch/tail-call aware.
+- READ: `call_hierarchy` (signed In/Out depth bands around a root),
+  `function_skeleton` (one function's CFG blocks + conditions + decompiler-backed
+  `guarded_calls`), `module_hierarchy` (auto-grow a subsystem from a seed,
+  classify interface vs internal — supersedes `analyze_component`).
+- READ, **`?ext=dbg`**: `hierarchy_runtime_overlay` (fold live probe/trace hits
+  onto a static `call_hierarchy`; read-only, degrades to `no_runtime_data` with
+  no debugger).
+- Pro-tip: start `call_hierarchy(root, direction="both", depth=2)`, then expand
+  the one node that matters via its `expand` payload and drill it with
+  `function_skeleton`. Scan `guarded_calls` first to find "only runs when X"
+  paths. PITFALL: indirect/virtual dispatch is never a direct edge — check
+  `indirect_leaves` / `indirect_sites` before calling a node isolated. See the
+  `call-hierarchy-russian-doll` doc for the full wide-then-fine workflow.
+
 ### Survey — `api_survey` (no ext)
 - READ: `survey_binary` — one broad first-look census (segments, imports,
   exports, strings, candidate subsystems) to orient before drilling in.
@@ -179,6 +200,9 @@ A Pythonic ida-domain SDK mirror of the core queries.
 - *Read one function closely* → Composite `analyze_function` / Analysis
   `decompile`.
 - *Who calls / reaches X* → Analysis `xrefs_to`, `callgraph`, `xrefs_to_field`.
+- *Understand a function by zooming in/out* → Hierarchy (`call_hierarchy` In/Out
+  bands → `function_skeleton` guarded calls → `module_hierarchy` for the whole
+  subsystem).
 - *Recover a struct / vtable* → Types (`read_struct`, `declare_type`) + Stack.
 - *Annotate the IDB* → Modify (`rename`, `set_comments`) + Types.
 - *Relocate code across builds* → Sigmaker.

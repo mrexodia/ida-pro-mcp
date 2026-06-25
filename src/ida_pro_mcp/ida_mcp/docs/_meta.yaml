@@ -33,6 +33,11 @@ tool-index:
     description: A scannable lookup map of every tool family - core/query, memory, modify, types, stack, analysis, composite, survey, sigmaker, debugger(dbg), probes, domain, python, docs - with each family's one-line purpose, safety class (READ/WRITE/DESTRUCTIVE/EXECUTE), ?ext group, and full tool roster, plus a which-family-do-I-reach-for cheatsheet.
     priority: 78
 
+call-hierarchy-russian-doll:
+    title: 'Call Hierarchy: the Russian-Doll Comprehension Workflow'
+    description: The wide-then-fine api_hierarchy workflow - survey_binary -> module_hierarchy (interface vs internal shells) -> call_hierarchy In/Out depth bands -> function_skeleton (which call fires under which condition / guarded_calls) -> reaches to confirm a path -> hierarchy_runtime_overlay to light up taken edges - plus depth/cap heuristics (start depth 2, widen until truncated clears) and the indirect-call + direction caveats.
+    priority: 87
+
 idapython-cookbook:
     title: IDAPython Cookbook
     description: Copy-paste IDAPython recipes (idautils/ida_funcs/ida_bytes/xrefs/ida_typeinf/idc) plus execute_sync, BADADDR, and CP949 gotchas.
