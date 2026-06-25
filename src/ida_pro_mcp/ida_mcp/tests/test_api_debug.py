@@ -42,8 +42,14 @@ def test_list_breakpoints_normalizes_enabled_to_bool():
     ]
     try:
         result = api_debug.list_breakpoints()
-        assert result == [{"addr": "0x401000", "enabled": True, "condition": None, "language": None}]
-        assert isinstance(result[0]["enabled"], bool)
+        assert len(result) == 1
+        bp = result[0]
+        # Core fields (dbg_bps now also reports type/size/hw — tolerate extras).
+        assert bp["addr"] == "0x401000"
+        assert bp["enabled"] is True
+        assert bp["condition"] is None
+        assert bp["language"] is None
+        assert isinstance(bp["enabled"], bool)
     finally:
         for patch in reversed(patches):
             patch.restore()

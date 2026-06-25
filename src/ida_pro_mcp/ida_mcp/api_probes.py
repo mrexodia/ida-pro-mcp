@@ -35,6 +35,7 @@ import threading
 from typing import Any, Optional, TypedDict
 
 from . import trace as _trace
+from . import dbg_common as _dbg
 from .rpc import tool, safety, title, ext
 from .safe_eval import safe_eval
 from .sync import idasync, tool_timeout, IDAError
@@ -52,9 +53,15 @@ class ProbeRef(TypedDict, total=False):
     capture: list[str]
     condition: str | None
     max_hits: int
+    every_nth: int
+    buffer_mode: str
+    capture_ret: bool
+    return_site: str | None
     armed: bool
     installed: bool
     reused: bool
+    api: str
+    resolved_via: str | None
     error: str
 
 
@@ -70,6 +77,8 @@ class ProbeDrainResult(TypedDict):
 
 class ProbeClearResult(TypedDict, total=False):
     removed: int
+    evicted_records: int
+    dropped_pending: int
     error: str
 
 
@@ -181,6 +190,16 @@ class SnapshotListResult(TypedDict, total=False):
 class SnapshotDeleteResult(TypedDict, total=False):
     name: str
     deleted: bool
+    error: str
+
+
+class SnapshotDiffResult(TypedDict, total=False):
+    name_a: str
+    name_b: str
+    regs: list[dict]
+    ranges: list[dict]
+    reg_changes: int
+    byte_changes: int
     error: str
 
 
@@ -572,22 +591,76 @@ def _read_ptr(ea: int) -> int | None:
     return int.from_bytes(raw, "little")
 
 
+def _is_windows() -> bool:
+    """Best-effort: is the analysed image a Windows PE? Used to pick win64 vs sysv
+    for 64-bit integer-arg resolution. Tolerant across IDA builds; defaults to
+    True on Windows hosts only when the filetype probe is inconclusive."""
+    try:
+        import ida_ida
+
+        ft = getattr(ida_ida, "inf_get_filetype", None)
+        if callable(ft):
+            val = ft()
+            f_pe = getattr(ida_ida, "f_PE", 11)
+            return int(val) == int(f_pe)
+    except Exception:
+        pass
+    try:
+        import idaapi
+
+        info = idaapi.get_inf_structure()
+        ftype = getattr(info, "filetype", None)
+        if ftype is not None:
+            f_pe = getattr(idaapi, "f_PE", 11)
+            return int(ftype) == int(f_pe)
+    except Exception:
+        pass
+    # Final fallback: assume the host OS.
+    import os as _os
+    return _os.name == "nt"
+
+
+def _abi_for(conv: str | None) -> str:
+    """Map a caller-supplied convention name to the dbg_common ABI tag.
+
+    32-bit cdecl/stdcall/thiscall all share the cdecl STACK layout (their numbered
+    args live on the stack after the retaddr); thiscall's `this` is exposed
+    separately via the `ecx` token, so as far as numbered args go they are cdecl.
+    On 64-bit the convention name is ignored and the ABI is detected from
+    pointer-width + target OS (win64 vs SysV) per dbg_common.detect_abi.
+    """
+    psize = _ptr_size()
+    if psize == 8:
+        return _dbg.detect_abi(psize, _is_windows())
+    # 32-bit: every named C convention resolves numbered args off the stack.
+    return "cdecl"
+
+
 def _stack_arg(index: int, conv: str = "cdecl") -> int | None:
     """Read the Nth integer argument at the callee ENTRY (return addr at [esp]).
 
-    32-bit conventions:
-      cdecl/stdcall: arg0 at [esp+4], arg1 at [esp+8], ...
-      thiscall:      ecx = this, then stack args at [esp+4], [esp+8], ...
-                     We expose thiscall arg0 as `this` via ecx ONLY through the
-                     dedicated 'ecx' token; argN here is the STACK arg slot to
-                     stay uniform with cdecl.
+    ABI-AWARE: the read location is resolved by dbg_common.resolve_int_arg over
+    the detected ABI, so a register arg (Win64 rcx/rdx/r8/r9, SysV rdi/rsi/...)
+    is read from its register and only the spilled tail comes off the stack. On
+    32-bit every numbered arg is a stack slot (cdecl/stdcall/thiscall layout:
+    arg0 at [esp+4], arg1 at [esp+8], ...). thiscall's `this` is NOT a numbered
+    arg here; read it via the dedicated `ecx` token.
     """
     psize = _ptr_size()
     sp = _read_reg("rsp" if psize == 8 else "esp")
     if sp is None:
         return None
-    slot = sp + psize * (index + 1)
-    return _read_ptr(slot)
+    abi = _abi_for(conv)
+
+    def _read_stack_at_sp_disp(disp: int) -> int | None:
+        return _read_ptr(sp + disp)
+
+    return _dbg.resolve_int_arg(
+        int(index),
+        abi,
+        read_reg=_read_reg,
+        read_stack_at_sp_disp=_read_stack_at_sp_disp,
+    )
 
 
 def _caller() -> int | None:
@@ -701,18 +774,42 @@ def _eval_watch(spec: dict) -> dict | None:
 # stops.
 
 _DISPATCH_GLOBAL = "_IDA_MCP_PROBE_DISPATCH"
+_RETURN_DISPATCH_GLOBAL = "_IDA_MCP_RETURN_DISPATCH"
 _probe_specs: dict[str, dict] = {}
 _probe_specs_lock = threading.Lock()
 
+# Entry<->return pairing for capture_ret / pre-post: maps (tid, sp_at_return) to
+# the in-flight entry payload so the one-shot return probe can join them and
+# record the real return value (rax/eax). Pure logic lives in dbg_common.
+_call_pairing = _dbg.CallPairing()
+_call_pairing_lock = threading.Lock()
+
+# Live registry of one-shot return probes installed by the pairing machinery,
+# keyed by their return-site EA -> {parent_probe_id, conv}. A single bpt at a
+# return site can serve many in-flight frames (recursion / repeated calls); it is
+# del_bpt'd only when no entry probe references it any more.
+_return_sites: dict[int, dict] = {}
+_return_sites_lock = threading.Lock()
+
 
 def _install_dispatcher() -> None:
-    """Publish the dispatcher into __main__ so bpt conditions can reach it."""
+    """Publish the dispatchers into __main__ so bpt conditions can reach them."""
     try:
         import __main__
 
         setattr(__main__, _DISPATCH_GLOBAL, _probe_dispatch)
+        setattr(__main__, _RETURN_DISPATCH_GLOBAL, _return_dispatch)
     except Exception:
         pass
+
+
+def _return_condition_text(ret_ea: int) -> str:
+    """Python condition for a one-shot return-site bpt: call the return dispatcher
+    with the return-site EA and always evaluate False (never stop)."""
+    return (
+        f"{_RETURN_DISPATCH_GLOBAL}({ret_ea!r}) "
+        f"if '{_RETURN_DISPATCH_GLOBAL}' in dir() else False"
+    )
 
 
 def _condition_text(probe_id: str) -> str:
@@ -729,6 +826,12 @@ def _probe_dispatch(probe_id: str) -> bool:
 
     ALWAYS returns False (never stop). Any exception is swallowed and also
     returns False so a buggy probe can never halt the debuggee.
+
+    every_nth: a per-probe skip counter on the spec records only every Nth
+    qualifying hit. capture_ret/pair_return: on a recorded entry hit the
+    dispatcher records the entry into the global CallPairing keyed by (tid, SP)
+    and arms a one-shot non-stopping return probe at the entry's return address,
+    so the real rax/eax can be joined back to this entry when the call returns.
     """
     try:
         with _probe_specs_lock:
@@ -756,6 +859,22 @@ def _probe_dispatch(probe_id: str) -> bool:
             if not _eval_predicate(predicate, captured):
                 return False
 
+        # every_nth sampling: only record every Nth qualifying hit. The skip
+        # counter lives on the spec; gating happens AFTER the predicate so we
+        # sample the events that actually matched.
+        every = spec.get("every_nth")
+        if every and int(every) > 1:
+            with _probe_specs_lock:
+                cur = int(spec.get("_skip_count", 0)) + 1
+                if cur >= int(every):
+                    spec["_skip_count"] = 0
+                    record_this = True
+                else:
+                    spec["_skip_count"] = cur
+                    record_this = False
+            if not record_this:
+                return False
+
         tid = None
         try:
             import ida_dbg
@@ -777,12 +896,185 @@ def _probe_dispatch(probe_id: str) -> bool:
             hit=hit_no,
             tid=tid,
         )
-        _trace.record_probe_event(record)
+        rec = _trace.record_probe_event(record)
+
+        # Return-value pairing: if this probe wants the call's return value,
+        # stash the entry keyed by (tid, sp_at_return) and arm a one-shot return
+        # probe at the return address ([sp] at entry).
+        if spec.get("capture_ret"):
+            _arm_return_pairing(probe_id, spec, tid, hit_no, rec.get("_seq"))
 
         # Budget / self-disarm.
         max_hits = spec.get("max_hits")
         if max_hits is not None and hit_no >= max_hits:
             _disarm_probe(probe_id, spec.get("ea"))
+    except Exception:
+        return False
+    return False
+
+
+def _arm_return_pairing(
+    probe_id: str, spec: dict, tid: Any, hit_no: int, entry_seq: Any
+) -> None:
+    """At a recorded entry hit, record the in-flight frame and install a
+    one-shot non-stopping return probe at the call's return address.
+
+    SP keying: at callee ENTRY, SP points at the pushed return address. When the
+    `ret` executes the return address is popped, so at the return SITE the SP has
+    advanced by one pointer slot. We therefore key the pairing on
+    sp_at_return = esp_at_entry + ptr_size, which is exactly the SP the one-shot
+    probe will observe, so match_return joins them deterministically.
+    """
+    try:
+        psize = _ptr_size()
+        sp_entry = _read_reg("rsp" if psize == 8 else "esp")
+        ret_ea = _caller()  # return address == [sp] at entry
+        if sp_entry is None or ret_ea is None:
+            return
+        sp_at_return = sp_entry + psize
+        conv = spec.get("conv", "cdecl")
+        payload = {
+            "probe_id": probe_id,
+            "entry_ea": spec.get("ea"),
+            "entry_hit": hit_no,
+            "entry_seq": entry_seq,
+            "ret_ea": ret_ea,
+        }
+        # Optional post-transform memory read (probe_net pre/post): resolve the
+        # buffer ADDRESS now (while args are live) and stash it so the return
+        # probe can re-read the SAME bytes after the callee mutated them.
+        post = spec.get("post_mem")
+        if isinstance(post, dict):
+            buf_expr = post.get("buf_expr")
+            size = int(post.get("size", 0) or 0)
+            buf_addr = _eval_mem_expr(buf_expr, conv) if buf_expr else None
+            if buf_addr is not None and size > 0:
+                payload["post_addr"] = buf_addr
+                payload["post_size"] = size
+        with _call_pairing_lock:
+            _call_pairing.record_entry(tid, sp_at_return, payload)
+        _install_return_site(ret_ea, parent_probe_id=probe_id, conv=conv)
+    except Exception:
+        pass
+
+
+def _install_return_site(ret_ea: int, *, parent_probe_id: str, conv: str) -> None:
+    """Install (or refcount) a one-shot-style non-stopping return probe at ret_ea.
+
+    A single bpt at a return site serves every in-flight frame that returns
+    through it (the per-frame match is by SP). The bpt self-disarms via the
+    return dispatcher once no pending frame remains, so it is "one-shot" per
+    drained frame rather than per physical hit.
+    """
+    try:
+        import ida_dbg
+    except Exception:
+        return
+    with _return_sites_lock:
+        existing = _return_sites.get(ret_ea)
+        if existing is not None:
+            existing.setdefault("parents", set()).add(parent_probe_id)
+            return
+        _return_sites[ret_ea] = {"parents": {parent_probe_id}, "conv": conv}
+
+    try:
+        bpt = ida_dbg.bpt_t()
+        if not ida_dbg.get_bpt(ret_ea, bpt):
+            if not ida_dbg.add_bpt(ret_ea, 0, ida_dbg.BPT_SOFT):
+                if not ida_dbg.get_bpt(ret_ea, ida_dbg.bpt_t()):
+                    return
+        bpt = ida_dbg.bpt_t()
+        if not ida_dbg.get_bpt(ret_ea, bpt):
+            return
+        try:
+            bpt.elang = "Python"
+        except Exception:
+            setter = getattr(bpt, "set_cnd_elang", None)
+            if callable(setter):
+                setter("Python")
+        try:
+            if hasattr(ida_dbg, "BPT_BRK"):
+                bpt.flags &= ~ida_dbg.BPT_BRK
+        except Exception:
+            pass
+        bpt.condition = _return_condition_text(ret_ea)
+        ida_dbg.update_bpt(bpt)
+        try:
+            import idc
+
+            idc.set_bpt_cond(ret_ea, _return_condition_text(ret_ea), 0)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _return_dispatch(ret_ea: int) -> bool:
+    """Called from a one-shot return-site bpt condition. Join to the pending
+    entry by (tid, SP), record the return value (rax/eax), self-disarm when no
+    frames remain. ALWAYS returns False (never stop)."""
+    try:
+        import ida_dbg
+
+        psize = _ptr_size()
+        sp_at_return = _read_reg("rsp" if psize == 8 else "esp")
+        if sp_at_return is None:
+            return False
+        try:
+            tid = ida_dbg.get_current_thread()
+        except Exception:
+            tid = None
+
+        rax = _read_reg("rax" if psize == 8 else "eax")
+        with _call_pairing_lock:
+            joined = _call_pairing.match_return(
+                tid, sp_at_return, {"ret": hex(rax) if isinstance(rax, int) else None}
+            )
+            pending = _call_pairing.pending_count()
+
+        if joined is not None:
+            entry = joined.get("entry") or {}
+            parent_id = entry.get("probe_id")
+            captured = {
+                "ret": joined.get("return", {}).get("ret"),
+                "caller": hex(ret_ea),
+            }
+            # Post-transform buffer read (probe_net pre/post): re-read the SAME
+            # address captured at entry, now holding the mutated bytes.
+            post_addr = entry.get("post_addr")
+            post_size = entry.get("post_size")
+            if isinstance(post_addr, int) and isinstance(post_size, int) and post_size > 0:
+                data = _read_mem(post_addr, post_size)
+                captured["post"] = {
+                    "addr": hex(post_addr),
+                    "hex": data.hex() if data else None,
+                }
+            record = build_probe_record(
+                str(parent_id) if parent_id else "return",
+                "trace_call_return",
+                ret_ea,
+                captured,
+                tid=tid,
+                extra={
+                    "paired_entry_seq": entry.get("entry_seq"),
+                    "paired_entry_hit": entry.get("entry_hit"),
+                    "entry_ea": entry.get("entry_ea"),
+                    "ret_ea": hex(ret_ea),
+                },
+            )
+            _trace.record_probe_event(record)
+
+        # Self-disarm the return site once nothing is pending for it.
+        if pending == 0:
+            with _return_sites_lock:
+                still_have = ret_ea in _return_sites
+                if still_have:
+                    _return_sites.pop(ret_ea, None)
+            if still_have:
+                try:
+                    ida_dbg.del_bpt(ret_ea)
+                except Exception:
+                    pass
     except Exception:
         return False
     return False
@@ -815,6 +1107,79 @@ def _disarm_probe(probe_id: str, ea: int | None) -> None:
         descriptor["armed"] = False
 
 
+def _apply_ring_buffer_mode(buffer_mode: str) -> None:
+    """Switch the shared probe ring's overflow policy in place, preserving its
+    already-captured records and monotonic seq cursor. configure_probes would
+    create a fresh ring (losing records), so we flip the flag under the ring lock
+    instead."""
+    if buffer_mode not in ("circular", "linear"):
+        return
+    ring = _trace.get_probe_ring()
+    try:
+        with ring._lock:  # noqa: SLF001 - in-place policy switch
+            ring.buffer_mode = buffer_mode
+            # Re-evaluate `full` under the new policy (linear can newly be full).
+            ring.full = len(ring._buf) >= ring.cap
+    except Exception:
+        pass
+
+
+def _evict_probe_records(probe_id: str) -> int:
+    """Drop every ring record produced by `probe_id` (entry AND its paired return
+    records, which share the parent probe_id). Returns the count evicted.
+
+    The ProbeRing has no public per-probe removal, so we rewrite its backing
+    deque in place under its own lock. The monotonic seq cursor is preserved, so
+    a drain(since_cursor=...) in flight stays consistent."""
+    ring = _trace.get_probe_ring()
+    try:
+        with ring._lock:  # noqa: SLF001 - intentional in-place eviction
+            before = len(ring._buf)
+            kept = [r for r in ring._buf if r.get("probe_id") != probe_id]
+            ring._buf.clear()
+            ring._buf.extend(kept)
+            ring.full = len(ring._buf) >= ring.cap
+            return before - len(ring._buf)
+    except Exception:
+        return 0
+
+
+def _drop_pending_pairings(probe_id: str) -> int:
+    """Drop any in-flight entry pairings whose entry came from `probe_id`, so a
+    cleared trace_calls probe leaves no orphaned pending frames. Returns count."""
+    dropped = 0
+    try:
+        with _call_pairing_lock:
+            stale = [
+                key for key, payload in list(_call_pairing._pending.items())  # noqa: SLF001
+                if isinstance(payload, dict) and payload.get("probe_id") == probe_id
+            ]
+            for key in stale:
+                if _call_pairing._pending.pop(key, None) is not None:  # noqa: SLF001
+                    dropped += 1
+    except Exception:
+        pass
+    # Drop any return-site refcount entries that referenced this probe.
+    try:
+        with _return_sites_lock:
+            for ret_ea, info in list(_return_sites.items()):
+                parents = info.get("parents")
+                if parents and probe_id in parents:
+                    parents.discard(probe_id)
+                    if not parents:
+                        _return_sites.pop(ret_ea, None)
+                        try:
+                            import ida_dbg
+
+                            if ida_dbg.is_debugger_on():
+                                ida_dbg.del_bpt(ret_ea)
+                        except Exception:
+                            pass
+    except Exception:
+        pass
+    return dropped
+
+
 def _ensure_probe_session() -> None:
     """Make sure the probe ring has a session file configured."""
     if _trace._probe_state.get("session_id") is None:
@@ -837,6 +1202,8 @@ def _install_code_probe(
     bpt_type: int | None = None,
     bpt_size: int = 0,
     probe_id: str | None = None,
+    capture_ret: bool = False,
+    every_nth: int = 1,
 ) -> ProbeRef:
     """Shared installer: a non-stopping Python-condition breakpoint at ea."""
     import ida_dbg
@@ -905,6 +1272,9 @@ def _install_code_probe(
             "conv": conv,
             "predicate": predicate,
             "max_hits": int(max_hits),
+            "capture_ret": bool(capture_ret),
+            "every_nth": int(every_nth) if every_nth and int(every_nth) > 1 else 1,
+            "_skip_count": 0,
         }
 
     _trace.register_probe(
@@ -950,11 +1320,23 @@ def probe_add(
 ) -> ProbeRef:
     """Install a non-stopping capture probe (breakpoint) at `ea`.
 
-    The breakpoint carries a Python condition that, on each hit, evaluates the
-    `capture` spec (tokens like "eax", "arg0", "ret", "caller", "mem(arg2,16)"),
-    records the event into the probe ring, decrements its hit budget, and ALWAYS
-    returns False so the debuggee never stops. Self-disarms (del_bpt) at
-    max_hits. Idempotent on (ea, capture, condition).
+    WHAT: The breakpoint carries a Python condition that, on each hit, evaluates
+    the `capture` spec (tokens like "eax", "arg0", "ret", "caller",
+    "mem(arg2,16)"), optionally gates on `condition`, records the event into the
+    probe ring, and ALWAYS returns False so the debuggee never stops. Self-disarms
+    (del_bpt) at max_hits. Idempotent on (ea, capture, condition).
+
+    WHEN-TO-USE: To sample a hot site's state across a live run without halting.
+    For high-frequency sites set every_nth>1 to record only every Nth hit.
+
+    RETURNS: a ProbeRef (probe_id is the handle for drain/clear).
+
+    PRO-TIP: every_nth is ENFORCED in the dispatcher (a per-probe skip counter),
+    applied AFTER the `condition` predicate, so you sample the events that
+    actually matched. buffer_mode sets the SHARED ring overflow policy: "circular"
+    evicts the oldest record on overflow, "linear" stops appending once full.
+    PITFALL: buffer_mode is ring-wide (one ring backs all probes), so the LAST
+    probe_add wins for the whole ring.
 
     Requires a live debugger session; never calls dbg_start.
     """
@@ -972,12 +1354,28 @@ def probe_add(
     if buffer_mode not in ("circular", "linear"):
         return {"error": f"buffer_mode must be 'circular' or 'linear', got {buffer_mode!r}"}
 
+    try:
+        every = int(every_nth)
+    except (TypeError, ValueError):
+        return {"error": f"every_nth must be an int, got {every_nth!r}"}
+    if every < 1:
+        return {"error": f"every_nth must be >= 1, got {every}"}
+
+    # buffer_mode is now LOAD-BEARING: apply it to the shared ring (preserving
+    # any already-captured records) instead of silently ignoring it.
+    _ensure_probe_session()
+    try:
+        ring = _trace.get_probe_ring()
+        if ring.buffer_mode != buffer_mode:
+            _apply_ring_buffer_mode(buffer_mode)
+    except Exception:
+        pass
+
     plan = parse_capture_spec(capture)
     predicate = condition  # condition acts as a Python predicate gate (over `c`)
 
-    # every_nth recorded on the spec for callers; sampling is applied via hit
-    # budget semantics (the dispatcher records every hit; every_nth is advisory
-    # and surfaced in the descriptor for now).
+    # every_nth is now ENFORCED in the dispatcher via a per-probe skip counter:
+    # only every Nth qualifying (predicate-passing) hit is recorded.
     ref = _install_code_probe(
         addr,
         kind="probe",
@@ -987,12 +1385,11 @@ def probe_add(
         max_hits=max_hits,
         conv="cdecl",
         predicate=predicate,
+        every_nth=every,
     )
-    if every_nth and every_nth > 1:
-        with _probe_specs_lock:
-            spec = _probe_specs.get(ref.get("probe_id", ""))
-            if spec is not None:
-                spec["every_nth"] = int(every_nth)
+    if isinstance(ref, dict) and not ref.get("error"):
+        ref["every_nth"] = every
+        ref["buffer_mode"] = buffer_mode
     return ref
 
 
@@ -1054,10 +1451,22 @@ def probe_drain(
 @tool
 @idasync
 def probe_clear(probe_id: str | None = None) -> ProbeClearResult:
-    """Remove one probe (by probe_id) or ALL probes, deleting their breakpoints.
+    """Remove one probe (by probe_id) or ALL probes, deleting their breakpoints
+    AND evicting their captured ring records.
 
-    Requires a live debugger session to delete the breakpoints; the registry is
-    cleared regardless.
+    WHAT: Deletes the probe's breakpoint, drops its descriptor + spec, evicts
+    every ring record it produced (entry and any paired return records share the
+    probe_id), and discards any in-flight entry<->return pairings + orphaned
+    one-shot return-site bpts that referenced it. Returns {removed,
+    evicted_records, dropped_pending}.
+
+    WHEN-TO-USE: To stop a probe AND reclaim its records so a later
+    probe_drain / trace_summary isn't polluted by a probe you tore down. Also
+    acts as the autopilot interrupt (removes the probes a run_until waits on).
+
+    PITFALL: eviction is irrecoverable -- drain first if you still need the
+    records. Requires a live debugger session only to delete breakpoints; the
+    registry / ring are cleared regardless.
     """
     import ida_dbg
 
@@ -1068,6 +1477,8 @@ def probe_clear(probe_id: str | None = None) -> ProbeClearResult:
         pass
 
     removed = 0
+    evicted = 0
+    dropped_pending = 0
     targets = [probe_id] if probe_id else [p["probe_id"] for p in _trace.list_probes()]
     for pid in targets:
         descriptor = _trace.get_probe(pid)
@@ -1083,7 +1494,13 @@ def probe_clear(probe_id: str | None = None) -> ProbeClearResult:
             removed += 1
         with _probe_specs_lock:
             _probe_specs.pop(pid, None)
-    return {"removed": removed}
+        evicted += _evict_probe_records(pid)
+        dropped_pending += _drop_pending_pairings(pid)
+    return {
+        "removed": removed,
+        "evicted_records": evicted,
+        "dropped_pending": dropped_pending,
+    }
 
 
 @ext("dbg")
@@ -1371,24 +1788,36 @@ def trace_calls(
     max_hits: int = 2048,
     auto_return: bool = True,
 ) -> ProbeRef:
-    """Install paired entry+return probes that trace a function's calls.
+    """Install a non-stopping ENTRY probe that ALSO captures the real return value.
 
-    The ENTRY probe captures the callee ea, the caller (return address at
-    [esp]), and N args per the calling convention (32-bit __thiscall/__cdecl/
-    __stdcall): thiscall exposes `ecx` (this) plus stack args arg0..; cdecl/
-    stdcall expose arg0.. on the stack. If capture_ret, a paired RETURN-site
-    probe at [esp] captures eax and a call depth.
+    WHAT: The ENTRY probe captures the callee ea, the caller (return address at
+    [esp]/[rsp]), and N args resolved per the detected ABI (32-bit cdecl/stdcall/
+    thiscall read arg0.. off the stack and thiscall exposes `ecx`=this; 64-bit
+    Win64 reads rcx/rdx/r8/r9 then stack, SysV reads rdi/rsi/rdx/rcx/r8/r9 then
+    stack). When capture_ret is set, each entry hit records the in-flight frame
+    (keyed by tid + restored SP) and arms a non-stopping ONE-SHOT return probe at
+    the return address; when the call returns, the real rax/eax is captured and
+    recorded as a paired `trace_call_return` record carrying paired_entry_seq /
+    paired_entry_hit back to this entry. NOTHING stops the debuggee.
 
-    auto_return (default True): the entry probe ALSO captures `caller` (the
-    return address, == the call's return site). When it first fires, drain the
-    entry probe and read the `caller` value: that address is exactly where to
-    place a probe_add(<caller>, ["ret"]) to capture eax at return. The return
-    record tells you the paired return-site EA without stopping the process
-    (this is non-stopping-safe - the entry probe never halts the debuggee, and
-    nothing is auto-installed). auto_return=False suppresses that guidance and
-    keeps the legacy capture list.
+    WHEN-TO-USE: To observe a hot function's arguments AND results across a live
+    run without halting it -- e.g. correlating inputs to outputs of a decrypt /
+    validation routine.
 
-    Returns the ENTRY ProbeRef (its probe_id is the handle for drain/clear).
+    RETURNS: the ENTRY ProbeRef (its probe_id is the handle for drain/clear).
+    Drain with probe_drain(filter={"kind":"trace_call_return"}) to read return
+    records, or filter on the entry probe_id (return records share it).
+
+    PRO-TIP: pair entry+return by the `paired_entry_hit` field on the return
+    record -- it equals the entry record's `hit`.
+    PITFALL: SP-based pairing assumes a balanced call; a longjmp / exception that
+    unwinds past the return site leaves the entry pending (it is dropped on
+    probe_clear). On 64-bit the `conv` argument is ignored -- the ABI is detected
+    from pointer width + target OS.
+
+    auto_return (default True): annotate the ENTRY ref with the return-site EA
+    machinery in effect; auto_return=False keeps capture_ret pairing but omits the
+    guidance capture entry. capture_ret=False installs the entry probe only.
 
     Requires a live debugger session; never calls dbg_start.
     """
@@ -1419,24 +1848,17 @@ def trace_calls(
         condition=None,
         max_hits=max_hits,
         conv=conv,
+        capture_ret=bool(capture_ret),
     )
 
-    # The return-site probe is best-effort: at entry the dispatcher cannot easily
-    # install a one-shot return bpt without stopping, so capture_ret records eax
-    # at the caller's return address (the instruction after the call) when that
-    # site is known. We attach a companion probe at the caller return address on
-    # first hit is not feasible non-stop; instead we record eax via a second
-    # probe the caller can place. Here we annotate the entry ref with the intent.
-    if capture_ret:
-        if auto_return:
+    if isinstance(ref, dict) and not ref.get("error"):
+        ref["capture_ret"] = bool(capture_ret)
+        if capture_ret and auto_return:
             ref["capture"] = capture + [
-                "auto_return: on first entry hit, drain this probe and read its "
-                "`caller` value; that EA is the call return-site - place a "
-                "probe_add(<caller>, ['ret']) there to capture eax at return "
-                "(non-stopping; nothing is auto-installed)"
+                "ret@auto: a one-shot non-stopping return probe is armed at each "
+                "call's return address; drain kind=='trace_call_return' for the "
+                "real eax/rax paired via paired_entry_hit (nothing stops)"
             ]
-        else:
-            ref["capture"] = capture + ["ret@return-site (place a probe_add(ret) at the call's return address)"]
     return ref
 
 
@@ -1824,11 +2246,26 @@ def probe_net(
     """Convenience: install buffer-capturing probes at the supplied recv /
     decrypt / send addresses.
 
-    Addresses are CALLER-SUPPLIED (doida.exe-specific) and NOT hardcoded. Each
-    given address gets a probe_add capturing the buffer pointer + length and a
-    memory slice of the buffer. When pre_post is set, decrypt_ea gets a second
-    capture intent so the caller can compare the buffer before/after the
-    transform (place a paired probe at the decrypt return site).
+    WHAT: Addresses are CALLER-SUPPLIED and NOT hardcoded. Each given address
+    gets a non-stopping probe capturing the buffer pointer + length and a 256-byte
+    slice of the buffer at ENTRY. When pre_post is set, decrypt_ea ALSO arms a
+    real one-shot non-stopping return probe: the buffer address is resolved at
+    entry (the PRE bytes are in the entry record's mem(...) capture) and re-read
+    at the decrypt RETURN, so the POST bytes land in the paired
+    `trace_call_return` record's captured.post.hex. Diff pre vs post with
+    diff_buffers to see exactly what the transform changed.
+
+    WHEN-TO-USE: To watch a recv->decrypt->send pipeline live: recv/send show the
+    on-wire bytes, decrypt shows plaintext before AND after the transform, all
+    without halting the process.
+
+    RETURNS: {installed:[ProbeRef...]}. Drain entry records by their probe_id and
+    the decrypt POST bytes by filter={"kind":"trace_call_return"}.
+
+    PITFALL: the post read uses the SAME address captured at entry; an in-place
+    transform shows the change, but a transform that writes to a DIFFERENT output
+    buffer (returned in rax / a separate out-arg) won't -- read that buffer with a
+    probe_add(mem(...)) at the return site instead.
 
     Requires a live debugger session; never calls dbg_start.
     """
@@ -1839,17 +2276,17 @@ def probe_net(
     installed: list[ProbeRef] = []
 
     # Capture the length and a generous slice of the buffer keyed off buf_arg.
-    # mem(arg1+0,256) reads up to 256 bytes from the buffer pointer arg.
+    # mem(<buf_arg>,256) reads up to 256 bytes from the buffer pointer arg.
     cap_common = [buf_arg, len_arg, f"mem({buf_arg},256)"]
 
-    def _one(addr_str, kind):
+    def _one(addr_str, kind, *, capture_ret=False, post_mem=None):
         from .utils import parse_address
         try:
             addr = parse_address(addr_str)
         except IDAError as exc:
             return {"error": str(exc), "kind": kind}
         plan = parse_capture_spec(cap_common)
-        return _install_code_probe(
+        ref = _install_code_probe(
             addr,
             kind=kind,
             plan=plan,
@@ -1857,18 +2294,23 @@ def probe_net(
             condition=None,
             max_hits=4096,
             conv="cdecl",
+            capture_ret=capture_ret,
         )
+        if capture_ret and post_mem and isinstance(ref, dict) and not ref.get("error"):
+            with _probe_specs_lock:
+                spec = _probe_specs.get(ref.get("probe_id", ""))
+                if spec is not None:
+                    spec["post_mem"] = dict(post_mem)
+            ref["capture_ret"] = True
+        return ref
 
     if recv_ea is not None:
         installed.append(_one(recv_ea, "net_recv"))
     if decrypt_ea is not None:
-        installed.append(_one(decrypt_ea, "net_decrypt_pre"))
-        if pre_post:
-            # second intent marker for the post-transform read at the return site
-            ref = installed[-1]
-            ref.setdefault("capture", list(cap_common)).append(
-                "pre/post: place probe_add at decrypt return site capturing mem(%s,256)" % buf_arg
-            )
+        post = {"buf_expr": buf_arg, "size": 256} if pre_post else None
+        installed.append(
+            _one(decrypt_ea, "net_decrypt", capture_ret=bool(pre_post), post_mem=post)
+        )
     if send_ea is not None:
         installed.append(_one(send_ea, "net_send"))
 
@@ -2063,21 +2505,151 @@ def _identity_mismatch(saved: dict, current: dict) -> list[str]:
     return diffs
 
 
+# ----------------------------------------------------------------------------
+# Snapshot persistence: store snapshots in their own IDB netnode so they survive
+# a server restart. Reuses the trace.py netnode idiom (a named node + a blob),
+# but a SEPARATE node so it never collides with the trace log.
+# ----------------------------------------------------------------------------
+
+_SNAP_NETNODE_NAME = "$ ida_mcp.snapshots"
+_SNAP_TAG = ord("S")
+_SNAP_BLOB_IDX = 0
+
+
+@idasync
+def _snapshots_persist(store: dict) -> None:
+    """Serialize the whole in-process snapshot store into the snapshots netnode
+    (one gzipped JSON blob). Runs on the IDA main thread; best-effort."""
+    try:
+        import gzip
+        import json
+        import ida_netnode
+
+        node = ida_netnode.netnode(_SNAP_NETNODE_NAME, 0, True)
+        payload = json.dumps(store, separators=(",", ":"), default=str).encode("utf-8")
+        node.setblob(gzip.compress(payload, mtime=0), _SNAP_BLOB_IDX, _SNAP_TAG)
+    except Exception:
+        pass
+
+
+@idasync
+def _snapshots_load() -> dict:
+    """Load the persisted snapshot store from the netnode (empty dict if none).
+    Runs on the IDA main thread; best-effort."""
+    try:
+        import gzip
+        import json
+        import ida_netnode
+
+        node = ida_netnode.netnode(_SNAP_NETNODE_NAME, 0, False)
+        if node == ida_netnode.BADNODE:
+            return {}
+        blob = node.getblob(_SNAP_BLOB_IDX, _SNAP_TAG)
+        if isinstance(blob, tuple):
+            blob = blob[0]
+        if not blob:
+            return {}
+        raw = gzip.decompress(bytes(blob))
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+_snapshots_loaded = False
+
+
+def _ensure_snapshots_loaded() -> None:
+    """Hydrate the in-process snapshot store from the IDB netnode ONCE per server
+    lifetime, so snapshots saved in a prior run are visible after a restart."""
+    global _snapshots_loaded
+    if _snapshots_loaded:
+        return
+    persisted = _snapshots_load()
+    with _snapshots_lock:
+        for nm, snap in (persisted or {}).items():
+            if nm not in _snapshots and isinstance(snap, dict):
+                _snapshots[nm] = snap
+    _snapshots_loaded = True
+
+
+def _flush_snapshots() -> None:
+    """Persist the current in-process snapshot store to the netnode."""
+    with _snapshots_lock:
+        store = {nm: dict(snap) for nm, snap in _snapshots.items()}
+    _snapshots_persist(store)
+
+
+def _auto_ranges(stack_window: int = 0x800) -> list[dict]:
+    """Build an auto snapshot range list: a stack window centred on the live SP
+    plus the WRITABLE mapped segments (where mutable state lives), so callers need
+    not hand-list ranges. Returns [{"addr": int, "size": int}].
+
+    The stack window spans `stack_window` bytes BELOW the current SP (toward
+    lower, already-used frames) so a save/restore captures the active call's
+    locals; writable segments are taken from dbg_common.enumerate_memory_regions
+    (perm contains 'w'), capped per-region so a huge .data doesn't blow the blob.
+    """
+    out: list[dict] = []
+    psize = _ptr_size()
+    sp = _read_reg("rsp" if psize == 8 else "esp")
+    if isinstance(sp, int):
+        win = max(0, int(stack_window))
+        lo = sp - win
+        if lo < 0:
+            lo = 0
+        out.append({"addr": lo, "size": (sp - lo) + win})  # window around SP
+
+    try:
+        regions = _dbg.enumerate_memory_regions()
+    except Exception:
+        regions = []
+    per_region_cap = 64 * 1024
+    for region in regions:
+        perm = region.get("perm") or ""
+        if "w" not in perm:
+            continue
+        try:
+            start = int(region["start"])
+            end = int(region["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        size = min(end - start, per_region_cap)
+        if size > 0:
+            out.append({"addr": start, "size": size})
+    return out
+
+
 @ext("dbg")
 @safety("EXECUTE")
 @title("Save a best-effort register+memory snapshot")
 @tool
 @idasync
-def snapshot_save(name: str, ranges: list[dict] | None = None) -> SnapshotResult:
+def snapshot_save(
+    name: str,
+    ranges: list[dict] | None = None,
+    auto_ranges: bool = False,
+    stack_window: int = 0x800,
+) -> SnapshotResult:
     """Save GP registers and a bounded set of memory ranges, keyed by `name`.
 
-    `ranges` is an optional list of {"addr","size"} regions to capture via
-    read_dbg_memory. Stored IN-PROCESS only.
+    WHAT: Captures the GP registers plus the memory ranges to watch. `ranges` is
+    an explicit list of {"addr","size"} regions. auto_ranges=True instead (or
+    additionally) captures a stack window around the live SP (`stack_window`
+    bytes) plus the writable mapped segments, so you needn't hand-list anything.
+    The snapshot is stored IN-PROCESS and ALSO persisted to the IDB netnode
+    (keyed with the process identity), so it survives a server restart.
 
-    BEST-EFFORT: this captures only the named registers and the explicitly given
-    memory ranges - it is NOT a full process snapshot (no full address space,
-    no kernel/handle/thread state). restore() writes those bytes and registers
-    back; anything not captured is unchanged.
+    WHEN-TO-USE: Before an operation you want to undo (a step, an appcall), then
+    snapshot_restore to roll registers + those bytes back, or snapshot_diff to
+    see what changed against a second snapshot.
+
+    RETURNS: a SnapshotResult echoing the captured regs/ranges/identity.
+
+    BEST-EFFORT: this is NOT a full process snapshot (no full address space, no
+    kernel/handle/thread state); restore writes back only what was captured.
+    PITFALL: auto_ranges caps each writable segment so a huge .data doesn't blow
+    the blob -- pass explicit `ranges` for exact wide coverage.
 
     Requires a SUSPENDED debugger session; never calls dbg_start.
     """
@@ -2103,13 +2675,25 @@ def snapshot_save(name: str, ranges: list[dict] | None = None) -> SnapshotResult
         except Exception:
             continue
 
-    captured_ranges: list[dict] = []
+    range_specs: list[dict] = []
     for region in (ranges or []):
         try:
-            addr = parse_address(region["addr"])
-            size = int(region["size"])
+            range_specs.append({"addr": parse_address(region["addr"]), "size": int(region["size"])})
         except Exception:
             continue
+    if auto_ranges:
+        range_specs.extend(_auto_ranges(stack_window))
+
+    captured_ranges: list[dict] = []
+    seen: set[int] = set()
+    for region in range_specs:
+        addr = region.get("addr")
+        size = region.get("size")
+        if not isinstance(addr, int) or not isinstance(size, int) or size <= 0:
+            continue
+        if addr in seen:
+            continue
+        seen.add(addr)
         data = _read_mem(addr, size)
         if data is not None:
             captured_ranges.append({"addr": addr, "hex": data.hex()})
@@ -2121,6 +2705,7 @@ def snapshot_save(name: str, ranges: list[dict] | None = None) -> SnapshotResult
             "ranges": captured_ranges,
             "identity": identity,
         }
+    _flush_snapshots()
 
     return {
         "name": name,
@@ -2151,6 +2736,7 @@ def snapshot_restore(name: str) -> SnapshotResult:
     import ida_dbg
     import idaapi
 
+    _ensure_snapshots_loaded()
     with _snapshots_lock:
         snap = _snapshots.get(name)
     if snap is None:
@@ -2227,9 +2813,11 @@ def snapshot_list() -> SnapshotListResult:
     """List the in-process snapshots saved by snapshot_save.
 
     Returns each snapshot's name plus its register count and the number/size of
-    captured memory ranges (metadata only, never the captured bytes). Read-only;
-    does not require a live debugger.
+    captured memory ranges (metadata only, never the captured bytes). Includes
+    snapshots persisted to the IDB from a prior server run. Read-only; does not
+    require a live debugger.
     """
+    _ensure_snapshots_loaded()
     out: list[dict] = []
     with _snapshots_lock:
         for nm, snap in _snapshots.items():
@@ -2251,16 +2839,64 @@ def snapshot_list() -> SnapshotListResult:
 def snapshot_delete(name: str) -> SnapshotDeleteResult:
     """Delete the in-process snapshot saved under `name`.
 
-    Removes the named snapshot from the in-process store (it never touched the
-    debuggee, so nothing in the target changes). Returns {name, deleted} where
-    deleted is False if no such snapshot existed. Does not require a live
-    debugger.
+    Removes the named snapshot from the in-process store AND from the persisted
+    IDB netnode (it never touched the debuggee, so nothing in the target changes).
+    Returns {name, deleted} where deleted is False if no such snapshot existed.
+    Does not require a live debugger.
     """
+    _ensure_snapshots_loaded()
     with _snapshots_lock:
         existed = _snapshots.pop(name, None) is not None
     if not existed:
         return {"name": name, "deleted": False, "error": f"no snapshot named {name!r}"}
+    _flush_snapshots()
     return {"name": name, "deleted": True}
+
+
+@ext("dbg")
+@safety("READ")
+@title("Diff two saved snapshots")
+@tool
+@idasync
+def snapshot_diff(name_a: str, name_b: str) -> SnapshotDiffResult:
+    """Diff two saved snapshots (name_a is the BEFORE, name_b the AFTER).
+
+    WHAT: Reports which GP registers changed and, for ranges captured at the same
+    address in both snapshots, exactly which bytes changed -- via the pure
+    dbg_common.diff_snapshots over the stored {regs, ranges} (no live read).
+    Registers/ranges present in only one snapshot are skipped.
+
+    WHEN-TO-USE: After snapshot_save before/after an operation (a step, an
+    appcall, a run_until) to see precisely what state the operation mutated,
+    entirely offline.
+
+    RETURNS: {name_a, name_b, regs:[{name,old,new}], ranges:[{addr,offset,old,new}],
+    reg_changes, byte_changes}. Includes snapshots persisted from a prior run.
+
+    PITFALL: ranges are paired by their captured base address; if the two
+    snapshots watched DIFFERENT addresses there is nothing to diff for those
+    ranges. Capture both with the same `ranges`/auto_ranges for a clean diff.
+
+    Read-only; does not require a live debugger.
+    """
+    _ensure_snapshots_loaded()
+    with _snapshots_lock:
+        snap_a = _snapshots.get(name_a)
+        snap_b = _snapshots.get(name_b)
+    if snap_a is None:
+        return {"name_a": name_a, "name_b": name_b, "error": f"no snapshot named {name_a!r}"}
+    if snap_b is None:
+        return {"name_a": name_a, "name_b": name_b, "error": f"no snapshot named {name_b!r}"}
+
+    delta = _dbg.diff_snapshots(snap_a, snap_b)
+    return {
+        "name_a": name_a,
+        "name_b": name_b,
+        "regs": delta.get("regs", []),
+        "ranges": delta.get("ranges", []),
+        "reg_changes": len(delta.get("regs", [])),
+        "byte_changes": len(delta.get("ranges", [])),
+    }
 
 
 # ============================================================================
@@ -2591,6 +3227,7 @@ __all__ = [
     "snapshot_restore",
     "snapshot_list",
     "snapshot_delete",
+    "snapshot_diff",
     "trace_summary",
     "diff_buffers",
     "probe_stats",
