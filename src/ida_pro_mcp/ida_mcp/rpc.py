@@ -200,9 +200,19 @@ _SAFETY_ANNOTATIONS: dict[str, dict[str, bool]] = {
         "idempotentHint": False,
         "openWorldHint": True,
     },
+    # PATCH is DESTRUCTIVE plus a distinct signal that the tool rewrites the
+    # *bytes of the analysed program* (not just IDB annotations). Tools at this
+    # tier are additionally fenced behind the per-call consent gate in
+    # consent.py — see the axis-7 never-patch-without-consent rule.
+    "PATCH": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
 }
 
-_SAFETY_UNSAFE_LEVELS = {"DESTRUCTIVE", "EXECUTE"}
+_SAFETY_UNSAFE_LEVELS = {"DESTRUCTIVE", "EXECUTE", "PATCH"}
 
 
 def title(text: str):

@@ -17,13 +17,41 @@ annotations and (for the unsafe levels) registers the tool as unsafe:
 | `READ`        | yes      | no          | yes        | no        | no     |
 | `WRITE`       | no       | no          | yes        | no        | no     |
 | `DESTRUCTIVE` | no       | yes         | no         | no        | yes    |
+| `PATCH`       | no       | yes         | no         | no        | yes    |
 | `EXECUTE`     | no       | yes         | no         | yes       | yes    |
 
 - **READ** — pure queries (disassemble, decompile, list, search).
-- **WRITE** — idempotent IDB edits (rename, set type, set comment).
-- **DESTRUCTIVE** — non-idempotent IDB edits (undefine, delete).
+- **WRITE** — reversible, idempotent IDB *annotations*: `rename`,
+  `set_comments` / `append_comments`, set/declare/apply type. These layer
+  metadata onto the IDB; they never touch the program bytes.
+- **DESTRUCTIVE** — non-idempotent IDB edits that lose info (`undefine`,
+  delete/clear definitions).
+- **PATCH** — binary-byte writers that rewrite the program itself: `patch`,
+  `patch_asm`, `put_int`. Destructive **and** consent-gated **and** unsafe — see
+  the dedicated section below. Off-limits during analysis.
 - **EXECUTE** — runs code or resumes the debuggee (python eval, appcall,
   `run_until`). Treat as a deliberate, confirmed action.
+
+### The `PATCH` tier — binary-byte writers (consent-gated)
+
+`patch` (raw byte patch), `patch_asm` (assemble-and-overwrite), and `put_int`
+(write an integer at an address) rewrite the analysed program's bytes. They are
+the most dangerous mutation the server exposes and are **never used during
+analysis** — only on an explicit user request. Each is gated three ways:
+
+- **Server flag.** Refused unless the server runs with `IDA_MCP_ALLOW_PATCH`.
+- **Per-call `confirm=true`.** No implicit/default-on path.
+- **`dry_run` preview.** Run with `dry_run` to see exactly which bytes would
+  change; only after the user approves that preview do you write for real.
+
+Two companion tools manage applied patches:
+
+- **`revert_patch`** — restores the original bytes for a patched range.
+- **`list_patches`** — enumerates every patch applied to the IDB (for audit /
+  selective revert).
+
+Injected Python (`py_eval` / `py_exec_file`, `EXECUTE`) must likewise not patch
+program bytes unless patching has been explicitly allowed.
 
 ## Extension gating (`?ext`)
 

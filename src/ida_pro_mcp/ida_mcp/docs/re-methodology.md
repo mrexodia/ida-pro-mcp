@@ -182,6 +182,40 @@ After dynamic confirmation, **fold the proven fact back into your static notes**
 and continue static. The debugger answered one question; it is not the place to
 live.
 
+## Mutating the binary — never patch without consent
+
+Analysis must not rewrite the program. Three tools change the actual program
+bytes — `patch` (raw byte patch), `patch_asm` (assemble-and-overwrite), and
+`put_int` (write an integer at an address) — and they are **off-limits during
+analysis**. Recovering behaviour never requires editing the bytes you are
+reading; a patch you apply silently corrupts the ground truth every later read
+trusts.
+
+These binary-byte writers are deliberately gated and only ever used on an
+**explicit user request**, never on your own initiative:
+
+- **Server flag.** They are refused unless the server is started with
+  `IDA_MCP_ALLOW_PATCH`; without it the call errors out.
+- **Per-call confirmation.** Each call must pass `confirm=true` — there is no
+  implicit/default-on path.
+- **Preview first (`dry_run`).** Run with `dry_run` to see exactly which bytes
+  would change before any write lands; review that preview, then re-issue with
+  the write enabled only after the user has approved it.
+- **Reversible.** `revert_patch` restores the original bytes and `list_patches`
+  enumerates everything that has been patched — use them to audit and undo.
+
+Injected Python is held to the same rule: `py_eval` / `py_exec_file` run
+arbitrary IDAPython and **must not patch program bytes** (e.g. `ida_bytes`
+writes, `patch_byte`, assembling over code) unless patching has been explicitly
+allowed for this session. Treat any byte-write from injected Python exactly as
+you would a direct `patch` call.
+
+Metadata edits are a different category and are fine during analysis: `rename`,
+`set_comments` / `append_comments`, and the type tools (`set_type`,
+`declare_type`, `type_apply_batch`, `enum_upsert`) are **reversible annotations
+layered on the IDB** — they record what you learned, they do not alter the
+program's bytes. Annotate freely; patch never, unless asked.
+
 ## Clean-room note-taking
 
 The legal and engineering value of an RE session is the **neutral notes** it

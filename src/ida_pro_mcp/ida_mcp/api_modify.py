@@ -14,6 +14,13 @@ import idc
 
 from .api_core import invalidate_strings_cache
 from .compat import tinfo_get_udm
+from .consent import (
+    capture_original,
+    patch_decision,
+    patching_allowed,
+    span_status,
+    withheld_hint,
+)
 from .rpc import tool, safety, title
 from .sync import idasync, IDAError
 from .utils import (
@@ -50,9 +57,23 @@ class AppendCommentResult(TypedDict):
     error: NotRequired[str]
 
 
-class PatchAsmResult(TypedDict):
-    addr: str
-    error: NotRequired[str]
+class PatchAsmResult(TypedDict, total=False):
+    addr: str | None
+    size: int
+    original: str  # hex of the bytes currently at addr (pre-write)
+    new: str  # hex of the assembled bytes that were / would be written
+    applied: bool  # whether THIS item was actually written
+    tail_orphan_bytes: int  # stale bytes left when the patch is shorter than the original
+    error: str
+
+
+class PatchAsmResponse(TypedDict, total=False):
+    applied: bool  # whether ANY byte was actually written this call
+    dry_run: bool
+    allowed: bool  # server-level patch gate state
+    reason: str  # ok | dry_run | confirm_required | server_gate_closed
+    consent: str  # guidance shown when the write was withheld
+    results: list[PatchAsmResult]
 
 
 class RenameItemResult(TypedDict, total=False):
@@ -168,7 +189,7 @@ def add_bookmark(
     }
 
 
-@safety("DESTRUCTIVE")
+@safety("WRITE")
 @title("Set Comments")
 @tool
 @idasync
@@ -261,7 +282,7 @@ def set_comments(
     return results
 
 
-@safety("DESTRUCTIVE")
+@safety("WRITE")
 @title("Append Comments")
 @tool
 @idasync
@@ -354,7 +375,7 @@ def _append_comment_text(current: str, new_text: str, *, dedupe: bool) -> tuple[
     return f"{current}{joiner}{new_text}", False
 
 
-@safety("DESTRUCTIVE")
+@safety("PATCH")
 @title("Patch Assembly")
 @tool
 @idasync
@@ -363,50 +384,130 @@ def patch_asm(
         list[AsmPatchOp] | AsmPatchOp,
         "One {addr, asm} op or a list; `asm` is one or more instructions separated by ';' assembled sequentially from `addr`.",
     ],
-) -> list[PatchAsmResult]:
-    """WHAT: Assemble textual instructions and patch the resulting bytes into the database at an address, advancing across multiple ';'-separated instructions automatically.
+    confirm: Annotated[
+        bool,
+        "Explicit consent to write. With confirm=false (default) the call only "
+        "PREVIEWS (original vs assembled bytes); set confirm=true AND dry_run=false to apply.",
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        "When true (default) the call previews and writes nothing. Set false "
+        "(with confirm=true) to actually patch.",
+    ] = True,
+) -> PatchAsmResponse:
+    """Assemble instructions and overwrite the analysed program's code bytes, gated by consent (PATCH).
 
-    WHEN-TO-USE: To alter the binary's code in place (e.g. NOP out a check, redirect a branch) for experimentation or to model a fix. This mutates the loaded image's bytes, not just metadata.
+    WHAT: For each {addr, asm}, assembles the ';'-separated instructions with
+    `idautils.Assemble` (which computes the bytes WITHOUT writing), accumulates
+    the assembled bytes over the whole span, validates that every byte of the
+    span is mapped, captures the current (original) bytes, and — only when the
+    server patch gate is open AND confirm=true AND dry_run=false — writes the
+    assembled bytes into the IDB at `addr`. Otherwise it returns a non-writing
+    PREVIEW (original vs new) and touches nothing.
 
-    RETURNS: One PatchAsmResult per op with `addr`; an op that failed to assemble or patch carries `error` (naming the offending mnemonic / failing EA), and the op stops at the first failing instruction in its sequence.
+    WHEN-TO-USE: ONLY when the user has explicitly asked to patch the binary's
+    code (e.g. NOP out a check, redirect a branch). Patching is never part of
+    analysis; the default previews so that understanding a binary never mutates
+    it (axis-7 never-patch-without-consent rule).
 
-    PITFALL: Each instruction is assembled at the address it lands on, so the byte length must match what you intend — a shorter replacement leaves trailing original bytes, a longer one overruns the next instruction. Assembly syntax must satisfy `idautils.Assemble`; back up or note the original bytes before patching since this is not auto-reversible here."""
+    RETURNS: A PatchAsmResponse {applied, dry_run, allowed, reason, consent?,
+    results[]}. Each result is {addr, size, original, new, applied} on success or
+    {addr, error}. When the assembled bytes are SHORTER than the original
+    instruction(s) at `addr`, the result also carries `tail_orphan_bytes: N`
+    warning that N stale bytes remain (they are NOT auto-padded). `allowed`
+    reflects the server gate (IDA_MCP_ALLOW_PATCH / set_patch_allowed); `reason`
+    explains any withholding.
+
+    PITFALL: Assembly is not auto-aligned to instruction boundaries — a shorter
+    replacement leaves trailing original bytes (reported via `tail_orphan_bytes`),
+    a longer one overruns the next instruction. Assembly syntax must satisfy
+    `idautils.Assemble`. Use revert_patch to undo and list_patches to review."""
     if isinstance(items, dict):
         items = [items]
 
-    results = []
+    will_write, reason = patch_decision(confirm, dry_run)
+    results: list[dict] = []
+    any_applied = False
+
     for item in items:
-        addr_str = item.get("addr", "")
-        instructions = item.get("asm", "")
+        addr_str = item.get("addr") if isinstance(item, dict) else None
+        instructions = item.get("asm", "") if isinstance(item, dict) else ""
 
         try:
             ea = parse_address(addr_str)
-            assembles = instructions.split(";")
-            for assemble in assembles:
+
+            # Decode the original item length at the start ea so we can detect a
+            # shorter replacement that would leave stale tail bytes behind.
+            try:
+                orig_item_size = idc.get_item_size(ea)
+            except Exception:
+                orig_item_size = 0
+
+            # Assemble each ';'-separated instruction WITHOUT writing, advancing a
+            # cursor so each instruction is assembled at the address it lands on.
+            assembled = bytearray()
+            cursor = ea
+            assemble_error: str | None = None
+            for assemble in instructions.split(";"):
                 assemble = assemble.strip()
-                try:
-                    (check_assemble, bytes_to_patch) = idautils.Assemble(ea, assemble)
-                    if not check_assemble:
-                        results.append(
-                            {
-                                "addr": addr_str,
-                                "error": f"Failed to assemble: {assemble}",
-                            }
-                        )
-                        break
-                    ida_bytes.patch_bytes(ea, bytes_to_patch)
-                    ea += len(bytes_to_patch)
-                except Exception as e:
-                    results.append(
-                        {"addr": addr_str, "error": f"Failed at {hex(ea)}: {e}"}
-                    )
+                if not assemble:
+                    continue
+                check_assemble, bytes_to_patch = idautils.Assemble(cursor, assemble)
+                if not check_assemble:
+                    assemble_error = f"Failed to assemble at {hex(cursor)}: {assemble}"
                     break
-            else:
-                results.append({"addr": addr_str})
+                assembled.extend(bytes_to_patch)
+                cursor += len(bytes_to_patch)
+
+            if assemble_error is not None:
+                results.append({"addr": addr_str, "error": assemble_error})
+                continue
+
+            size = len(assembled)
+            if size == 0:
+                results.append({"addr": addr_str, "error": "no instructions assembled"})
+                continue
+
+            mapped, bad_ea = span_status(ea, size)
+            if not mapped:
+                results.append(
+                    {
+                        "addr": addr_str,
+                        "error": (
+                            f"Address span not fully mapped (first unmapped byte at "
+                            f"{hex(bad_ea)} in {hex(ea)}..{hex(ea + size)})"
+                        ),
+                    }
+                )
+                continue
+
+            entry: dict = {
+                "addr": addr_str,
+                "size": size,
+                "original": capture_original(ea, size),
+                "new": bytes(assembled).hex(),
+                "applied": False,
+            }
+            if orig_item_size > size:
+                entry["tail_orphan_bytes"] = orig_item_size - size
+            if will_write:
+                ida_bytes.patch_bytes(ea, bytes(assembled))
+                entry["applied"] = True
+                any_applied = True
+            results.append(entry)
         except Exception as e:
             results.append({"addr": addr_str, "error": str(e)})
 
-    return results
+    response: dict = {
+        "applied": any_applied,
+        "dry_run": dry_run,
+        "allowed": patching_allowed(),
+        "reason": reason,
+        "results": results,
+    }
+    if not will_write:
+        response["consent"] = withheld_hint(reason)
+    return response
 
 
 def rename_at_ea(
@@ -444,7 +545,7 @@ def rename_at_ea(
     return True, None
 
 
-@safety("DESTRUCTIVE")
+@safety("WRITE")
 @title("Rename Symbols (Batch)")
 @tool
 @idasync
@@ -1251,7 +1352,7 @@ _OP_FORMAT_FLAGS = {
 }
 
 
-@safety("DESTRUCTIVE")
+@safety("WRITE")
 @title("Set Operand Type")
 @tool
 @idasync

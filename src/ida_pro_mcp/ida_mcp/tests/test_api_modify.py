@@ -3,6 +3,7 @@
 from ..framework import (
     test,
     skip_test,
+    patching_enabled,
     assert_is_list,
     assert_ok,
     assert_error,
@@ -161,20 +162,29 @@ def test_set_comments_invalid_address_error():
 
 @test(binary="crackme03.elf")
 def test_patch_asm_roundtrip():
-    """patch_asm changes the target instruction bytes and restoration puts them back."""
+    """patch_asm changes the target instruction bytes (enabled+confirmed); restore puts them back."""
     original = get_bytes({"addr": CRACKME_PATCH_ASM_ADDR, "size": 2})[0]
     assert_ok(original, "data")
     original_plain = _plain_hex_bytes(original["data"])
 
-    try:
-        result = patch_asm({"addr": CRACKME_PATCH_ASM_ADDR, "asm": "sub eax, eax"})
-        assert_is_list(result, min_length=1)
-        assert "error" not in result[0]
-        changed = get_bytes({"addr": CRACKME_PATCH_ASM_ADDR, "size": 2})[0]
-        assert _plain_hex_bytes(changed["data"]) == "29c0"
-        assert _plain_hex_bytes(changed["data"]) != original_plain
-    finally:
-        patch({"addr": CRACKME_PATCH_ASM_ADDR, "data": original_plain})
+    with patching_enabled():
+        try:
+            resp = patch_asm(
+                {"addr": CRACKME_PATCH_ASM_ADDR, "asm": "sub eax, eax"},
+                confirm=True,
+                dry_run=False,
+            )
+            assert resp["applied"] is True
+            assert "error" not in resp["results"][0]
+            changed = get_bytes({"addr": CRACKME_PATCH_ASM_ADDR, "size": 2})[0]
+            assert _plain_hex_bytes(changed["data"]) == "29c0"
+            assert _plain_hex_bytes(changed["data"]) != original_plain
+        finally:
+            patch(
+                {"addr": CRACKME_PATCH_ASM_ADDR, "data": original_plain},
+                confirm=True,
+                dry_run=False,
+            )
 
     restored = get_bytes({"addr": CRACKME_PATCH_ASM_ADDR, "size": 2})[0]
     assert _plain_hex_bytes(restored["data"]) == original_plain
@@ -182,10 +192,9 @@ def test_patch_asm_roundtrip():
 
 @test(binary="typed_fixture.elf")
 def test_patch_asm_invalid_instruction_reports_error():
-    """patch_asm reports assembly failures without crashing or partially succeeding."""
-    result = patch_asm({"addr": TYPED_FIXTURE_IMMEDIATE_1234, "asm": "not an instruction"})
-    assert_is_list(result, min_length=1)
-    assert_error(result[0], contains="Failed to assemble")
+    """patch_asm reports assembly failures as a per-item error in the envelope."""
+    resp = patch_asm({"addr": TYPED_FIXTURE_IMMEDIATE_1234, "asm": "not an instruction"})
+    assert_error(resp["results"][0], contains="Failed to assemble")
 
 
 @test()

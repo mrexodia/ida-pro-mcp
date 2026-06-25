@@ -79,6 +79,8 @@ class DebugMemoryWriteResult(TypedDict, total=False):
     size: int
     ok: bool
     error: str | None
+    original_bytes: str | None
+    note: str | None
 
 
 # ============================================================================
@@ -430,27 +432,43 @@ def _arm_dbg_start_batch_hook(restore_batch: int) -> None:
 @tool
 @idasync
 @keep_batch
-def dbg_start() -> DebugControlResult:
+def dbg_start(
+    plant_entry_bps: Annotated[
+        bool,
+        "When True AND no breakpoints exist yet, plant soft breakpoints at every "
+        "entry point so the process suspends at startup instead of running away. "
+        "Default False: dbg_start mutates no breakpoints in the IDB and the target "
+        "runs freely until it hits a pre-existing breakpoint or exits.",
+    ] = False,
+) -> DebugControlResult:
     """Launch the configured target under IDA's debugger and report its state.
 
-    WHAT: Starts a fresh debug session for the currently configured target. If
-    no breakpoints exist yet, soft breakpoints are auto-planted at every entry
-    point so the process suspends at startup instead of running away. Returns
-    once the debugger has actually come up (state is trusted over start_process's
-    unreliable return code), batch mode auto-handles any startup dialogs.
+    WHAT: Starts a fresh debug session for the currently configured target. By
+    default NO entry breakpoints are planted -- the IDB's breakpoint set is left
+    untouched and the target runs until it hits a pre-existing breakpoint or
+    exits. Set plant_entry_bps=True to opt into auto-planting soft breakpoints at
+    every entry point (only done when no breakpoints exist yet) so the process
+    suspends at startup. Returns once the debugger has actually come up (state is
+    trusted over start_process's unreliable return code), batch mode auto-handles
+    any startup dialogs.
     WHEN-TO-USE: Only when the user has already selected a debugger
     (Debugger -> Select debugger) and configured the target (executable path /
     arguments / attach pid / remote host). For confirming a static hypothesis
-    against the live process.
+    against the live process. Pass plant_entry_bps=True when you specifically want
+    to halt at program entry without setting your own breakpoint first.
     RETURNS: A DebugControlResult with state ("running"/"suspended"), started=True,
     and ip (current instruction pointer) when suspended.
+    PRO-TIP: Set your own breakpoint with dbg_bp_add before calling dbg_start to
+    control exactly where execution halts, instead of relying on plant_entry_bps.
     PITFALL: If this fails, do NOT retry in a loop -- stop and ask the user to
     configure the debugger and dismiss any IDA dialogs (e.g. "matching executable
     names") first. In a clean-room RE workflow the maintainer usually F9-launches
     the client manually and you drive the existing session; avoid dbg_start unless
-    explicitly asked to start it.
+    explicitly asked to start it. plant_entry_bps mutates the IDB's breakpoint set
+    (an undocumented side effect if left on by accident), which is why it defaults
+    to False.
     """
-    if len(list_breakpoints()) == 0:
+    if plant_entry_bps and len(list_breakpoints()) == 0:
         for i in range(ida_entry.get_entry_qty()):
             ordinal = ida_entry.get_entry_ordinal(i)
             addr = ida_entry.get_entry(ordinal)
@@ -1326,12 +1344,19 @@ def dbg_write(
     WHEN-TO-USE: To patch the live process for an experiment -- e.g. flip a branch
     condition, neutralize a check, or feed a crafted value to confirm a hypothesis
     about how the code reacts. Does NOT modify the on-disk binary or the IDB.
-    RETURNS: One DebugMemoryWriteResult per region, in order: {addr, size, ok,
-    error: null} on success or {addr, size: 0, error} on failure. Per-region
-    failures never abort the batch.
+    RETURNS: One DebugMemoryWriteResult per region, in order. On success:
+    {addr, size, ok: True, error: null, original_bytes (hex of the bytes that were
+    overwritten), note}. On failure: {addr, size: 0, ok: False, error,
+    original_bytes, note: null} (all branches share the same keys). The
+    original_bytes are captured BEFORE the write so the caller can restore the
+    target by writing them back to the same addr. Per-region failures never abort
+    the batch.
+    PRO-TIP: To revert a successful write, call dbg_write again with the returned
+    original_bytes as the new data at the same addr.
     PITFALL: This is destructive to live execution and easily crashes the target
-    if you write the wrong width/location; snapshot the original bytes with
-    dbg_read first so you can restore them. Requires an ACTIVE session.
+    if you write the wrong width/location; original_bytes is captured for you, but
+    only at the exact addr/size written -- it does not snapshot wider context.
+    Requires an ACTIVE session.
     """
 
     regions = normalize_dict_list(regions)
@@ -1343,17 +1368,46 @@ def dbg_write(
             addr = parse_address(region["addr"])
             data = bytes.fromhex(region["data"])
 
+            # Capture the original bytes BEFORE writing so the caller can
+            # restore live state by writing original_bytes back to addr.
+            original = idaapi.dbg_read_memory(addr, len(data))
+            original_hex = original.hex() if original else None
+
             success = idaapi.dbg_write_memory(addr, data)
-            results.append(
-                {
-                    "addr": region["addr"],
-                    "size": len(data) if success else 0,
-                    "ok": success,
-                    "error": None if success else "Write failed",
-                }
-            )
+            if success:
+                results.append(
+                    {
+                        "addr": region["addr"],
+                        "size": len(data),
+                        "ok": True,
+                        "error": None,
+                        "original_bytes": original_hex,
+                        "note": "original_bytes captured before write; write them "
+                        "back to addr to revert this live-memory change",
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "addr": region["addr"],
+                        "size": 0,
+                        "ok": False,
+                        "error": "Write failed",
+                        "original_bytes": original_hex,
+                        "note": None,
+                    }
+                )
 
         except Exception as e:
-            results.append({"addr": region.get("addr"), "size": 0, "error": str(e)})
+            results.append(
+                {
+                    "addr": region.get("addr"),
+                    "size": 0,
+                    "ok": False,
+                    "error": str(e),
+                    "original_bytes": None,
+                    "note": None,
+                }
+            )
 
     return results

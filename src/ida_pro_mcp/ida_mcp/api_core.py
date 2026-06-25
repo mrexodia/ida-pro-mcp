@@ -1,6 +1,7 @@
 """Core API Functions - IDB metadata and basic queries"""
 
 import logging
+import os
 import re
 import threading
 import time
@@ -973,6 +974,10 @@ def idb_save(
         str,
         "Optional destination path for the saved database; empty means save in place to the currently open IDB path.",
     ] = "",
+    overwrite: Annotated[
+        bool,
+        "Guard against clobbering an existing different file. When path resolves to an existing file that differs from the currently open IDB, the save is refused unless this is True.",
+    ] = False,
 ) -> IdbSaveResult:
     """WHAT: Persist the active IDB (all renames, comments, types, patches) to disk,
     either in place or as a copy at a new path.
@@ -981,7 +986,12 @@ def idb_save(
     snapshot the database to a new file. Read-only analysis tools do not need this.
 
     RETURNS: {ok, path, error?}; ok is False with an error string when the path can't be
-    resolved or save_database reports failure.
+    resolved, save_database reports failure, or the destination would overwrite an
+    existing different file while overwrite is False.
+
+    PARAMS: overwrite (default False) is a safety guard: when path resolves to an already
+    existing file that differs from the currently open IDB, the save is refused unless
+    overwrite=True, so an explicit save-as cannot silently clobber an unrelated database.
 
     PITFALL: In the GUI this performs a native in-place save (Ctrl+W) and, for a different
     path, a compressed snapshot — it deliberately never kills the live loose working files
@@ -1010,11 +1020,26 @@ def idb_save(
         try:
             is_gui = bool(ida_kernwin.is_idaq())
         except Exception:
-            is_gui = False
+            # Bias to the SAFE branch on an unknown environment: assume GUI so we use the
+            # native in-place save and never DBFL_KILL loose working files. A false headless
+            # assumption here would pack+kill a live GUI database and corrupt it (issue #446).
+            is_gui = True
+
+        current = ida_loader.get_path(ida_loader.PATH_TYPE_IDB)
+        if (
+            path
+            and save_path != current
+            and os.path.exists(save_path)
+            and not overwrite
+        ):
+            return {
+                "ok": False,
+                "path": save_path,
+                "error": f"Refusing to overwrite existing file {save_path}; pass overwrite=true to allow",
+            }
 
         if is_gui:
             # GUI: never DBFL_KILL the loose files of the open database.
-            current = ida_loader.get_path(ida_loader.PATH_TYPE_IDB)
             if path and save_path != current:
                 # Save-as a compressed snapshot to a new path; leaves the live
                 # working files intact.

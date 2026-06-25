@@ -200,13 +200,26 @@ calls, and for the dangerous levels it also marks the tool "unsafe" (added to
 | Level | readOnly | destructive | idempotent | openWorld | Use for |
 |-------|----------|-------------|------------|-----------|---------|
 | `READ` | ✓ | ✗ | ✓ | ✗ | Never mutates the IDB or process state: queries, lookups, decompile, disasm, xrefs, reads. |
-| `WRITE` | ✗ | ✗ | ✓ | ✗ | Reversible, idempotent IDB edits: rename, set comment, declare/apply type, define func. |
-| `DESTRUCTIVE` | ✗ | ✓ | ✗ | ✗ | Mutations that lose info or are not safely repeatable: patch bytes, undefine, delete. Also → `MCP_UNSAFE`. |
+| `WRITE` | ✗ | ✗ | ✓ | ✗ | Reversible, idempotent IDB *annotations*: `rename`, `set_comments`/`append_comments`, declare/apply type, define func. Metadata layered on the IDB — no program bytes change. |
+| `DESTRUCTIVE` | ✗ | ✓ | ✗ | ✗ | Non-idempotent IDB edits that lose info: `undefine`, delete/clear definitions. Also → `MCP_UNSAFE`. |
+| `PATCH` | ✗ | ✓ | ✗ | ✗ | Binary-byte writers that rewrite the program: `patch`, `patch_asm`, `put_int`. Destructive **and** consent-gated **and** unsafe (see below). Also → `MCP_UNSAFE`. |
 | `EXECUTE` | ✗ | ✓ | ✗ | ✓ | Runs code / touches the outside world: `py_eval`, debugger run/continue, anything non-deterministic. Also → `MCP_UNSAFE`. |
 
 Notes:
 
 - An unknown level raises `ValueError` at import time — typos fail fast.
+- `rename` / `set_comments` / `append_comments` are `WRITE`, **not**
+  `DESTRUCTIVE`: they are reversible metadata annotations on the IDB and never
+  alter program bytes. Reserve `DESTRUCTIVE` for definition-losing edits
+  (`undefine`, delete/clear).
+- **`PATCH` is the binary-byte-writer tier** — `patch`, `patch_asm`, `put_int`,
+  which rewrite the analysed program itself. It is destructive *and*
+  consent-gated: such tools are refused unless the server runs with
+  `IDA_MCP_ALLOW_PATCH`, require a per-call `confirm=true`, and offer a `dry_run`
+  preview of the exact byte change before any write. They are unsafe
+  (`MCP_UNSAFE`) and off-limits during analysis — only invoked on an explicit
+  user request. Pair them with `revert_patch` / `list_patches` to undo and audit.
+  Don't reach for `PATCH` for anything that doesn't change program bytes.
 - `READ` and `WRITE` are *idempotent*: calling twice with the same args yields the
   same end state. If your "write" can't promise that, it's `DESTRUCTIVE`.
 - `@safety("DESTRUCTIVE")` and `@safety("EXECUTE")` subsume the legacy `@unsafe`

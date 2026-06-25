@@ -15,6 +15,7 @@ Usage from command line:
     ida-mcp-test tests/crackme03.elf --pattern "*meta*"
 """
 
+import contextlib
 import fnmatch
 import time
 import traceback
@@ -62,6 +63,24 @@ class SkipTest(Exception):
 def skip_test(reason: str = "") -> None:
     """Skip the current test at runtime."""
     raise SkipTest(reason or "skipped")
+
+
+@contextlib.contextmanager
+def patching_enabled():
+    """Temporarily open the binary-patch consent gate for a test that must
+    actually write image bytes (patch / put_int / patch_asm). Always resets the
+    gate afterwards so the axis-7 default (patching disabled) is restored.
+
+    Tests still pass confirm=True, dry_run=False to the byte-writer for the write
+    to land; this context only opens the server-level gate.
+    """
+    from .consent import set_patch_allowed
+
+    set_patch_allowed(True)
+    try:
+        yield
+    finally:
+        set_patch_allowed(None)
 
 
 def test(*, binary: str = "", skip: bool = False) -> Callable:

@@ -2,6 +2,7 @@ import ast
 import io
 import os
 import sys
+from contextlib import nullcontext
 from typing import Annotated, TypedDict
 
 import ida_bytes
@@ -23,7 +24,23 @@ import idc
 
 from .rpc import tool, safety, title
 from .sync import idasync
+from .consent import block_byte_writes
 from .utils import parse_address, get_function
+
+# Largest script file py_exec_file will read (a guard against a runaway/abusive
+# path on a network-reachable server). Real IDAPython scripts are far smaller.
+_MAX_SCRIPT_BYTES = 4 * 1024 * 1024
+
+
+def _create_undo_point() -> None:
+    """Best-effort IDA undo checkpoint before an injected script may mutate the
+    database, so the user can Edit > Undo a scripted change."""
+    try:
+        import ida_undo
+
+        ida_undo.create_undo_point(b"ida_mcp", b"py_exec")
+    except Exception:
+        pass
 
 
 # ============================================================================
@@ -118,14 +135,18 @@ def py_eval(
         str,
         "Python source to run inside IDA. May be a single expression, a block of statements, or statements with a trailing expression (Jupyter-style); the trailing expression's value, or a top-level `result` variable, becomes the returned result.",
     ],
+    allow_patch: Annotated[
+        bool,
+        "Permit the snippet to write the analysed program's BYTES (ida_bytes/idc patch_*/put_*). Default false: image-byte writes raise PatchBlockedError so analysis never patches the binary. Set true ONLY when the user explicitly asked to patch (an undo point is created first).",
+    ] = False,
 ) -> PythonExecResult:
     """WHAT: Execute an inline Python snippet in the live IDA process with every common `ida_*` module (plus `idaapi`, `idc`, `idautils`, and the `parse_address`/`get_function` helpers) pre-injected into a single shared namespace, capturing the computed value, stdout, and stderr.
 
     WHEN-TO-USE: For one-off IDAPython probes and scripted edits that are too specific for a dedicated tool — querying or mutating the database, walking xrefs, reading bytes, driving the decompiler. Prefer `py_exec_file` instead when the script is large or multi-line enough to be unwieldy as an inline string.
 
-    RETURNS: A PythonExecResult with `result` (stringified value of the trailing expression or of a `result` variable, else ""), `stdout`, and `stderr`. Exceptions do not raise — the full traceback is returned in `stderr` with `result`/`stdout` blanked.
+    RETURNS: A PythonExecResult with `result` (stringified value of the trailing expression or of a `result` variable, else ""), `stdout`, and `stderr`. Exceptions do not raise — the full traceback is returned in `stderr` (partial stdout preserved).
 
-    PITFALL: This is arbitrary code execution against the open database and can irreversibly modify or corrupt the IDB; there is no sandbox and no undo. To return a value from a statement block (no trailing expression), assign it to a variable literally named `result` — the old "last assigned variable" heuristic was removed, so nothing else is auto-returned."""
+    PITFALL: This is arbitrary code execution against the open database and can irreversibly modify or corrupt the IDB metadata; there is no sandbox. By DEFAULT (allow_patch=false) image-byte writes — `ida_bytes`/`idc` `patch_*`/`put_*` — are BLOCKED and raise PatchBlockedError, so understanding a binary never patches it (axis-7 rule); pass allow_patch=true only on an explicit user request to patch. To return a value from a statement block, assign it to a variable named `result`."""
     # Capture stdout/stderr
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
@@ -144,44 +165,50 @@ def py_eval(
 
         result_value = None
 
-        # Parse code with AST to properly handle execution
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            # If parsing fails, fall back to direct exec
-            exec(code, ns, ns)
-            if "result" in ns:
-                result_value = str(ns["result"])
-        else:
-            if not tree.body:
-                # Empty code
-                pass
-            elif len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr):
-                # Single expression - use eval
-                result_value = str(eval(code, ns, ns))
-            elif isinstance(tree.body[-1], ast.Expr):
-                # Multiple statements, last one is an expression (Jupyter-style)
-                # Execute all statements except the last
-                if len(tree.body) > 1:
-                    exec_tree = ast.Module(body=tree.body[:-1], type_ignores=[])
-                    exec(
-                        compile(exec_tree, "<string>", "exec"),
-                        ns,
-                        ns,
-                    )
-                # Eval only the last expression
-                eval_tree = ast.Expression(body=tree.body[-1].value)
-                result_value = str(
-                    eval(compile(eval_tree, "<string>", "eval"), ns, ns)
-                )
-            else:
-                # All statements (no trailing expression)
+        if allow_patch:
+            _create_undo_point()
+        # Fence image-byte writes unless the caller explicitly opted in.
+        guard = nullcontext() if allow_patch else block_byte_writes()
+
+        with guard:
+            # Parse code with AST to properly handle execution
+            try:
+                tree = ast.parse(code)
+            except SyntaxError:
+                # If parsing fails, fall back to direct exec
                 exec(code, ns, ns)
-                # Return 'result' variable only if explicitly set. The old
-                # "last assigned variable" heuristic was order-dependent and
-                # unreliable, so it is dropped.
                 if "result" in ns:
                     result_value = str(ns["result"])
+            else:
+                if not tree.body:
+                    # Empty code
+                    pass
+                elif len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr):
+                    # Single expression - use eval
+                    result_value = str(eval(code, ns, ns))
+                elif isinstance(tree.body[-1], ast.Expr):
+                    # Multiple statements, last one is an expression (Jupyter-style)
+                    # Execute all statements except the last
+                    if len(tree.body) > 1:
+                        exec_tree = ast.Module(body=tree.body[:-1], type_ignores=[])
+                        exec(
+                            compile(exec_tree, "<string>", "exec"),
+                            ns,
+                            ns,
+                        )
+                    # Eval only the last expression
+                    eval_tree = ast.Expression(body=tree.body[-1].value)
+                    result_value = str(
+                        eval(compile(eval_tree, "<string>", "eval"), ns, ns)
+                    )
+                else:
+                    # All statements (no trailing expression)
+                    exec(code, ns, ns)
+                    # Return 'result' variable only if explicitly set. The old
+                    # "last assigned variable" heuristic was order-dependent and
+                    # unreliable, so it is dropped.
+                    if "result" in ns:
+                        result_value = str(ns["result"])
 
         # Collect output
         stdout_text = stdout_capture.getvalue()
@@ -198,7 +225,7 @@ def py_eval(
 
         return {
             "result": "",
-            "stdout": "",
+            "stdout": stdout_capture.getvalue(),
             "stderr": traceback.format_exc(),
         }
     finally:

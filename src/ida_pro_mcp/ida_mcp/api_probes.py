@@ -36,6 +36,7 @@ from typing import Any, Optional, TypedDict
 
 from . import trace as _trace
 from .rpc import tool, safety, title, ext
+from .safe_eval import safe_eval
 from .sync import idasync, tool_timeout, IDAError
 
 
@@ -116,6 +117,13 @@ class SnapshotResult(TypedDict, total=False):
     regs: dict
     ranges: list[dict]
     restored: bool
+    partial: bool
+    restored_regs: int
+    failed_regs: int
+    restored_ranges: int
+    failed_ranges: int
+    identity: dict
+    warning: str
     error: str
 
 
@@ -782,11 +790,14 @@ def _probe_dispatch(probe_id: str) -> bool:
 
 def _eval_predicate(predicate: str, captured: dict) -> bool:
     """Best-effort predicate evaluation over the captured dict. The predicate is
-    a Python expression with `c` bound to the captured dict and `old`/`new`
-    bound for watch probes. Non-boolean / error -> True (don't suppress)."""
+    a small whitelisted expression with `c` bound to the captured dict and
+    `old`/`new` bound for watch probes. It is evaluated by safe_eval — a direct
+    AST interpreter with NO eval/exec and no attribute access or function calls,
+    so a predicate string cannot reach os/subprocess (the old emptied-builtins
+    eval was not a real sandbox). Non-boolean / error -> True (don't suppress)."""
     try:
         env = {"c": captured, "old": captured.get("old"), "new": captured.get("new")}
-        return bool(eval(predicate, {"__builtins__": {}}, env))  # noqa: S307 (sandboxed env)
+        return bool(safe_eval(predicate, env))
     except Exception:
         return True
 
@@ -2015,6 +2026,43 @@ _snapshots: dict[str, dict] = {}
 _snapshots_lock = threading.Lock()
 
 
+def _process_identity() -> dict:
+    """Best-effort identity of the live debuggee, used to detect a relaunch
+    between snapshot save and restore. None of these signals is guaranteed across
+    IDA builds, so we capture whatever is available and only compare keys that
+    BOTH sides actually have."""
+    ident: dict = {}
+    try:
+        import idaapi
+
+        base = idaapi.get_imagebase()
+        if isinstance(base, int):
+            ident["base"] = base
+    except Exception:
+        pass
+    try:
+        import ida_dbg
+
+        get_pi = getattr(ida_dbg, "get_process_info", None)
+        if callable(get_pi):
+            pi = get_pi()
+            pid = getattr(pi, "pid", None)
+            if isinstance(pid, int):
+                ident["pid"] = pid
+    except Exception:
+        pass
+    return ident
+
+
+def _identity_mismatch(saved: dict, current: dict) -> list[str]:
+    """Human-readable differences across identity keys present in BOTH dicts."""
+    diffs: list[str] = []
+    for key in ("pid", "base"):
+        if key in saved and key in current and saved[key] != current[key]:
+            diffs.append(f"{key} changed (saved {saved[key]!r} -> now {current[key]!r})")
+    return diffs
+
+
 @ext("dbg")
 @safety("EXECUTE")
 @title("Save a best-effort register+memory snapshot")
@@ -2066,13 +2114,19 @@ def snapshot_save(name: str, ranges: list[dict] | None = None) -> SnapshotResult
         if data is not None:
             captured_ranges.append({"addr": addr, "hex": data.hex()})
 
+    identity = _process_identity()
     with _snapshots_lock:
-        _snapshots[name] = {"regs": regs, "ranges": captured_ranges}
+        _snapshots[name] = {
+            "regs": regs,
+            "ranges": captured_ranges,
+            "identity": identity,
+        }
 
     return {
         "name": name,
         "regs": {k: hex(v) for k, v in regs.items()},
         "ranges": [{"addr": hex(r["addr"]), "size": len(r["hex"]) // 2} for r in captured_ranges],
+        "identity": {k: (hex(v) if isinstance(v, int) else v) for k, v in identity.items()},
     }
 
 
@@ -2102,25 +2156,66 @@ def snapshot_restore(name: str) -> SnapshotResult:
     if snap is None:
         return {"name": name, "error": f"no snapshot named {name!r}"}
 
-    for addr_hex in snap["ranges"]:
-        try:
-            data = bytes.fromhex(addr_hex["hex"])
-            idaapi.dbg_write_memory(addr_hex["addr"], data)
-        except Exception:
-            continue
+    # Refuse to restore into a different process than the one snapshotted: the
+    # captured addresses/registers would land in the wrong place and can crash
+    # the debuggee. Never write blind (axis-7 safety).
+    saved_identity = snap.get("identity", {}) or {}
+    mismatch = _identity_mismatch(saved_identity, _process_identity())
+    if mismatch:
+        return {
+            "name": name,
+            "restored": False,
+            "error": (
+                "process identity changed since snapshot ("
+                + "; ".join(mismatch)
+                + ") - refusing to restore into a different / relaunched process"
+            ),
+        }
 
+    restored_ranges = 0
+    failed_ranges = 0
+    for region in snap["ranges"]:
+        try:
+            data = bytes.fromhex(region["hex"])
+            wrote = idaapi.dbg_write_memory(region["addr"], data)
+            # dbg_write_memory returns the byte count (or True/falsy on some
+            # builds); a short or zero write is a failure, not a success.
+            if wrote is True or (isinstance(wrote, int) and wrote >= len(data)):
+                restored_ranges += 1
+            else:
+                failed_ranges += 1
+        except Exception:
+            failed_ranges += 1
+
+    restored_regs = 0
+    failed_regs = 0
     for rn, val in snap["regs"].items():
         try:
-            ida_dbg.set_reg_val(rn, val)
+            if ida_dbg.set_reg_val(rn, val):
+                restored_regs += 1
+            else:
+                failed_regs += 1
         except Exception:
-            continue
+            failed_regs += 1
 
-    return {
+    partial = bool(failed_ranges or failed_regs)
+    result: dict = {
         "name": name,
-        "restored": True,
+        "restored": not partial,
+        "partial": partial,
+        "restored_regs": restored_regs,
+        "failed_regs": failed_regs,
+        "restored_ranges": restored_ranges,
+        "failed_ranges": failed_ranges,
         "regs": {k: hex(v) for k, v in snap["regs"].items()},
         "ranges": [{"addr": hex(r["addr"]), "size": len(r["hex"]) // 2} for r in snap["ranges"]],
     }
+    if partial:
+        result["warning"] = (
+            f"partial restore: {failed_regs} register(s) and {failed_ranges} "
+            "range(s) failed to write"
+        )
+    return result
 
 
 @ext("dbg")

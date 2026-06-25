@@ -25,8 +25,11 @@ def test_unsafe_set_includes_all_expected_categories():
     assert "py_eval" in MCP_UNSAFE
     assert "py_exec_file" in MCP_UNSAFE
     assert "diff_before_after" in MCP_UNSAFE
+    # Only the state-mutating dbg_ tools (EXECUTE tier: start/exit/continue/run/
+    # step/add-delete-toggle bp/set-bp-condition/write) are unsafe; the READ-only
+    # dbg_ tools (status/regs/bps/stacktrace/read/gpregs) are correctly safe.
     dbg_tools = {n for n in MCP_UNSAFE if n.startswith("dbg_")}
-    assert len(dbg_tools) >= 15, f"Expected ≥15 dbg_ unsafe tools, got {len(dbg_tools)}"
+    assert len(dbg_tools) >= 10, f"Expected >=10 mutating dbg_ unsafe tools, got {len(dbg_tools)}"
 
 
 @test()
@@ -51,10 +54,50 @@ def test_dbg_extension_group_exists_and_populated():
 
 @test()
 def test_dbg_extension_tools_are_all_unsafe():
-    """Every tool in the 'dbg' extension must also be @unsafe."""
+    """Every STATE-MUTATING dbg-ext tool must be @unsafe.
+
+    READ-only dbg/probe tools (dbg_status, dbg_read, probe_list, ...) are
+    correctly @safety("READ") and intentionally NOT unsafe — listing or reading
+    debugger state mutates nothing. Only the mutating tiers (EXECUTE /
+    DESTRUCTIVE / PATCH, which set destructiveHint or openWorldHint) must be
+    fenced behind @unsafe. So we assert exactly that: every mutating dbg tool is
+    unsafe, and read-only dbg tools are allowed to be safe.
+    """
     dbg_tools = MCP_EXTENSIONS.get("dbg", set())
-    not_unsafe = dbg_tools - MCP_UNSAFE
-    assert not not_unsafe, f"dbg tools missing @unsafe: {not_unsafe}"
+    methods = MCP_SERVER.tools.methods
+
+    mutating = set()
+    read_only = set()
+    for name in dbg_tools:
+        func = methods.get(name)
+        ann = getattr(func, "__mcp_annotations__", None) if func else None
+        if ann and (ann.get("destructiveHint") or ann.get("openWorldHint")):
+            mutating.add(name)
+        else:
+            read_only.add(name)
+
+    # The mutating debugger surface (run/step/continue/bp-set/write/appcall/...)
+    # is substantial; guard against the classifier silently collapsing.
+    assert len(mutating) >= 10, (
+        f"Expected >=10 mutating dbg tools, got {len(mutating)}: {sorted(mutating)}"
+    )
+
+    not_unsafe = mutating - MCP_UNSAFE
+    assert not not_unsafe, f"mutating dbg tools missing @unsafe: {sorted(not_unsafe)}"
+
+    # Sanity: read-only ext tools are explicitly permitted to be safe — at least
+    # the known read tools must classify as read-only here.
+    expected_read = {
+        "dbg_status", "dbg_read", "dbg_bps", "dbg_stacktrace",
+        "probe_list", "probe_drain", "probe_stats", "trace_summary",
+        "diff_buffers", "snapshot_list", "read_struct_live",
+        "appcall_inspect", "memory_scan",
+    }
+    present_read = expected_read & dbg_tools
+    misclassified = present_read - read_only
+    assert not misclassified, (
+        f"known read-only dbg tools classified as mutating: {sorted(misclassified)}"
+    )
 
 
 @test()

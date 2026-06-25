@@ -188,3 +188,52 @@ def test_real_shipped_search_docs_is_read_and_titled():
     assert search_docs.__mcp_annotations__["readOnlyHint"] is True
     assert search_docs.__mcp_title__ == "Search the MCP documentation"
     assert "search_docs" not in MCP_UNSAFE
+
+
+# --------------------------------------------------------------------------
+# PATCH safety tier (binary-byte writers) — axis 7
+# --------------------------------------------------------------------------
+
+
+def test_patch_level_exists_and_implies_destructive():
+    @safety("PATCH")
+    def t_patch():
+        return 1
+
+    ann = t_patch.__mcp_annotations__
+    assert ann["destructiveHint"] is True
+    assert ann["readOnlyHint"] is False
+    assert ann["idempotentHint"] is False
+    # PATCH is distinguished from EXECUTE: it does not touch the open world.
+    assert ann["openWorldHint"] is False
+
+
+def test_patch_level_registers_into_mcp_unsafe():
+    @safety("PATCH")
+    def unsafe_patch_probe():
+        return 1
+
+    assert "unsafe_patch_probe" in MCP_UNSAFE
+
+
+def test_binary_byte_writers_are_unsafe():
+    """The real image-byte writers must all be in the unsafe (PATCH) tier."""
+    # Import the modules so their @safety decorators have run.
+    from ida_pro_mcp.ida_mcp import api_memory, api_modify  # noqa: F401
+
+    for name in ("patch", "put_int", "patch_asm", "revert_patch"):
+        assert name in MCP_UNSAFE, f"{name} should be a binary-byte (PATCH) tier tool"
+
+
+def test_reversible_metadata_edits_are_not_unsafe():
+    """WRITE-tier IDB annotation edits are reversible and must NOT be unsafe."""
+    from ida_pro_mcp.ida_mcp import api_modify  # noqa: F401
+
+    for name in ("rename", "set_comments", "append_comments", "set_op_type"):
+        assert name not in MCP_UNSAFE, f"{name} is reversible metadata (WRITE), not unsafe"
+
+
+def test_list_patches_is_read_only_not_unsafe():
+    from ida_pro_mcp.ida_mcp import api_memory  # noqa: F401
+
+    assert "list_patches" not in MCP_UNSAFE

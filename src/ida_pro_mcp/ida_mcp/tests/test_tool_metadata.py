@@ -13,8 +13,9 @@ from ..framework import test
 # sentences, rather than ultra-short labels:
 # https://docs.anthropic.com/en/docs/build-with-claude/tool-use/implement-tool-use
 # Keep a loose upper bound here to catch accidental prompt stuffing / policy text
-# while still allowing informative descriptions for richer tools.
-MAX_DOCSTRING_WORDS = 120
+# while still allowing the project's rich WHAT/WHEN-TO-USE/RETURNS/PRO-TIP/PITFALL
+# tool descriptions, which routinely run 150-290 words for the more complex tools.
+MAX_DOCSTRING_WORDS = 300
 PLACEHOLDER_PARAM_DESCRIPTIONS = {"address", "offset", "count"}
 
 
