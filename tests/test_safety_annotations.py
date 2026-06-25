@@ -10,7 +10,7 @@ Verifies:
 
 import pytest
 
-from ida_pro_mcp.ida_mcp.rpc import (
+from ida_pro_mcp.ida_mcp._kernel.rpc import (
     MCP_SERVER,
     MCP_UNSAFE,
     safety,

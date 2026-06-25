@@ -15,7 +15,7 @@ These assert structural invariants that hold across IDA / Hex-Rays revisions
 rather than hard-coded counts.
 """
 
-from ..framework import (
+from .._kernel.framework import (
     test,
     skip_test,
     assert_has_keys,

@@ -14,8 +14,8 @@ These run headless under the conftest idaapi stub (errors.py only imports from
 ``rpc`` and re-exports ``sync.IDAError``).
 """
 
-from ida_pro_mcp.ida_mcp import errors
-from ida_pro_mcp.ida_mcp.errors import (
+from ida_pro_mcp.ida_mcp._kernel import errors
+from ida_pro_mcp.ida_mcp._kernel.errors import (
     StructuredError,
     NotFoundError,
     InvalidArgumentError,
@@ -23,7 +23,7 @@ from ida_pro_mcp.ida_mcp.errors import (
     FeatureUnavailableError,
     IDAError,
 )
-from ida_pro_mcp.ida_mcp.rpc import McpToolError
+from ida_pro_mcp.ida_mcp._kernel.rpc import McpToolError
 
 
 # Every structured subclass, with the code the module documents for it.

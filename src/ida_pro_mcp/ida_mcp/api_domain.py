@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from typing import Annotated, TypedDict
 
-from .rpc import safety, title, tool
-from .sync import idasync
+from ._kernel.rpc import safety, title, tool
+from ._kernel.sync import idasync
 
 _UNLOADED = object()
 

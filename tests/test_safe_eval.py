@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from ida_pro_mcp.ida_mcp.safe_eval import safe_eval, UnsafeExpressionError
+from ida_pro_mcp.ida_mcp._kernel.safe_eval import safe_eval, UnsafeExpressionError
 
 
 # ---------------------------------------------------------------------------

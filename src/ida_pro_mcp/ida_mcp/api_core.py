@@ -20,9 +20,9 @@ import idaapi
 import idautils
 import idc
 
-from .rpc import tool, safety, title
-from .sync import idasync, get_tool_deadline
-from .utils import (
+from ._kernel.rpc import tool, safety, title
+from ._kernel.sync import idasync, get_tool_deadline
+from ._kernel.utils import (
     ConvertedNumber,
     EntityQuery,
     Function,

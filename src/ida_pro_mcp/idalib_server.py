@@ -14,10 +14,10 @@ from ida_pro_mcp.ida_mcp.api_core import (
     ServerWarmupResult,
     server_warmup,
 )
-from ida_pro_mcp.ida_mcp.discovery import register_instance, unregister_instance
-from ida_pro_mcp.ida_mcp.http import IdaMcpHttpRequestHandler
-from ida_pro_mcp.ida_mcp.profile import apply_profile, load_profile
-from ida_pro_mcp.ida_mcp.rpc import set_download_base_url, tool
+from ida_pro_mcp.ida_mcp._kernel.discovery import register_instance, unregister_instance
+from ida_pro_mcp.ida_mcp._kernel.http import IdaMcpHttpRequestHandler
+from ida_pro_mcp.ida_mcp._kernel.profile import apply_profile, load_profile
+from ida_pro_mcp.ida_mcp._kernel.rpc import set_download_base_url, tool
 from ida_pro_mcp.idalib_session_manager import get_session_manager
 from ida_pro_mcp.worker_lifecycle import WorkerLifecycle
 

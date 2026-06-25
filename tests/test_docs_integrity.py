@@ -33,7 +33,7 @@ import pytest
 # validated against the real registered surface.
 import ida_pro_mcp.ida_mcp  # noqa: F401
 from ida_pro_mcp.ida_mcp import api_docs
-from ida_pro_mcp.ida_mcp.rpc import MCP_SERVER
+from ida_pro_mcp.ida_mcp._kernel.rpc import MCP_SERVER
 
 
 # ``{topic}`` is the templated-resource placeholder used in prose/code blocks

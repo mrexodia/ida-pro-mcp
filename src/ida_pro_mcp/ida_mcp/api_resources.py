@@ -14,11 +14,11 @@ import idaapi
 import idautils
 import idc
 
-from . import compat
-from . import rpc
-from .rpc import resource
-from .sync import idasync
-from .utils import (
+from ._kernel import compat
+from ._kernel import rpc
+from ._kernel.rpc import resource
+from ._kernel.sync import idasync
+from ._kernel.utils import (
     Metadata,
     Segment,
     StructureDefinition,

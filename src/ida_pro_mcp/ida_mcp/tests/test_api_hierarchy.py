@@ -18,7 +18,7 @@ doc promises and that MUST hold regardless of the exact set:
     interface vs internal with a consistent inner/outer edge split.
 """
 
-from ..framework import (
+from .._kernel.framework import (
     test,
     skip_test,
     assert_has_keys,

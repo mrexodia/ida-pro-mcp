@@ -9,7 +9,7 @@ no IDA, no live process.
 
 import pytest
 
-from ida_pro_mcp.ida_mcp.dbg_common import CallPairing
+from ida_pro_mcp.ida_mcp._kernel.dbg_common import CallPairing
 
 
 def test_entry_then_matching_return_joins_records():

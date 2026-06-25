@@ -10,7 +10,7 @@ module imports no IDA at top level anyway.
 
 import pytest
 
-from ida_pro_mcp.ida_mcp.dbg_common import (
+from ida_pro_mcp.ida_mcp._kernel.dbg_common import (
     detect_abi,
     int_arg_location,
     resolve_int_arg,

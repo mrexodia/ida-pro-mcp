@@ -7,7 +7,7 @@ summarize_records (server-side rollup over probe records) and diff_buffers
 
 import pytest
 
-from ida_pro_mcp.ida_mcp.trace import diff_buffers, summarize_records
+from ida_pro_mcp.ida_mcp._kernel.trace import diff_buffers, summarize_records
 from ida_pro_mcp.ida_mcp.api_probes import (
     AUTOPILOT_FORBIDDEN_ACTIONS,
     AUTOPILOT_SAFE_ACTIONS,

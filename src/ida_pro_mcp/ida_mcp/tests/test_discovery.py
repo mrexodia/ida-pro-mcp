@@ -10,8 +10,8 @@ import json
 import os
 import tempfile
 
-from ..framework import test
-from .. import discovery
+from .._kernel.framework import test
+from .._kernel import discovery
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """Tests for api_memory API functions."""
 
-from ..framework import (
+from .._kernel.framework import (
     test,
     skip_test,
     patching_enabled,
@@ -23,7 +23,7 @@ from ..api_memory import (
     patch,
     put_int,
 )
-from ..utils import read_bytes_bss_safe, read_int_bss_safe
+from .._kernel.utils import read_bytes_bss_safe, read_int_bss_safe
 
 
 CRACKME_FORMAT = "0x201f"

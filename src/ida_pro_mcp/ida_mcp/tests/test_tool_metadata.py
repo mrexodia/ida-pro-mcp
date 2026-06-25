@@ -4,7 +4,7 @@ import ast
 import re
 from pathlib import Path
 
-from ..framework import test
+from .._kernel.framework import test
 
 
 # Tool docstrings are model-facing MCP descriptions in this repository; see
@@ -248,7 +248,7 @@ def test_tool_param_typed_dicts_have_required_core():
         "EnumMemberUpsert",
     }
 
-    utils_path = Path(__file__).resolve().parents[1] / "utils.py"
+    utils_path = Path(__file__).resolve().parents[1] / "_kernel" / "utils.py"
     tree = ast.parse(utils_path.read_text(encoding="utf-8"))
 
     failures: list[str] = []

@@ -7,7 +7,7 @@ from pathlib import Path
 
 # idapro must come first to initialize idalib.
 import idapro
-from ida_pro_mcp.ida_mcp.trace import iter_idb_records
+from ida_pro_mcp.ida_mcp._kernel.trace import iter_idb_records
 
 
 def main() -> int:

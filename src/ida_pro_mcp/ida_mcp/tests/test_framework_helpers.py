@@ -1,6 +1,6 @@
 """Tests for framework helper utilities used by the IDA test suite."""
 
-from ..framework import (
+from .._kernel.framework import (
     test,
     assert_shape,
     assert_typed_dict,
@@ -14,7 +14,7 @@ from ..framework import (
     get_named_address,
     get_string_address_containing,
 )
-from ..utils import Function, Metadata
+from .._kernel.utils import Function, Metadata
 
 
 @test(binary="crackme03.elf")

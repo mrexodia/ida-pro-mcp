@@ -1,6 +1,6 @@
 """Tests for api_stack API functions."""
 
-from ..framework import (
+from .._kernel.framework import (
     test,
     skip_test,
     assert_valid_address,

@@ -37,7 +37,7 @@ import pytest
 # Importing the package __init__ pulls in every api_* module, so all @tool /
 # @safety / @unsafe / @ext decorators have run and the registry is complete.
 import ida_pro_mcp.ida_mcp  # noqa: F401  (import for decorator side effects)
-from ida_pro_mcp.ida_mcp.rpc import (
+from ida_pro_mcp.ida_mcp._kernel.rpc import (
     MCP_EXTENSIONS,
     MCP_SERVER,
     MCP_UNSAFE,

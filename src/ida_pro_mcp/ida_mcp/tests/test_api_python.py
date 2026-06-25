@@ -4,7 +4,7 @@ import contextlib
 import os
 import tempfile
 
-from ..framework import test
+from .._kernel.framework import test
 from ..api_python import py_eval, py_exec_file
 
 

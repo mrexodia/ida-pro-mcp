@@ -23,7 +23,7 @@ import threading
 from importlib import resources as _resources
 from typing import Annotated, TypedDict
 
-from .rpc import resource, tool, safety, title
+from ._kernel.rpc import resource, tool, safety, title
 
 
 # ============================================================================

@@ -1,8 +1,8 @@
 """Tests for debugger control helpers."""
 
-from ..framework import test
+from .._kernel.framework import test
 from .. import api_debug
-from ..sync import IDAError
+from .._kernel.sync import IDAError
 
 
 class _SavedAttr:

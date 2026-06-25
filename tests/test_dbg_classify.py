@@ -8,7 +8,7 @@ kind}. Pure -- the region list is hand-built, no live process.
 
 import pytest
 
-from ida_pro_mcp.ida_mcp.dbg_common import classify_pointer
+from ida_pro_mcp.ida_mcp._kernel.dbg_common import classify_pointer
 
 
 # A synthetic, ordered, non-overlapping region map standing in for what

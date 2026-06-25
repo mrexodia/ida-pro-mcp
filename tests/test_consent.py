@@ -8,7 +8,7 @@ so global state never leaks between tests.
 
 import pytest
 
-from ida_pro_mcp.ida_mcp import consent
+from ida_pro_mcp.ida_mcp._kernel import consent
 
 
 @pytest.fixture(autouse=True)

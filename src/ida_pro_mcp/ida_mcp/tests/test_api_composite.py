@@ -1,6 +1,6 @@
 """Tests for api_composite API functions."""
 
-from ..framework import (
+from .._kernel.framework import (
     test,
     skip_test,
     assert_has_keys,

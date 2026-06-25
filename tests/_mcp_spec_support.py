@@ -16,7 +16,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 
-_ZEROMCP_SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "ida_pro_mcp" / "ida_mcp"
+_ZEROMCP_SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "ida_pro_mcp" / "ida_mcp" / "_kernel"
 sys.path.insert(0, str(_ZEROMCP_SRC))
 try:
     from zeromcp.mcp import McpServer  # noqa: E402
@@ -296,15 +296,15 @@ def load_ida_rpc_module() -> types.ModuleType:
     zero_name = pkg_name + ".zeromcp"
     zero_spec = importlib.util.spec_from_file_location(
         zero_name,
-        pkg_root / "zeromcp" / "__init__.py",
-        submodule_search_locations=[str(pkg_root / "zeromcp")],
+        pkg_root / "_kernel" / "zeromcp" / "__init__.py",
+        submodule_search_locations=[str(pkg_root / "_kernel" / "zeromcp")],
     )
     zero_mod = importlib.util.module_from_spec(zero_spec)
     sys.modules[zero_name] = zero_mod
     zero_spec.loader.exec_module(zero_mod)
 
     rpc_name = pkg_name + ".rpc"
-    rpc_spec = importlib.util.spec_from_file_location(rpc_name, pkg_root / "rpc.py")
+    rpc_spec = importlib.util.spec_from_file_location(rpc_name, pkg_root / "_kernel" / "rpc.py")
     rpc_mod = importlib.util.module_from_spec(rpc_spec)
     sys.modules[rpc_name] = rpc_mod
     rpc_spec.loader.exec_module(rpc_mod)

@@ -1,6 +1,6 @@
 """Tests for api_modify API functions."""
 
-from ..framework import (
+from .._kernel.framework import (
     test,
     skip_test,
     patching_enabled,

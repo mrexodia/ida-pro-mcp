@@ -15,7 +15,7 @@ run headless against the conftest IDA stubs with NO live debugger / process.
 
 import pytest
 
-from ida_pro_mcp.ida_mcp.trace import (
+from ida_pro_mcp.ida_mcp._kernel.trace import (
     aggregate_probe_stats,
     parse_byte_pattern,
     pattern_to_mask,
@@ -227,7 +227,7 @@ def test_aggregate_handles_none_ring_stats():
 
 
 def test_probe_stats_tool_shape_matches_helper():
-    from ida_pro_mcp.ida_mcp import trace as _trace
+    from ida_pro_mcp.ida_mcp._kernel import trace as _trace
     _trace.clear_probes()
     try:
         d = _trace.register_probe("only", ea="0x1000", kind="probe", armed=True)
@@ -258,6 +258,6 @@ def test_memory_scan_still_requires_debugger():
 
 
 def test_new_helpers_exported_from_trace_all():
-    from ida_pro_mcp.ida_mcp import trace as _trace
+    from ida_pro_mcp.ida_mcp._kernel import trace as _trace
     for name in ("pattern_to_mask", "total_range_bytes", "aggregate_probe_stats"):
         assert name in _trace.__all__, name

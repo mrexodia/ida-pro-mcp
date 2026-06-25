@@ -12,7 +12,7 @@ import sys
 import unittest
 from typing import Annotated, TypedDict
 
-_ZEROMCP_SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "ida_pro_mcp" / "ida_mcp"
+_ZEROMCP_SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "ida_pro_mcp" / "ida_mcp" / "_kernel"
 sys.path.insert(0, str(_ZEROMCP_SRC))
 try:
     from zeromcp.mcp import McpServer

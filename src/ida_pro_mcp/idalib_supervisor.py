@@ -83,7 +83,7 @@ McpServer = _import_zeromcp()
 
 def _import_discovery():
     """Import pure-Python GUI instance discovery without importing ida_mcp."""
-    path = Path(__file__).resolve().parent / "ida_mcp" / "discovery.py"
+    path = Path(__file__).resolve().parent / "ida_mcp" / "_kernel" / "discovery.py"
     spec = importlib.util.spec_from_file_location("ida_pro_mcp_idalib_supervisor_discovery", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not import discovery module from {path}")

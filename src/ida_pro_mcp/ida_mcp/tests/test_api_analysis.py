@@ -1,6 +1,6 @@
 """Tests for api_analysis API functions."""
 
-from ..framework import (
+from .._kernel.framework import (
     test,
     skip_test,
     assert_has_keys,
@@ -273,7 +273,7 @@ def test_decompile_returns_text_and_refs_from_single_pass():
     for the function and the decompile-dirty counter did not move across the call
     (a fresh second Hex-Rays pass would have gone through bump_decompile_dirty).
     """
-    from ..utils import (
+    from .._kernel.utils import (
         bump_decompile_dirty,
         get_cached_cfunc,
         get_decompile_dirty,

@@ -21,7 +21,7 @@ import time
 import idaapi
 import idc
 
-from ida_pro_mcp.ida_mcp import utils
+from ida_pro_mcp.ida_mcp._kernel import utils
 
 
 # ---------------------------------------------------------------------------

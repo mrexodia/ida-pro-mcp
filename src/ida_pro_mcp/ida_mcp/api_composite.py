@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Annotated, Any, TypedDict
 
-from .rpc import tool, unsafe, safety, title
-from .sync import idasync, tool_timeout, IDAError
-from .utils import (
+from ._kernel.rpc import tool, unsafe, safety, title
+from ._kernel.sync import idasync, tool_timeout, IDAError
+from ._kernel.utils import (
     parse_address,
     get_prototype,
     get_callees,

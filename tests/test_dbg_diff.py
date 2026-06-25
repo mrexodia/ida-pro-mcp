@@ -9,7 +9,7 @@ snapshots are synthetic dicts.
 
 import pytest
 
-from ida_pro_mcp.ida_mcp.dbg_common import diff_snapshots
+from ida_pro_mcp.ida_mcp._kernel.dbg_common import diff_snapshots
 
 
 def test_diff_identical_snapshots_is_empty():

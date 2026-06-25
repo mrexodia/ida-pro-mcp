@@ -16,11 +16,11 @@ import ida_xref
 import idaapi
 import idautils
 
-from . import compat
-from .errors import InvalidArgumentError
-from .rpc import safety, title, tool
-from .sync import idasync, tool_timeout
-from .utils import (
+from ._kernel import compat
+from ._kernel.errors import InvalidArgumentError
+from ._kernel.rpc import safety, title, tool
+from ._kernel.sync import idasync, tool_timeout
+from ._kernel.utils import (
     parse_address,
     get_cached_cfunc,
     iter_func_call_edges,

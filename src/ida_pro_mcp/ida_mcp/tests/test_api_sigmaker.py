@@ -9,7 +9,7 @@ Tests are structured to validate semantically meaningful behavior:
   the name-resolution path that plain hex batches don't exercise.
 """
 
-from ..framework import (
+from .._kernel.framework import (
     test,
     skip_test,
     assert_is_list,

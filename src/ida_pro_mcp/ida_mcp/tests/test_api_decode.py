@@ -11,7 +11,7 @@ Assertions are SEMANTIC (kinds, signedness, member presence) rather than
 brittle exact-byte checks, per the Batch-5 brief.
 """
 
-from ..framework import test, skip_test
+from .._kernel.framework import test, skip_test
 from ..api_core import list_globals
 from ..api_memory import get_string, get_global_value
 from ..api_types import read_struct, set_type, type_query, type_inspect

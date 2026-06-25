@@ -13,9 +13,9 @@ import ida_funcs
 import idaapi
 
 from . import _sigmaker as _sm
-from .rpc import safety, title, tool
-from .sync import idasync
-from .utils import parse_address, normalize_list_input
+from ._kernel.rpc import safety, title, tool
+from ._kernel.sync import idasync
+from ._kernel.utils import parse_address, normalize_list_input
 
 # ---------------------------------------------------------------------------
 # Output format helpers

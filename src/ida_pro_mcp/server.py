@@ -9,15 +9,15 @@ from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 if TYPE_CHECKING:
-    from ida_pro_mcp.ida_mcp.zeromcp import (
+    from ida_pro_mcp.ida_mcp._kernel.zeromcp import (
         EXTERNAL_BASE_HEADER,
         McpHttpRequestHandler,
         McpServer,
         get_current_request_external_base_url,
     )
-    from ida_pro_mcp.ida_mcp.zeromcp.jsonrpc import JsonRpcRequest, JsonRpcResponse
+    from ida_pro_mcp.ida_mcp._kernel.zeromcp.jsonrpc import JsonRpcRequest, JsonRpcResponse
 else:
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ida_mcp"))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ida_mcp", "_kernel"))
     from zeromcp import (
         EXTERNAL_BASE_HEADER,
         McpHttpRequestHandler,
@@ -44,12 +44,12 @@ except ImportError:
     )
 
 try:
-    from .ida_mcp.discovery import discover_instances, probe_instance
+    from .ida_mcp._kernel.discovery import discover_instances, probe_instance
 except ImportError:
     try:
-        from ida_mcp.discovery import discover_instances, probe_instance
+        from ida_mcp._kernel.discovery import discover_instances, probe_instance
     except ImportError:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ida_mcp"))
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ida_mcp", "_kernel"))
         from discovery import discover_instances, probe_instance
 
         sys.path.pop(0)

@@ -9,9 +9,9 @@ from pathlib import Path
 
 
 PROTOCOL_MODULES = [
-    Path("src/ida_pro_mcp/ida_mcp/zeromcp/jsonrpc.py"),
-    Path("src/ida_pro_mcp/ida_mcp/zeromcp/mcp.py"),
-    Path("src/ida_pro_mcp/ida_mcp/http.py"),
+    Path("src/ida_pro_mcp/ida_mcp/_kernel/zeromcp/jsonrpc.py"),
+    Path("src/ida_pro_mcp/ida_mcp/_kernel/zeromcp/mcp.py"),
+    Path("src/ida_pro_mcp/ida_mcp/_kernel/http.py"),
     Path("src/ida_pro_mcp/idalib_supervisor.py"),
 ]
 

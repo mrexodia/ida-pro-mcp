@@ -1,8 +1,8 @@
 # Tests for the IDB tools/call trace middleware.
 
-from ..framework import test
-from ..rpc import MCP_SERVER
-from .. import trace
+from .._kernel.framework import test
+from .._kernel.rpc import MCP_SERVER
+from .._kernel import trace
 
 
 def _call_through_registry(name: str, arguments: dict | None = None) -> dict:
@@ -216,7 +216,7 @@ def test_trace_install_tracer_idempotent():
     """Calling install_tracer() twice does not double-wrap tools/call."""
     _reset_trace(batch_records=1)
     try:
-        from ..rpc import MCP_SERVER
+        from .._kernel.rpc import MCP_SERVER
         first = MCP_SERVER.registry.methods["tools/call"]
         trace.install_tracer()
         assert MCP_SERVER.registry.methods["tools/call"] is first
@@ -233,7 +233,7 @@ def test_trace_install_tracer_lifts_to_outermost():
     """install_tracer() lifts the tracer above a later non-tracer wrapper."""
     _reset_trace(batch_records=1)
     try:
-        from ..rpc import MCP_SERVER
+        from .._kernel.rpc import MCP_SERVER
 
         observed: list[str] = []
         prior_tracer = MCP_SERVER.registry.methods["tools/call"]

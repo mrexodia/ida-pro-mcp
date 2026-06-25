@@ -31,9 +31,9 @@ import ida_name
 import idaapi
 import idautils
 
-from .rpc import safety, title, tool
-from .sync import get_tool_deadline, idasync, tool_timeout
-from .utils import (
+from ._kernel.rpc import safety, title, tool
+from ._kernel.sync import get_tool_deadline, idasync, tool_timeout
+from ._kernel.utils import (
     Function,
     get_function,
     iter_func_call_edges,

@@ -7,7 +7,7 @@ while HTTP/SSE configs still embed the RPC address.
 import os
 import sys
 
-from ..framework import test
+from .._kernel.framework import test
 
 try:
     from ida_pro_mcp.installer import generate_mcp_config, SERVER_SCRIPT, IDA_HOST, IDA_PORT

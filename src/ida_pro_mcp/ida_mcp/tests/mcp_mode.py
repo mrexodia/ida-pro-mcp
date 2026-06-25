@@ -17,7 +17,7 @@ from typing import Any, Callable, Iterator
 
 from jsonschema import Draft202012Validator
 
-from ..rpc import MCP_SERVER
+from .._kernel.rpc import MCP_SERVER
 
 
 class _AsyncHarness:

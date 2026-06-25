@@ -13,17 +13,17 @@ import idautils
 import idc
 
 from .api_core import invalidate_strings_cache
-from .compat import tinfo_get_udm
-from .consent import (
+from ._kernel.compat import tinfo_get_udm
+from ._kernel.consent import (
     capture_original,
     patch_decision,
     patching_allowed,
     span_status,
     withheld_hint,
 )
-from .rpc import tool, safety, title
-from .sync import idasync, IDAError
-from .utils import (
+from ._kernel.rpc import tool, safety, title
+from ._kernel.sync import idasync, IDAError
+from ._kernel.utils import (
     parse_address,
     decompile_checked,
     refresh_decompiler_ctext,

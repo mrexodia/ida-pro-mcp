@@ -5,7 +5,7 @@ cursor used by drain(since_cursor=...), filtering, limit, and the
 linear-vs-circular buffer_mode contract.
 """
 
-from ida_pro_mcp.ida_mcp.trace import ProbeRing
+from ida_pro_mcp.ida_mcp._kernel.trace import ProbeRing
 
 
 def test_basic_append_and_seq_cursor():
@@ -40,7 +40,7 @@ def test_cap_clamped_to_at_least_one():
 
 
 def test_cap_clamped_to_hard_max():
-    from ida_pro_mcp.ida_mcp.trace import _PROBE_RING_HARD_MAX
+    from ida_pro_mcp.ida_mcp._kernel.trace import _PROBE_RING_HARD_MAX
 
     ring = ProbeRing(cap=_PROBE_RING_HARD_MAX * 10)
     assert ring.cap == _PROBE_RING_HARD_MAX

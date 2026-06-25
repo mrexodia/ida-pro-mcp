@@ -5,7 +5,7 @@ prompts/get). They return guide text describing how to drive a workflow; they do
 not call IDA themselves. Keep them in sync with the doc set under ``ida://docs``.
 """
 
-from .rpc import MCP_EXTENSIONS, prompt
+from ._kernel.rpc import MCP_EXTENSIONS, prompt
 
 
 def _ext_connect_clause(default: str = "dbg") -> str:

@@ -34,9 +34,9 @@ from typing import Annotated, Optional, TypedDict
 import idaapi
 import idc
 
-from .rpc import safety, title, tool
-from .sync import idasync, tool_timeout
-from .utils import (
+from ._kernel.rpc import safety, title, tool
+from ._kernel.sync import idasync, tool_timeout
+from ._kernel.utils import (
     bump_decompile_dirty,
     get_cached_cfunc,
     parse_address,

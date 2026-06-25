@@ -119,7 +119,7 @@ With coverage:
 
     try:
         # Import test framework AFTER idalib is initialized
-        from ida_pro_mcp.ida_mcp.framework import run_tests, TESTS
+        from ida_pro_mcp.ida_mcp._kernel.framework import run_tests, TESTS
 
         # Import all test modules to register @test decorators.
         # Use pkgutil discovery so registration works even if tests package

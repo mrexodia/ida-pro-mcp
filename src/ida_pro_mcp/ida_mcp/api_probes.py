@@ -34,11 +34,11 @@ import re
 import threading
 from typing import Any, Optional, TypedDict
 
-from . import trace as _trace
-from . import dbg_common as _dbg
-from .rpc import tool, safety, title, ext
-from .safe_eval import safe_eval
-from .sync import idasync, tool_timeout, IDAError
+from ._kernel import trace as _trace
+from ._kernel import dbg_common as _dbg
+from ._kernel.rpc import tool, safety, title, ext
+from ._kernel.safe_eval import safe_eval
+from ._kernel.sync import idasync, tool_timeout, IDAError
 
 
 # ============================================================================
@@ -1344,7 +1344,7 @@ def probe_add(
     if guard:
         return guard  # type: ignore[return-value]
 
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     try:
         addr = parse_address(ea)
@@ -1531,7 +1531,7 @@ def run_until(
                 "hit_probe": None, "buffer": [], "error": "process not suspended"}
 
     from .api_debug import _continue_and_wait
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     ring = _trace.get_probe_ring()
     start_cursor = ring.stats()["next_cursor"]
@@ -1612,7 +1612,7 @@ def watch_field(
         return guard  # type: ignore[return-value]
 
     import ida_dbg
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     try:
         base = parse_address(base_ptr) if base_ptr is not None else (
@@ -1714,7 +1714,7 @@ def watch_region(
         return guard  # type: ignore[return-value]
 
     import ida_dbg
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     try:
         addr = parse_address(ea)
@@ -1825,7 +1825,7 @@ def trace_calls(
     if guard:
         return guard  # type: ignore[return-value]
 
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     try:
         addr = parse_address(ea)
@@ -2001,7 +2001,7 @@ def read_struct_live(ea: str, type_name: str) -> ReadStructLiveResult:
         return guard  # type: ignore[return-value]
 
     import ida_typeinf
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     # Resolve ea, supporting pointer-chain expressions.
     raw_ea = str(ea).strip()
@@ -2080,7 +2080,7 @@ def _overlay_type(tif, raw: bytes) -> dict:
     treating every member as an unsigned little-endian int).
     """
     import ida_typeinf
-    from . import typeutils
+    from ._kernel import typeutils
 
     endian = _overlay_endian()
 
@@ -2140,7 +2140,7 @@ def _overlay_type(tif, raw: bytes) -> dict:
 
 def _resolve_ptr_chain(expr: str) -> int | None:
     """Apply a parsed pointer-chain (parse_ptr_chain ops) against live memory."""
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     ops = parse_ptr_chain(expr)
     acc: int | None = None
@@ -2194,7 +2194,7 @@ def appcall(
         return guard  # type: ignore[return-value]
 
     import idaapi
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     try:
         addr = parse_address(ea)
@@ -2268,7 +2268,7 @@ def appcall_inspect(ea: str, prototype: str) -> AppcallInspectResult:
         return guard  # type: ignore[return-value]
 
     import ida_typeinf
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     try:
         addr = parse_address(ea)
@@ -2347,7 +2347,7 @@ def probe_net(
     cap_common = [buf_arg, len_arg, f"mem({buf_arg},256)"]
 
     def _one(addr_str, kind, *, capture_ret=False, post_mem=None):
-        from .utils import parse_address
+        from ._kernel.utils import parse_address
         try:
             addr = parse_address(addr_str)
         except IDAError as exc:
@@ -2460,7 +2460,7 @@ def memory_scan(
     except ValueError as exc:
         return {"error": str(exc)}
 
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     want_start = None
     want_end = None
@@ -2727,7 +2727,7 @@ def snapshot_save(
         return {"name": name, "error": "process must be SUSPENDED to snapshot"}
 
     import ida_dbg
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     reg_names = [
         "EAX", "EBX", "ECX", "EDX", "ESI", "EDI", "EBP", "ESP", "EIP",
@@ -3146,7 +3146,7 @@ def autopilot_run(steps: list[dict], step_budget: int = 64) -> AutopilotResult:
         }
 
     from .api_debug import _continue_and_wait
-    from .utils import parse_address
+    from ._kernel.utils import parse_address
 
     transcript: list[dict] = []
     stopped_reason = "completed"

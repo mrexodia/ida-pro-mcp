@@ -45,10 +45,10 @@ import idaapi
 import idautils
 import idc
 
-from . import trace as _trace
-from .rpc import ext, safety, title, tool
-from .sync import get_tool_deadline, idasync, tool_timeout
-from .utils import (
+from ._kernel import trace as _trace
+from ._kernel.rpc import ext, safety, title, tool
+from ._kernel.sync import get_tool_deadline, idasync, tool_timeout
+from ._kernel.utils import (
     get_cached_cfunc,
     get_function,
     get_prototype,

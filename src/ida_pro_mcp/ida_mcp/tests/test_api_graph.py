@@ -14,7 +14,7 @@ regardless of the exact set:
   * back-edge / depth bounding behave as documented.
 """
 
-from ..framework import (
+from .._kernel.framework import (
     test,
     skip_test,
     assert_has_keys,
@@ -180,7 +180,7 @@ def test_callers_recursive_of_check_pw_includes_main():
 @test()
 def test_callees_recursive_invalid_root_is_structured_error():
     """An unresolved root degrades to a structured error result, never raises."""
-    from ..framework import get_unmapped_address
+    from .._kernel.framework import get_unmapped_address
 
     result = callees_recursive(get_unmapped_address(), max_depth=2)
     assert isinstance(result, dict)

@@ -1,6 +1,6 @@
 """Binary-specific tests for tests/typed_fixture.elf."""
 
-from ..framework import test, assert_is_list, assert_ok, skip_test, patching_enabled
+from .._kernel.framework import test, assert_is_list, assert_ok, skip_test, patching_enabled
 from ..api_core import lookup_funcs, find_regex, list_globals
 from ..api_analysis import (
     decompile,

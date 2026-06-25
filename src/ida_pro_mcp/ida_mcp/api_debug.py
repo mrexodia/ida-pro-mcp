@@ -21,10 +21,10 @@ import ida_name
 import idaapi
 import idc
 
-from . import dbg_common
-from .rpc import tool, safety, ext, title
-from .sync import idasync, keep_batch, get_pre_call_batch, IDAError, tool_timeout
-from .utils import (
+from ._kernel import dbg_common
+from ._kernel.rpc import tool, safety, ext, title
+from ._kernel.sync import idasync, keep_batch, get_pre_call_batch, IDAError, tool_timeout
+from ._kernel.utils import (
     RegisterValue,
     ThreadRegisters,
     BreakpointConditionOp,

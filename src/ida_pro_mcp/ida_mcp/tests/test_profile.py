@@ -3,9 +3,9 @@
 import contextlib
 from pathlib import Path
 
-from ..framework import test
-from ..profile import apply_profile, dump_profile, load_profile, parse_profile
-from ..rpc import MCP_SERVER
+from .._kernel.framework import test
+from .._kernel.profile import apply_profile, dump_profile, load_profile, parse_profile
+from .._kernel.rpc import MCP_SERVER
 
 
 @contextlib.contextmanager

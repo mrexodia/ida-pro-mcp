@@ -228,7 +228,7 @@ class MCP(idaapi.plugin_t):
         if __import__("sys").platform == "darwin":
             hotkey = hotkey.replace("Alt", "Option")
 
-        self.mcp: "ida_mcp.rpc.McpServer | None" = None
+        self.mcp: "ida_mcp._kernel.rpc.McpServer | None" = None
         self.autostart = _get_autostart()
         self.persist_endpoint = _get_persist()
         if self.persist_endpoint:
@@ -266,9 +266,9 @@ class MCP(idaapi.plugin_t):
         if port is not None:
             try:
                 if TYPE_CHECKING:
-                    from .ida_mcp.discovery import unregister_instance
+                    from .ida_mcp._kernel.discovery import unregister_instance
                 else:
-                    from ida_mcp.discovery import unregister_instance
+                    from ida_mcp._kernel.discovery import unregister_instance
                 unregister_instance(port)
             except Exception as e:
                 print(f"[MCP] Instance unregistration failed: {e}")
@@ -308,9 +308,9 @@ class MCP(idaapi.plugin_t):
     def _register_instance(self, port: int):
         try:
             if TYPE_CHECKING:
-                from .ida_mcp.discovery import register_instance
+                from .ida_mcp._kernel.discovery import register_instance
             else:
-                from ida_mcp.discovery import register_instance
+                from ida_mcp._kernel.discovery import register_instance
             import os
             import idc
             import ida_nalt

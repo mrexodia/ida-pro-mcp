@@ -1,6 +1,6 @@
 """Targeted tests for deeper internal helpers in api_analysis.py."""
 
-from ..framework import test, assert_non_empty
+from .._kernel.framework import test, assert_non_empty
 from ..api_analysis import (
     _resolve_insn_scan_ranges,
     _scan_insn_ranges,

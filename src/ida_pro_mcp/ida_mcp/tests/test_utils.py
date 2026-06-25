@@ -1,8 +1,8 @@
 """Tests for IDA-facing helper functions in utils.py."""
 
-from ..framework import test
-from ..sync import IDAError
-from ..utils import (
+from .._kernel.framework import test
+from .._kernel.sync import IDAError
+from .._kernel.utils import (
     parse_address,
     normalize_list_input,
     normalize_dict_list,

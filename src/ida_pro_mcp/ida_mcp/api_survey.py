@@ -7,11 +7,11 @@ import re
 from itertools import islice
 from typing import Annotated, TypedDict
 
-from . import compat
+from ._kernel import compat
 from .api_core import _get_strings_cache
-from .rpc import safety, title, tool
-from .sync import idasync, tool_timeout
-from .utils import get_image_size
+from ._kernel.rpc import safety, title, tool
+from ._kernel.sync import idasync, tool_timeout
+from ._kernel.utils import get_image_size
 
 
 class SurveyMetadata(TypedDict):

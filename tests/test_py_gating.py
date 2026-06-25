@@ -11,7 +11,7 @@ import pytest
 
 def test_block_byte_writes_blocks_image_writer_and_restores():
     import ida_bytes
-    from ida_pro_mcp.ida_mcp.consent import block_byte_writes, PatchBlockedError
+    from ida_pro_mcp.ida_mcp._kernel.consent import block_byte_writes, PatchBlockedError
 
     original = ida_bytes.patch_bytes
     with block_byte_writes():
@@ -24,7 +24,7 @@ def test_block_byte_writes_blocks_image_writer_and_restores():
 def test_block_byte_writes_leaves_revert_callable():
     # revert_byte (the patch UNDO) is the antidote and must never be blocked.
     import ida_bytes
-    from ida_pro_mcp.ida_mcp.consent import block_byte_writes
+    from ida_pro_mcp.ida_mcp._kernel.consent import block_byte_writes
 
     with block_byte_writes():
         ida_bytes.revert_byte(0x1000)  # must not raise

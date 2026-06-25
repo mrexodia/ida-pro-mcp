@@ -7,12 +7,12 @@ import ida_nalt
 import ida_typeinf
 import idaapi
 
-from . import compat
-from . import typeutils
-from .compat import tinfo_get_udm
-from .rpc import tool, safety, title
-from .sync import idasync
-from .utils import (
+from ._kernel import compat
+from ._kernel import typeutils
+from ._kernel.compat import tinfo_get_udm
+from ._kernel.rpc import tool, safety, title
+from ._kernel.sync import idasync
+from ._kernel.utils import (
     normalize_list_input,
     normalize_dict_list,
     paginate,

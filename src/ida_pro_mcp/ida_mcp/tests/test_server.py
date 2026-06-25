@@ -6,8 +6,8 @@ import json
 import os
 import sys
 
-from ..framework import test
-from ..rpc import MCP_SERVER, MCP_UNSAFE
+from .._kernel.framework import test
+from .._kernel.rpc import MCP_SERVER, MCP_UNSAFE
 
 try:
     from ida_pro_mcp import server

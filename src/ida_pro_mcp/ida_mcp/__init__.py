@@ -20,9 +20,9 @@ if hasattr(signal, "SIGPIPE"):
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
 # Import infrastructure modules
-from . import rpc
-from . import sync
-from . import utils
+from ._kernel import rpc
+from ._kernel import sync
+from ._kernel import utils
 
 # Import all API modules to register @tool functions and @resource functions
 from . import api_core
@@ -38,7 +38,7 @@ from . import api_resources
 from . import api_survey
 from . import api_composite
 from . import api_recipes
-from . import trace as trace
+from ._kernel import trace as trace
 from . import api_probes
 from . import api_sigmaker
 from . import api_domain
@@ -48,9 +48,9 @@ from . import api_docs
 from . import prompts
 
 # Re-export key components for external use
-from .sync import idasync, IDAError, IDASyncError, CancelledError
-from .rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, safety, title, resource
-from .http import IdaMcpHttpRequestHandler
+from ._kernel.sync import idasync, IDAError, IDASyncError, CancelledError
+from ._kernel.rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, safety, title, resource
+from ._kernel.http import IdaMcpHttpRequestHandler
 from .api_core import init_caches
 
 # Tracing is always on: every tools/call is recorded into the IDB netnode.

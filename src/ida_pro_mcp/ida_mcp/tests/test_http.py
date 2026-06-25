@@ -9,9 +9,9 @@ test_server.py; tests here focus on the decorator sets, extension
 visibility, and ORIGINAL_TOOLS snapshot.
 """
 
-from ..framework import test
-from ..rpc import MCP_SERVER, MCP_UNSAFE, MCP_EXTENSIONS
-from .. import http as http_mod
+from .._kernel.framework import test
+from .._kernel.rpc import MCP_SERVER, MCP_UNSAFE, MCP_EXTENSIONS
+from .._kernel import http as http_mod
 
 
 # ---------------------------------------------------------------------------

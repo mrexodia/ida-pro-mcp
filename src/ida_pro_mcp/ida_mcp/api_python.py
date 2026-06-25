@@ -22,10 +22,10 @@ import ida_xref
 import idaapi
 import idc
 
-from .rpc import tool, safety, title
-from .sync import idasync
-from .consent import block_byte_writes
-from .utils import parse_address, get_function
+from ._kernel.rpc import tool, safety, title
+from ._kernel.sync import idasync
+from ._kernel.consent import block_byte_writes
+from ._kernel.utils import parse_address, get_function
 
 # Largest script file py_exec_file will read (a guard against a runaway/abusive
 # path on a network-reachable server). Real IDAPython scripts are far smaller.

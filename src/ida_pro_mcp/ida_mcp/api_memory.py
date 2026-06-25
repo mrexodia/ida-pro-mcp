@@ -11,9 +11,9 @@ import ida_bytes
 import ida_nalt
 import idaapi
 
-from .rpc import tool, safety, title
-from .sync import idasync
-from .consent import (
+from ._kernel.rpc import tool, safety, title
+from ._kernel.sync import idasync
+from ._kernel.consent import (
     capture_original,
     patch_decision,
     patching_allowed,
@@ -21,7 +21,7 @@ from .consent import (
     span_status,
     withheld_hint,
 )
-from .utils import (
+from ._kernel.utils import (
     IntRead,
     IntWrite,
     MemoryPatch,
@@ -397,7 +397,7 @@ def get_global_variable_value_internal(ea: int) -> str:
     import ida_typeinf
     import ida_nalt
     import ida_bytes
-    from .sync import IDAError
+    from ._kernel.sync import IDAError
 
     tif = ida_typeinf.tinfo_t()
     have_type = ida_nalt.get_tinfo(tif, ea)
@@ -457,7 +457,7 @@ def get_global_value(
     untyped/mis-sized global may render as a hex scalar or raw bytes rather than
     the logical value. When you need an exact width/sign decode, use get_int.
     """
-    from .utils import looks_like_address
+    from ._kernel.utils import looks_like_address
 
     queries = normalize_list_input(queries)
     results = []
