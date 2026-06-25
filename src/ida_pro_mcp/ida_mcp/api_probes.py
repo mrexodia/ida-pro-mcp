@@ -2049,25 +2049,92 @@ def _parse_named_type(tif, type_name: str) -> bool:
         return False
 
 
+def _overlay_endian() -> str:
+    """Byte order of the analysed image as the 'little'/'big' tag decode_typed_value
+    expects. Defaults to 'little' (the common case) when the probe is inconclusive."""
+    try:
+        import ida_ida
+
+        be = getattr(ida_ida, "inf_is_be", None)
+        if callable(be):
+            return "big" if be() else "little"
+    except Exception:
+        pass
+    try:
+        import idaapi
+
+        info = idaapi.get_inf_structure()
+        if getattr(info, "is_be", lambda: False)():
+            return "big"
+    except Exception:
+        pass
+    return "little"
+
+
 def _overlay_type(tif, raw: bytes) -> dict:
-    """Overlay an IDB struct type onto raw bytes -> {field: value}."""
+    """Overlay an IDB struct type onto raw bytes -> {field: value}.
+
+    Per-member decode is delegated to typeutils.decode_typed_value so live struct
+    reads honor signed/float/bool/enum/bitfield/array/nested members and the
+    image's endianness, matching the static read_struct overlay (instead of
+    treating every member as an unsigned little-endian int).
+    """
     import ida_typeinf
+    from . import typeutils
+
+    endian = _overlay_endian()
 
     fields: dict = {}
     udt = ida_typeinf.udt_type_data_t()
     if not tif.get_udt_details(udt):
-        # scalar
-        return {"value": raw.hex()}
+        # scalar: decode the whole blob through the typed decoder so a scalar
+        # named type (signed/float/enum/...) still renders meaningfully.
+        dec = typeutils.decode_typed_value(tif, raw, endian=endian)
+        return {
+            "value": dec.get("value"),
+            "repr": dec.get("repr"),
+            "kind": dec.get("kind"),
+            "hex": raw.hex(),
+        }
+
     for member in udt:
+        # Bitfields carry sub-byte offset/width; use the bit layout so several
+        # bitfields sharing one byte stay distinct, and read the covering unit.
+        if typeutils._is_bitfield_member(member):
+            bl = typeutils.bitfield_layout(member)
+            start_byte = bl["bit_offset"] // 8
+            end_byte = (bl["bit_offset"] + bl["bit_width"] + 7) // 8
+            unit = raw[start_byte:end_byte]
+            local_off = bl["bit_offset"] - start_byte * 8
+            bits = typeutils._extract_bits(unit, local_off, bl["bit_width"], endian)
+            name = member.name or f"field_{(member.offset // 8):x}"
+            fields[name] = {
+                "offset": hex(start_byte),
+                "value": bits,
+                "repr": str(bits),
+                "kind": "bitfield",
+                "bit_offset": bl["bit_offset"],
+                "bit_width": bl["bit_width"],
+            }
+            continue
+
         off = member.begin() // 8
         msize = member.type.get_size()
         chunk = raw[off:off + msize] if msize else b""
         name = member.name or f"field_{off:x}"
-        if msize in (1, 2, 4, 8) and not member.type.is_float():
-            val = int.from_bytes(chunk, "little") if chunk else 0
-            fields[name] = {"offset": hex(off), "value": hex(val), "size": msize}
-        else:
-            fields[name] = {"offset": hex(off), "hex": chunk.hex(), "size": msize}
+        dec = typeutils.decode_typed_value(member.type, chunk, endian=endian)
+        entry: dict = {
+            "offset": hex(off),
+            "value": dec.get("value"),
+            "repr": dec.get("repr"),
+            "kind": dec.get("kind"),
+            "size": msize,
+            "hex": chunk.hex(),
+        }
+        # Preserve the enum raw integer alongside the resolved name when present.
+        if "raw" in dec:
+            entry["raw"] = dec["raw"]
+        fields[name] = entry
     return fields
 
 

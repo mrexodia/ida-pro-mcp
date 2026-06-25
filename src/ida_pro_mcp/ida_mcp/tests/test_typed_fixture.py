@@ -158,9 +158,16 @@ def test_typed_fixture_struct_types_and_resources():
     assert "error" not in set_point
     auto = read_struct({"addr": G_POINT})[0]
     assert auto["struct"] == "Point"
-    members = {m["name"]: m["value"] for m in auto["members"]}
-    assert members["x"].endswith("(11)")
-    assert members["y"].endswith("(22)")
+    members = {m["name"]: str(m["value"]) for m in auto["members"]}
+    # value is a type-aware repr now ("11" or "0xb (11)"); decode the number.
+    import re
+
+    def _last_num(text):
+        found = re.findall(r"0x[0-9a-fA-F]+|-?\d+", text)
+        return int(found[-1], 0) if found else None
+
+    assert _last_num(members["x"]) == 11
+    assert _last_num(members["y"]) == 22
 
     wrapper = struct_name_resource("Wrapper")
     assert "error" not in wrapper

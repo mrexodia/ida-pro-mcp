@@ -30,6 +30,7 @@ from . import api_analysis
 from . import api_memory
 from . import api_types
 from . import api_modify
+from . import api_decomp
 from . import api_stack
 from . import api_debug
 from . import api_python
@@ -66,6 +67,7 @@ __all__ = [
     "api_memory",
     "api_types",
     "api_modify",
+    "api_decomp",
     "api_stack",
     "api_debug",
     "api_python",

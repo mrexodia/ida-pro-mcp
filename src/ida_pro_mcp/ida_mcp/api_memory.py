@@ -8,6 +8,7 @@ import re
 from typing import Annotated, NotRequired, TypedDict
 
 import ida_bytes
+import ida_nalt
 import idaapi
 
 from .rpc import tool, safety, title
@@ -48,6 +49,7 @@ class IntReadResult(TypedDict):
 class StringReadResult(TypedDict):
     addr: str
     value: str | None
+    encoding: NotRequired[str]  # detected encoding (e.g. "utf-8", "utf-16-le", "pascal-utf-8")
     error: NotRequired[str]
 
 
@@ -171,8 +173,15 @@ def _parse_int_class(text: str) -> tuple[int, bool, str, str]:
 
     bits = int(match.group("bits"))
     signed = match.group("sign") == "i"
-    endian = match.group("endian") or "le"
-    byte_order = "little" if endian == "le" else "big"
+    explicit = match.group("endian")  # "le" | "be" | None
+    if explicit:
+        # An explicit suffix is authoritative regardless of DB byte order.
+        byte_order = "little" if explicit == "le" else "big"
+        endian = explicit
+    else:
+        # No suffix: honor the database's recorded byte order (idaapi inf is_be).
+        byte_order = _db_byte_order()
+        endian = "be" if byte_order == "big" else "le"
     normalized = f"{'i' if signed else 'u'}{bits}{endian}"
     return bits, signed, byte_order, normalized
 
@@ -193,6 +202,57 @@ def _parse_int_value(text: str, signed: bool, bits: int) -> int:
     return value
 
 
+def _db_byte_order() -> str:
+    """Database default byte order ("big" or "little") per idaapi inf.
+
+    Used when an integer class carries no explicit le|be suffix so reads/writes
+    honor the analysed image's endianness instead of always assuming little.
+    Falls back to "little" if the inf flag cannot be queried. Mirrors the
+    robust probe in api_types._db_endian (ida_ida first, then idaapi).
+    """
+    try:
+        import ida_ida
+
+        if hasattr(ida_ida, "inf_is_be") and ida_ida.inf_is_be():
+            return "big"
+    except Exception:
+        pass
+    try:
+        if idaapi.inf_is_be():
+            return "big"
+    except Exception:
+        pass
+    return "little"
+
+
+# STRTYPE low-byte layout (IDA SDK):
+#   STRWIDTH mask (bits 0-1): character width / encoding selector
+#       0 -> 1 byte (C/UTF-8), 1 -> 2 byte (UTF-16), 2 -> 4 byte (UTF-32)
+#   STRLYT  (bits 6-7, value = (strtype >> 6) & 3): 0 = terminated, >0 = Pascal
+# Codecs are resolved from the width code; the DB byte order picks LE/BE for the
+# multi-byte forms.
+_STR_WIDTH_MASK = 0x03
+_STR_LAYOUT_SHIFT = 6
+_STR_LAYOUT_MASK = 0x03
+
+
+def _strtype_codec(strtype: int) -> str:
+    """Map a STRTYPE_* value to a Python codec name, honoring DB endianness."""
+    width = strtype & _STR_WIDTH_MASK
+    if width == 1:
+        return "utf-16-be" if _db_byte_order() == "big" else "utf-16-le"
+    if width == 2:
+        return "utf-32-be" if _db_byte_order() == "big" else "utf-32-le"
+    return "utf-8"
+
+
+def _strtype_encoding_label(strtype: int) -> str:
+    """Human-readable encoding label for a STRTYPE_* value (additive report)."""
+    codec = _strtype_codec(strtype)
+    layout = (strtype >> _STR_LAYOUT_SHIFT) & _STR_LAYOUT_MASK
+    return f"pascal-{codec}" if layout else codec
+
+
 @safety("READ")
 @title("Read Typed Integers")
 @tool
@@ -201,22 +261,26 @@ def get_int(
     queries: Annotated[
         list[IntRead] | IntRead,
         "One or more {ty, addr} read requests; ty selects width/sign/endianness "
-        "(i8/u8/i16/u16/i32/u32/i64/u64, optional le|be suffix, default le); "
-        "a single dict is accepted and wrapped",
+        "(i8/u8/i16/u16/i32/u32/i64/u64, optional le|be suffix; without a suffix "
+        "the database byte order is used); a single dict is accepted and wrapped",
     ],
 ) -> list[IntReadResult]:
     """Read width-, sign-, and endian-aware integers from memory.
 
     WHAT: For each {ty, addr}, parses the `ty` class to derive byte width,
     signedness, and byte order, reads that many bytes (BSS-safe), and decodes a
-    Python int. `ty` is normalized in the result (e.g. "u32" -> "u32le").
+    Python int. When `ty` has no le|be suffix the database byte order (idaapi
+    inf is_be) is used, so a big-endian image reads big-endian by default. `ty`
+    is normalized in the result to the byte order actually used (e.g. on a
+    little-endian DB "u32" -> "u32le", on a big-endian DB "u32" -> "u32be").
     WHEN-TO-USE: Reading a scalar field at a known offset (length prefix, flag
     word, pointer-sized value) when you want the decoded number, not raw bytes.
     RETURNS: One result per query, in input order: {addr, ty, value} on success
     (ty is the normalized class) or {addr, ty, value: null, error} on failure.
-    PITFALL: Endianness defaults to little-endian; pass an explicit be suffix
-    (e.g. "u32be") for big-endian data such as network byte order. Unsigned
-    classes always yield a non-negative value.
+    PITFALL: An explicit suffix is always authoritative; pass "u32be" to force
+    big-endian (e.g. network byte order) regardless of the database byte order,
+    or "u32le" to force little. Unsigned classes always yield a non-negative
+    value.
     """
     if isinstance(queries, dict):
         queries = [queries]
@@ -255,20 +319,24 @@ def get_string(
         "starts; a single string is accepted and wrapped",
     ],
 ) -> list[StringReadResult]:
-    """Read defined string literals from memory.
+    """Read defined string literals from memory, encoding-aware.
 
-    WHAT: For each address, fetches the string-literal contents IDA recognizes
-    at that exact start address and decodes them as UTF-8 (undecodable bytes are
-    replaced, never raising).
+    WHAT: For each address, detects IDA's string TYPE at that exact start address
+    (ida_nalt.get_str_type) and decodes the literal per its STRTYPE_* class:
+    C/UTF-8, UTF-16, UTF-32, or Pascal-length-prefixed forms. The multi-byte
+    encodings follow the database byte order. Undecodable bytes are replaced,
+    never raising. The detected encoding is reported alongside the value.
     WHEN-TO-USE: Resolving a string pointer/xref target to its text, or reading
-    a known string constant by address.
-    RETURNS: One result per address, in input order: {addr, value} on success or
-    {addr, value: null, error} on failure ("No string at address" when IDA has
-    no string item there).
+    a known string constant by address (including wide/UTF-16 strings).
+    RETURNS: One result per address, in input order: {addr, value, encoding} on
+    success or {addr, value: null, error} on failure ("No string at address"
+    when IDA has no string item there). `encoding` names the detected codec
+    (e.g. "utf-8", "utf-16-le", "pascal-utf-8").
     PITFALL: This reads only IDA's DEFINED string item at the precise address;
     it does not scan for an arbitrary null-terminated run, and an address in the
-    middle of a string yields no result. For non-UTF-8 encodings (e.g. CP949)
-    the replacement chars are expected; use get_bytes to recover the raw bytes.
+    middle of a string yields no result. When IDA has no string type recorded at
+    the address the C/UTF-8 class is assumed; use get_bytes to recover the raw
+    bytes for an exotic encoding (e.g. CP949) where replacement chars appear.
     """
     addrs = normalize_list_input(addrs)
     results = []
@@ -276,18 +344,53 @@ def get_string(
     for addr in addrs:
         try:
             ea = parse_address(addr)
-            raw = idaapi.get_strlit_contents(ea, -1, 0)
+            strtype = ida_nalt.get_str_type(ea)
+            if strtype is None or strtype < 0:
+                strtype = ida_nalt.STRTYPE_C
+            raw = ida_bytes.get_strlit_contents(ea, -1, strtype)
             if not raw:
                 results.append(
                     {"addr": addr, "value": None, "error": "No string at address"}
                 )
                 continue
-            value = raw.decode("utf-8", errors="replace")
-            results.append({"addr": addr, "value": value})
+            codec = _strtype_codec(strtype)
+            value = raw.decode(codec, errors="replace")
+            results.append(
+                {
+                    "addr": addr,
+                    "value": value,
+                    "encoding": _strtype_encoding_label(strtype),
+                }
+            )
         except Exception as e:
             results.append({"addr": addr, "value": None, "error": str(e)})
 
     return results
+
+
+def _is_char_array(tif) -> bool:
+    """True when ``tif`` is an array whose element is a (signed/unsigned) char."""
+    try:
+        if not tif.is_array():
+            return False
+    except Exception:
+        return False
+    try:
+        elem = tif.get_array_element()
+    except Exception:
+        return False
+    if elem is None:
+        return False
+    try:
+        if elem.is_decl_char():
+            return True
+    except Exception:
+        pass
+    # Fallback: a 1-byte integral element behaves like a char array for display.
+    try:
+        return bool(elem.is_integral()) and int(elem.get_size()) == 1
+    except Exception:
+        return False
 
 
 def get_global_variable_value_internal(ea: int) -> str:
@@ -297,7 +400,8 @@ def get_global_variable_value_internal(ea: int) -> str:
     from .sync import IDAError
 
     tif = ida_typeinf.tinfo_t()
-    if not ida_nalt.get_tinfo(tif, ea):
+    have_type = ida_nalt.get_tinfo(tif, ea)
+    if not have_type:
         if not ida_bytes.has_any_name(ea):
             raise IDAError(f"Failed to get type information for variable at {ea:#x}")
 
@@ -307,11 +411,18 @@ def get_global_variable_value_internal(ea: int) -> str:
     else:
         size = tif.get_size()
 
-    if size == 0 and tif.is_array() and tif.get_array_element().is_decl_char():
-        raw = idaapi.get_strlit_contents(ea, -1, 0)
+    # A char[] global renders as a quoted string. The previous guard required
+    # size == 0, which never holds for a real char[N] (size N), so char arrays
+    # fell through to the byte-dump branch. Decode as a string whenever the type
+    # is a char array (size is irrelevant), honoring the recorded string type.
+    if have_type and _is_char_array(tif):
+        strtype = ida_nalt.get_str_type(ea)
+        if strtype is None or strtype < 0:
+            strtype = ida_nalt.STRTYPE_C
+        raw = ida_bytes.get_strlit_contents(ea, -1, strtype)
         if not raw:
             return '""'
-        return_string = raw.decode("utf-8", errors="replace").strip()
+        return_string = raw.decode(_strtype_codec(strtype), errors="replace").strip()
         return f'"{return_string}"'
 
     if size in (1, 2, 4, 8):
@@ -480,9 +591,9 @@ def put_int(
     items: Annotated[
         list[IntWrite] | IntWrite,
         "One or more {ty, addr, value} writes; ty selects width/sign/endianness "
-        "(i8/u8/.../u64, optional le|be, default le); value is a STRING decimal "
-        "or 0x.. (negatives allowed for signed types); a single dict is accepted "
-        "and wrapped",
+        "(i8/u8/.../u64, optional le|be; without a suffix the database byte order "
+        "is used); value is a STRING decimal or 0x.. (negatives allowed for "
+        "signed types); a single dict is accepted and wrapped",
     ],
     confirm: Annotated[
         bool,
@@ -508,9 +619,10 @@ def put_int(
     RETURNS: A PatchResponse {applied, dry_run, allowed, reason, consent?,
     results[]}; each result is {addr, ty, value, size, original, new, applied} on
     success or {addr, ty, value, error} on failure.
-    PITFALL: `value` is a STRING ("0x10", "-5"). Default endianness is
-    little-endian; pass an explicit be class for big-endian/network targets.
-    Patching is withheld unless explicitly enabled and confirmed (axis-7 rule).
+    PITFALL: `value` is a STRING ("0x10", "-5"). Without an le|be suffix the
+    database byte order is used; pass an explicit be class for big-endian/network
+    targets or le to force little regardless of the DB. Patching is withheld
+    unless explicitly enabled and confirmed (axis-7 rule).
     """
     if isinstance(items, dict):
         items = [items]

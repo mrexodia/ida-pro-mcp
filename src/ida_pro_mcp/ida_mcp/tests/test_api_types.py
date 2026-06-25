@@ -224,26 +224,21 @@ def test_read_struct_bss_members_are_zero():
     entry = result[0]
     assert_ok(entry, "members")
 
+    import re
+
     failures = []
     for member in entry["members"]:
-        value_str = member["value"]
-        # Integer members render as "0xNN (N)"; pointer as "0xNN...";
-        # longer shapes render as "[NN NN ...]".
-        if "(" in value_str:
-            hex_part = value_str.split()[0]
-            numeric = int(hex_part, 16)
-        elif value_str.startswith("0x"):
-            numeric = int(value_str, 16)
-        elif value_str.startswith("["):
-            inner = value_str.strip("[]").replace("...", "").split()
-            numeric = sum(int(b, 16) for b in inner)
-        else:
-            failures.append(f"{member['name']}: unparseable value {value_str!r}")
-            continue
-        if numeric != 0:
-            failures.append(
-                f"{member['name']}: expected 0 at BSS, got {value_str!r}"
-            )
+        # The member value is now a type-aware repr ("0", "0x0 (0)", "[00 00]",
+        # an enum name, "False", "0.0"). BSS is zero-initialized, so every
+        # numeric literal in the rendered value must be zero.
+        value_str = str(member["value"])
+        nums = re.findall(r"0x[0-9a-fA-F]+|\d+", value_str)
+        nonzero = [
+            n for n in nums
+            if int(n, 16 if n.lower().startswith("0x") else 10) != 0
+        ]
+        if nonzero:
+            failures.append(f"{member['name']}: expected 0 at BSS, got {value_str!r}")
 
     assert not failures, "\n".join(failures)
 
