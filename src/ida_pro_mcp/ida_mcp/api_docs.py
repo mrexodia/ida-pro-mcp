@@ -3,15 +3,19 @@
 Exposes a small, browsable documentation set as MCP resources plus a
 term-frequency search tool. Doc bodies live as Markdown files under the sibling
 ``docs/`` package directory, indexed by ``docs/_meta.yaml`` (topic ->
-{title, description, priority}). Adding a doc requires NO code change: drop a
-``.md`` file and add a matching ``_meta.yaml`` entry.
+{title, description, priority, tools}). Adding a doc requires NO code change:
+drop a ``.md`` file and add a matching ``_meta.yaml`` entry. The optional
+``tools:`` key is a comma-separated list of the callable MCP tool names the
+topic documents; ``search_docs`` surfaces it on every hit so the caller goes
+straight from a query to the tool to call (not just a doc URI to read).
 
 Resources:
     ida://docs            -> a generated Markdown index of all topics
     ida://docs/{topic}    -> one topic body (raw Markdown)
 
 Tools:
-    search_docs(query, limit=5) -> ranked matches with topic/title/score/snippet/uri
+    search_docs(query, limit=5) -> ranked matches with
+        topic/title/score/snippet/uri/tools
 """
 
 import re
@@ -33,6 +37,7 @@ class DocSearchHit(TypedDict):
     score: float
     snippet: str
     uri: str
+    tools: list[str]
 
 
 # ============================================================================
@@ -142,6 +147,28 @@ def _priority_of(entry: dict) -> float:
         return 0.0
 
 
+def _tools_of(entry: dict) -> list[str]:
+    """Return the callable tool names a topic documents.
+
+    The ``tools:`` value in ``_meta.yaml`` is a comma-separated string (the
+    restricted parser stores scalars only). Split, trim, and drop blanks so the
+    caller gets a clean list of MCP tool names to call next.
+    """
+    raw = entry.get("tools")
+    if not raw:
+        return []
+    if isinstance(raw, (list, tuple)):
+        parts = [str(p) for p in raw]
+    else:
+        parts = str(raw).replace(";", ",").split(",")
+    seen: list[str] = []
+    for part in parts:
+        name = part.strip()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
 # ============================================================================
 # Resources
 # ============================================================================
@@ -188,9 +215,69 @@ def docs_topic_resource(topic: Annotated[str, "Documentation topic id"]) -> str:
 
 _WORD_RE = re.compile(r"[a-z0-9_]+")
 
+# Reverse-engineering domain synonyms. Each query term is expanded with its
+# partners so a user's word finds docs written with the sibling word (and vice
+# versa). Bidirectional: every key/value pair is mirrored at module load.
+_SYNONYM_SEED: dict[str, list[str]] = {
+    "rename": ["renaming", "name"],
+    "xref": ["cross", "reference", "xrefs"],
+    "watch": ["espion", "watchpoint"],
+    "probe": ["sonde", "instrument"],
+    "hierarchy": ["call", "tree", "callgraph"],
+}
+
+
+def _build_synonyms(seed: dict[str, list[str]]) -> dict[str, set[str]]:
+    table: dict[str, set[str]] = {}
+    for key, vals in seed.items():
+        group = {key, *vals}
+        for word in group:
+            table.setdefault(word, set()).update(group - {word})
+    return table
+
+
+_SYNONYMS = _build_synonyms(_SYNONYM_SEED)
+
+
+def _stem(word: str) -> str:
+    """Very light suffix stripping so plurals/gerunds collide with the root.
+
+    Not a real stemmer - just enough to make rename/renaming/renames and
+    xref/xrefs share a token. Short tokens are left intact.
+    """
+    for suffix in ("ing", "ies", "es", " s"[1:], "ed"):
+        if len(word) > len(suffix) + 2 and word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
+
 
 def _tokenize(text: str) -> list[str]:
     return _WORD_RE.findall(text.lower())
+
+
+def _expand_terms(terms: list[str]) -> dict[str, float]:
+    """Expand query terms with synonyms + stems, each carrying a weight.
+
+    Original terms weigh 1.0; synonym/stem expansions weigh 0.5 so a direct hit
+    always outranks a synonym hit. Returns {term: weight}.
+    """
+    weighted: dict[str, float] = {}
+
+    def _add(term: str, weight: float) -> None:
+        if term and weight > weighted.get(term, 0.0):
+            weighted[term] = weight
+
+    for term in terms:
+        _add(term, 1.0)
+        stem = _stem(term)
+        if stem != term:
+            _add(stem, 0.7)
+        for syn in _SYNONYMS.get(term, ()):  # type: ignore[arg-type]
+            _add(syn, 0.5)
+            syn_stem = _stem(syn)
+            if syn_stem != syn:
+                _add(syn_stem, 0.4)
+    return weighted
 
 
 def _snippet_for(body: str, terms: list[str], width: int = 200) -> str:
@@ -214,16 +301,31 @@ def _snippet_for(body: str, terms: list[str], width: int = 200) -> str:
 @safety("READ")
 @title("Search the MCP documentation")
 @tool
-def search_docs(query: str, limit: int = 5) -> list[DocSearchHit]:
+def search_docs(
+    query: Annotated[
+        str,
+        "Search terms or a natural-language question (e.g. 'rename a function', "
+        "'watch a struct field', 'call tree'). RE-domain synonyms "
+        "(rename/renaming, xref/cross-reference, watch/espion, probe/sonde, "
+        "hierarchy/call-tree) and simple plurals/gerunds are expanded automatically.",
+    ],
+    limit: Annotated[int, "Max number of ranked topic hits to return (default 5)."] = 5,
+) -> list[DocSearchHit]:
     """Term-frequency search over the cached MCP docs.
 
-    Scores each topic by how often the query terms appear in its title,
-    description, and body (title/description weighted higher), and returns the
-    top matches with a snippet and the ``ida://docs/{topic}`` URI to read.
+    Scores each topic by how often the query terms (plus RE-domain synonyms and
+    light stems) appear in its title, description, body, and declared tool names
+    - title/description/tools weighted higher - normalized by body length so a
+    long doc does not win on raw count. Each hit carries a snippet, the
+    ``ida://docs/{topic}`` URI to read, AND the ``tools`` it documents so you can
+    go straight from question to the tool to call. On zero matches it returns a
+    single synthetic hit pointing at the ``ida://docs`` index.
     """
-    terms = _tokenize(query or "")
-    if not terms:
+    raw_terms = _tokenize(query or "")
+    if not raw_terms:
         return []
+
+    weighted = _expand_terms(raw_terms)
 
     meta = _load_meta()
     topics = list(meta.keys()) or _ordered_topics()
@@ -234,16 +336,24 @@ def search_docs(query: str, limit: int = 5) -> list[DocSearchHit]:
         title_text = str(entry.get("title") or topic)
         description = str(entry.get("description") or "")
         body = _load_body(topic) or ""
+        tools = _tools_of(entry)
 
-        title_tokens = _tokenize(title_text + " " + topic)
-        desc_tokens = _tokenize(description)
-        body_tokens = _tokenize(body)
+        title_tokens = [_stem(t) for t in _tokenize(title_text + " " + topic)]
+        desc_tokens = [_stem(t) for t in _tokenize(description)]
+        body_tokens = [_stem(t) for t in _tokenize(body)]
+        tool_tokens = [_stem(t) for t in _tokenize(" ".join(tools))]
+
+        # Length normalization: dampen raw body counts by doc size so a long
+        # topic does not dominate purely by repetition.
+        body_norm = 1.0 + (len(body_tokens) / 400.0)
 
         score = 0.0
-        for term in terms:
-            score += 5.0 * title_tokens.count(term)
-            score += 2.0 * desc_tokens.count(term)
-            score += 1.0 * body_tokens.count(term)
+        for term, weight in weighted.items():
+            stem = _stem(term)
+            score += weight * 5.0 * title_tokens.count(stem)
+            score += weight * 4.0 * tool_tokens.count(stem)
+            score += weight * 2.0 * desc_tokens.count(stem)
+            score += weight * (1.0 / body_norm) * body_tokens.count(stem)
 
         if score <= 0:
             continue
@@ -252,9 +362,10 @@ def search_docs(query: str, limit: int = 5) -> list[DocSearchHit]:
             DocSearchHit(
                 topic=topic,
                 title=title_text,
-                score=score,
-                snippet=_snippet_for(body or description, terms),
+                score=round(score, 4),
+                snippet=_snippet_for(body or description, list(weighted)),
                 uri=f"ida://docs/{topic}",
+                tools=tools,
             )
         )
 
@@ -263,6 +374,24 @@ def search_docs(query: str, limit: int = 5) -> list[DocSearchHit]:
         n = max(0, int(limit))
     except (TypeError, ValueError):
         n = 5
+
+    if not hits:
+        # Dead ends are unhelpful: hand back a pointer to the browsable index
+        # instead of an empty list so the caller always has a next step.
+        return [
+            DocSearchHit(
+                topic="docs",
+                title="IDA Pro MCP Documentation (index)",
+                score=0.0,
+                snippet=(
+                    f"No topic matched {raw_terms!r}. Browse the full index at "
+                    f"ida://docs, or query ida://tools for the authoritative "
+                    f"live tool list."
+                ),
+                uri="ida://docs",
+                tools=[],
+            )
+        ]
     return hits[:n]
 
 

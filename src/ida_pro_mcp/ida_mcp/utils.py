@@ -1796,12 +1796,20 @@ def extract_function_strings(ea: int) -> list[String]:
     for item_ea in idautils.FuncItems(func.start_ea):
         for xref in idautils.XrefsFrom(item_ea, 0):
             if not xref.iscode:
-                # Check if target is a string
-                str_type = ida_nalt.get_str_type(xref.to)
-                if str_type != ida_nalt.STRTYPE_C:
+                # Accept ANY string type, not just STRTYPE_C. The old
+                # `!= STRTYPE_C` check silently dropped UTF-16/UTF-32 and
+                # Pascal strings, which undercounts strings on Windows
+                # binaries (wide literals) and is brittle anyway because
+                # get_str_type packs encoding flags into the upper bytes.
+                if not ida_bytes.is_strlit(ida_bytes.get_flags(xref.to)):
                     continue
+                str_type = ida_nalt.get_str_type(xref.to)
+                if str_type is None or str_type < 0:
+                    str_type = ida_nalt.STRTYPE_C
                 try:
-                    str_content = idc.get_strlit_contents(xref.to)
+                    # Decode per the detected string type so wide/Pascal
+                    # literals are read with the right element width.
+                    str_content = idc.get_strlit_contents(xref.to, -1, str_type)
                     if str_content:
                         strings.append(
                             String(

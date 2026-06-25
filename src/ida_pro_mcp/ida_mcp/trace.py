@@ -41,6 +41,47 @@ _META_TOTAL_RECORDS = 3
 _DEFAULT_BATCH_RECORDS = 256
 _DEFAULT_BATCH_BYTES = 64 * 1024
 
+# Per-record cap for what gets persisted into the IDB netnode. The tracer used
+# to write the FULL arguments + structuredContent of every tool call verbatim
+# (e.g. a whole py_exec_file source blob, or a megabyte of decompiled text)
+# into the database, which grows the IDB permanently and unbounded. We redact
+# each record to a sane size before it ever reaches the backend: long strings
+# are clipped and deep/wide containers are summarized, mirroring the rpc output
+# truncation idea (rpc.OUTPUT_LIMIT_PREVIEW_STR_LEN / OUTPUT_LIMIT_PREVIEW_ITEMS).
+_TRACE_MAX_STR = 1024  # max chars kept for any single string value
+_TRACE_MAX_ITEMS = 64  # max elements kept from any single list
+_TRACE_MAX_DEPTH = 6  # max container nesting descended before summarizing
+
+
+def _redact_for_trace(value: Any, depth: int = 0) -> Any:
+    """Cap/redact one traced value so the IDB netnode cannot grow unbounded.
+
+    Clips long strings to _TRACE_MAX_STR chars (appending a "... [N chars
+    total]" marker), truncates long lists to _TRACE_MAX_ITEMS, and stops
+    descending past _TRACE_MAX_DEPTH (summarizing the remaining subtree). Bytes
+    are summarized by length. Pure: no IDA, no live process.
+    """
+    if isinstance(value, str):
+        if len(value) > _TRACE_MAX_STR:
+            return value[:_TRACE_MAX_STR] + f"... [{len(value)} chars total]"
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        return f"<{len(value)} bytes>"
+    if depth >= _TRACE_MAX_DEPTH:
+        if isinstance(value, list):
+            return f"[... {len(value)} items, depth-truncated]"
+        if isinstance(value, dict):
+            return f"{{... {len(value)} keys, depth-truncated}}"
+        return value
+    if isinstance(value, list):
+        clipped = [_redact_for_trace(v, depth + 1) for v in value[:_TRACE_MAX_ITEMS]]
+        if len(value) > _TRACE_MAX_ITEMS:
+            clipped.append(f"... [{len(value)} items total]")
+        return clipped
+    if isinstance(value, dict):
+        return {k: _redact_for_trace(v, depth + 1) for k, v in value.items()}
+    return value
+
 _state_lock = threading.Lock()
 _state: dict[str, Any] = {
     "idb_backend": None,
@@ -285,7 +326,9 @@ def _dispatch(record: dict) -> None:
         idb_b = _state["idb_backend"]
     if idb_b is not None:
         try:
-            idb_b.append(record)
+            # Cap/redact before the record is committed so a single huge
+            # arguments/structuredContent blob cannot bloat the IDB netnode.
+            idb_b.append(_redact_for_trace(record))
         except Exception:
             pass
 

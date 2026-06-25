@@ -70,6 +70,8 @@ def test_resource_cursor():
         result = cursor_resource()
     except IDAError as e:
         skip_test(str(e))
+    if result.get("available") is False:
+        skip_test(result.get("reason") or "cursor unavailable (headless)")
     assert_valid_address(result["addr"])
     if "function" in result:
         assert_valid_address(result["function"]["addr"])
@@ -83,6 +85,8 @@ def test_resource_selection():
         result = selection_resource()
     except IDAError as e:
         skip_test(str(e))
+    if result.get("available") is False:
+        skip_test(result.get("reason") or "selection unavailable (headless)")
     if "selection" in result:
         assert result["selection"] is None
     else:
@@ -94,9 +98,9 @@ def test_resource_selection():
 @test()
 def test_resource_types_non_empty():
     """types_resource returns at least one local type."""
-    result = types_resource()
-    assert_is_list(result, min_length=1)
-    for item in result:
+    items = types_resource()["data"]
+    assert_is_list(items, min_length=1)
+    for item in items:
         assert item["ordinal"] > 0
         assert_non_empty(item["name"])
         assert_non_empty(item["type"])
@@ -105,9 +109,9 @@ def test_resource_types_non_empty():
 @test()
 def test_resource_structs_non_empty():
     """structs_resource returns at least one structure."""
-    result = structs_resource()
-    assert_is_list(result, min_length=1)
-    for item in result:
+    items = structs_resource()["data"]
+    assert_is_list(items, min_length=1)
+    for item in items:
         assert_non_empty(item["name"])
         assert_valid_address(item["size"])
         assert isinstance(item["is_union"], bool)
@@ -116,7 +120,7 @@ def test_resource_structs_non_empty():
 @test()
 def test_resource_struct_name_known_struct():
     """struct_name_resource round-trips a real structure name returned by structs_resource."""
-    structs = structs_resource()
+    structs = structs_resource()["data"]
     assert_is_list(structs, min_length=1)
 
     target = None
@@ -169,8 +173,8 @@ def test_resource_export_name():
 @test(binary="crackme03.elf")
 def test_resource_xrefs_from():
     """xrefs_from_resource returns the known outgoing references from the check_pw call site."""
-    result = xrefs_from_resource(CRACKME_CALL_TO_CHECK_PW)
-    assert_is_list(result, min_length=1)
-    by_addr = {entry["addr"]: entry["type"] for entry in result}
+    items = xrefs_from_resource(CRACKME_CALL_TO_CHECK_PW)["data"]
+    assert_is_list(items, min_length=1)
+    by_addr = {entry["addr"]: entry["type"] for entry in items}
     assert by_addr.get(CRACKME_CHECK_PW) == "code"
     assert by_addr.get("0x12d8") == "code"

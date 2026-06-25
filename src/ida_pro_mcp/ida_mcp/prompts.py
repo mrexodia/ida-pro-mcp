@@ -5,18 +5,31 @@ prompts/get). They return guide text describing how to drive a workflow; they do
 not call IDA themselves. Keep them in sync with the doc set under ``ida://docs``.
 """
 
-from .rpc import prompt
+from .rpc import MCP_EXTENSIONS, prompt
+
+
+def _ext_connect_clause(default: str = "dbg") -> str:
+    """Render a "?ext=<group,...>" connect clause from the live extension registry.
+
+    Generated at prompt-build time from rpc.MCP_EXTENSIONS so a prompt can never
+    name an extension group that does not exist. Falls back to `default` only if
+    the registry is somehow empty (e.g. extensions imported lazily). Groups are
+    sorted for a stable rendering.
+    """
+    groups = sorted(g for g in MCP_EXTENSIONS.keys() if g)
+    return "?ext=" + (",".join(groups) if groups else default)
 
 
 @prompt
 def probe_workflow() -> str:
     """How to use the non-stopping probe toolkit to observe a live target."""
+    ext = _ext_connect_clause()
     return (
         "# Probe workflow (instrument -> run -> drain)\n"
         "\n"
         "Goal: observe a RUNNING target without halting it and without ever\n"
         "calling dbg_start. Requires a live debugger session the maintainer\n"
-        "already launched (F9). Connect with ?ext=dbg.\n"
+        f"already launched (F9). Connect with {ext}.\n"
         "\n"
         "1. INSTRUMENT. Install non-stopping probes at addresses of interest:\n"
         "   - probe_add(ea, capture=[...], max_hits=N) for a generic site.\n"
@@ -41,6 +54,7 @@ def probe_workflow() -> str:
 @prompt
 def crypto_hunt() -> str:
     """Guide for locating the packet cipher and key schedule in the target."""
+    ext = _ext_connect_clause()
     return (
         "# Crypto hunt\n"
         "\n"
@@ -54,7 +68,7 @@ def crypto_hunt() -> str:
         "   the recv import, to the framing reader, to the in-place transform.\n"
         "3. CONSTANT TABLES. Hunt S-box / key-material: 256-entry byte tables,\n"
         "   large constant arrays referenced inside the loop.\n"
-        "4. CONFIRM LIVE. With ?ext=dbg, probe_net(recv_ea, decrypt_ea)\n"
+        f"4. CONFIRM LIVE. With {ext}, probe_net(recv_ea, decrypt_ea)\n"
         "   and capture the buffer pre/post transform (place a paired probe at\n"
         "   the decrypt return site) to byte-prove the algorithm.\n"
         "\n"
@@ -66,6 +80,7 @@ def crypto_hunt() -> str:
 @prompt
 def opcode_map() -> str:
     """Guide for recovering the opcode -> handler dispatch map."""
+    ext = _ext_connect_clause()
     return (
         "# Opcode map\n"
         "\n"
@@ -77,7 +92,7 @@ def opcode_map() -> str:
         "   indexed jump and the case range.\n"
         "2. RESOLVE CASES. For each case, resolve the branch target to its\n"
         "   handler function; record (opcode, handler-address) pairs.\n"
-        "3. CONFIRM LIVE. With ?ext=dbg, probe the dispatch site and\n"
+        f"3. CONFIRM LIVE. With {ext}, probe the dispatch site and\n"
         "   run_until to observe real opcodes flowing on actual traffic.\n"
         "\n"
         "Promotion to the clean opcode catalogue is a separate step: the clean\n"
@@ -89,6 +104,7 @@ def opcode_map() -> str:
 @prompt
 def getting_started() -> str:
     """First-session checklist for driving this server end to end."""
+    ext = _ext_connect_clause()
     return (
         "# Getting started\n"
         "\n"
@@ -106,7 +122,7 @@ def getting_started() -> str:
         "   callees / callgraph for context, basic_blocks for the switch/loop.\n"
         "4. ANNOTATE. rename / set_comments / declare_type / set_type as facts\n"
         "   firm up (WRITE-class tools; prefer the *_batch variants).\n"
-        "5. CONFIRM LIVE only when static runs out - connect ?ext=dbg and use\n"
+        f"5. CONFIRM LIVE only when static runs out - connect {ext} and use\n"
         "   the dbg_* tools, or the non-stopping probe toolkit. Never dbg_start.\n"
         "\n"
         "See also: ida://docs/overview, ida://docs/re-methodology,\n"
@@ -117,6 +133,7 @@ def getting_started() -> str:
 @prompt
 def struct_recovery() -> str:
     """Guide for recovering a C++ struct / object layout and confirming it live."""
+    ext = _ext_connect_clause()
     return (
         "# Struct & vtable recovery\n"
         "\n"
@@ -135,7 +152,7 @@ def struct_recovery() -> str:
         "4. WALK THE VTABLE. If polymorphic, resolve the vtable from its data EA\n"
         "   or installing constructor; role-tag each slot (ctor/dtor, per-frame\n"
         "   virtual, getter, serialize) and harvest RTTI for the class name.\n"
-        "5. CONFIRM LIVE. With ?ext=dbg, break where a real instance exists,\n"
+        f"5. CONFIRM LIVE. With {ext}, break where a real instance exists,\n"
         "   grab the pointer from a register, and read_struct / dbg_read at it to\n"
         "   verify field values match the declared layout.\n"
         "\n"
@@ -146,6 +163,7 @@ def struct_recovery() -> str:
 @prompt
 def packet_re() -> str:
     """Guide for recovering a network opcode map and packet field layouts."""
+    ext = _ext_connect_clause()
     return (
         "# Packet / protocol recovery\n"
         "\n"
@@ -161,7 +179,7 @@ def packet_re() -> str:
         "3. INFER FIELD LAYOUT. In each handler, read how the buffer is sliced -\n"
         "   each `*(buf + 0xNN)` read is a field at that offset with that width.\n"
         "   Build the packet struct (see the struct_recovery prompt).\n"
-        "4. CONFIRM LIVE. With ?ext=dbg, probe_net(recv_ea, decrypt_ea,\n"
+        f"4. CONFIRM LIVE. With {ext}, probe_net(recv_ea, decrypt_ea,\n"
         "   send_ea, buf_arg, len_arg) and run_until to capture real opcodes and\n"
         "   buffer bytes pre/post decrypt, then probe_drain to read them.\n"
         "\n"
@@ -174,13 +192,14 @@ def packet_re() -> str:
 @prompt
 def debugging_session() -> str:
     """Guide for driving a live debugger / non-stopping trace session."""
+    ext = _ext_connect_clause()
     return (
         "# Live debugging session\n"
         "\n"
         "Confirm a static hypothesis against runtime ground truth. Full guides:\n"
         "ida://docs/debugging-and-tracing, ida://docs/watchpoints-and-tracepoints.\n"
         "\n"
-        "0. ENDPOINT. Connect ?ext=dbg (superset: dbg_* + probes on top of all\n"
+        f"0. ENDPOINT. Connect {ext} (superset: dbg_* + probes on top of all\n"
         "   static tools). If dbg_* tools are missing you are on the base /mcp\n"
         "   endpoint. Pilot a session the maintainer already launched - NEVER\n"
         "   call dbg_start.\n"

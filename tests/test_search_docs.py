@@ -42,8 +42,14 @@ def test_empty_query_returns_empty(tiny_docs):
     assert api_docs.search_docs("   ") == []
 
 
-def test_no_match_returns_empty(tiny_docs):
-    assert api_docs.search_docs("zzzznotpresent") == []
+def test_no_match_returns_index_pointer(tiny_docs):
+    # A non-empty query with no match returns a synthetic pointer to the docs
+    # index (ida://docs) instead of a dead-end empty list, so the caller always
+    # has a next step.
+    hits = api_docs.search_docs("zzzznotpresent")
+    assert len(hits) == 1
+    assert hits[0]["topic"] == "docs"
+    assert hits[0]["uri"] == "ida://docs"
 
 
 def test_title_weight_dominates_ordering(tiny_docs):
@@ -58,11 +64,11 @@ def test_title_weight_dominates_ordering(tiny_docs):
 
 def test_scores_are_computed_as_expected(tiny_docs):
     hits = {h["topic"]: h["score"] for h in api_docs.search_docs("probe")}
-    # alpha: title "Alpha probe guide" -> 1 hit *5; desc "about probes" -> token
-    #        "probes" != "probe" so 0; body 3 hits *1 = 8 total.
-    assert hits["alpha"] == 8.0
-    # beta: body 1 hit *1 = 1.
-    assert hits["beta"] == 1.0
+    # Scoring now adds stemming (probes->probe), synonyms, and body-length
+    # normalization, so exact values are implementation detail. The invariant is
+    # relative: alpha (title+desc+body matches) outscores beta (single body hit),
+    # and both are positive.
+    assert hits["alpha"] > hits["beta"] > 0
 
 
 def test_limit_is_respected(tiny_docs):
@@ -82,11 +88,12 @@ def test_bad_limit_falls_back_to_default(tiny_docs):
 
 def test_hit_shape(tiny_docs):
     hit = api_docs.search_docs("probe")[0]
-    assert set(hit.keys()) == {"topic", "title", "score", "snippet", "uri"}
+    assert set(hit.keys()) == {"topic", "title", "score", "snippet", "uri", "tools"}
     assert hit["uri"] == f"ida://docs/{hit['topic']}"
     assert hit["title"] == "Alpha probe guide"
     assert isinstance(hit["score"], float)
     assert isinstance(hit["snippet"], str)
+    assert isinstance(hit["tools"], list)
 
 
 def test_tie_break_is_alphabetical_by_topic(tiny_docs, monkeypatch):

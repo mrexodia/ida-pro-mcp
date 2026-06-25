@@ -3,9 +3,25 @@
 Tools are registered with the `@tool` decorator and grouped by API module
 (`api_core`, `api_analysis`, `api_memory`, `api_types`, `api_modify`,
 `api_stack`, `api_debug`, `api_python`, `api_survey`, `api_composite`,
-`api_probes`, `api_sigmaker`, ...). Each tool's input/output schema is generated
+`api_probes`, `api_sigmaker`, `api_hierarchy`, `api_decomp`, `api_graph`,
+`api_recipes`, `api_domain`, ...). Each tool's input/output schema is generated
 from its Python type hints, so the schema you see in `tools/list` always matches
 the function signature.
+
+> **Authoritative live roster.** For the exact set of tools and current schemas
+> your endpoint exposes, query the **`ida://tools`** resource (generated from the
+> live registry) or `tools/list`. The `tool-index` doc is a curated map of the
+> families; use `search_docs` to find the right family, then `ida://tools` to
+> confirm the precise name and signature. Recent families to know about:
+> `api_hierarchy` (russian-doll call comprehension), `api_decomp`
+> (ctree/lvar/microcode: `pseudocode_query`, `lvar_usage`, `set_lvar`,
+> `microcode_text`, `microcode_calls`), `api_graph` (recursive closures,
+> `reaches`), and `api_recipes` (`recipe_*` one-call playbooks — see the
+> `recipes` doc). The debugger surface has also grown (`dbg_step_out`,
+> `dbg_set_reg`, `dbg_attach`/`dbg_detach`, `dbg_threads`/`dbg_select_thread`,
+> `dbg_set_bp_hit_count`, `stop_context`, `memory_map`, `classify_pointer`,
+> `exception_config`), and `api_types` gained `struct_member_edit`, `add_til`,
+> and `list_tils`.
 
 ## Safety classes
 

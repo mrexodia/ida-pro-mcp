@@ -15,8 +15,9 @@ ida-pro-essentials:
 
 decompiler-mastery:
     title: Mastering Hex-Rays Pseudocode Quality
-    description: Turn the decompiler's draft into readable pseudocode - apply types/prototypes/enums, split-or-join fused/spilled variables, name functions/locals/stack, recognize the recurring idioms, and know when to decompile vs read disasm - mapped to decompile/analyze_batch/set_type/rename/force_recompile.
+    description: Turn the decompiler's draft into readable pseudocode - apply types/prototypes/enums, split-or-join fused/spilled variables, name functions/locals/stack, recognize the recurring idioms, and know when to decompile vs read disasm - mapped to decompile/analyze_batch/set_type/rename/force_recompile plus the api_decomp ctree/microcode tools.
     priority: 88
+    tools: decompile, analyze_batch, set_type, rename, force_recompile, pseudocode_query, lvar_usage, set_lvar, microcode_text, microcode_calls, map_ea_to_pseudocode, map_pseudocode_line_to_eas
 
 re-methodology:
     title: A Disciplined RE Methodology
@@ -27,16 +28,25 @@ tools-reference:
     title: Tools Reference
     description: How tools are organized, the safety classes, and the ?ext extension gating model.
     priority: 80
+    tools: revert_patch, list_patches
 
 tool-index:
     title: Tool Index
-    description: A scannable lookup map of every tool family - core/query, memory, modify, types, stack, analysis, composite, survey, sigmaker, debugger(dbg), probes, domain, python, docs - with each family's one-line purpose, safety class (READ/WRITE/DESTRUCTIVE/EXECUTE), ?ext group, and full tool roster, plus a which-family-do-I-reach-for cheatsheet.
+    description: A scannable lookup map of every tool family - core/query, memory, modify, types, stack, analysis, composite, hierarchy, decompiler, graph, survey, sigmaker, debugger(dbg), probes, domain, recipes, python, docs - with each family's one-line purpose, safety class (READ/WRITE/DESTRUCTIVE/EXECUTE), ?ext group, and full tool roster, plus a which-family-do-I-reach-for cheatsheet.
     priority: 78
+    tools: search_docs
 
 call-hierarchy-russian-doll:
     title: 'Call Hierarchy: the Russian-Doll Comprehension Workflow'
     description: The wide-then-fine api_hierarchy workflow - survey_binary -> module_hierarchy (interface vs internal shells) -> call_hierarchy In/Out depth bands -> function_skeleton (which call fires under which condition / guarded_calls) -> reaches to confirm a path -> hierarchy_runtime_overlay to light up taken edges - plus depth/cap heuristics (start depth 2, widen until truncated clears) and the indirect-call + direction caveats.
     priority: 87
+    tools: call_hierarchy, function_skeleton, module_hierarchy, hierarchy_runtime_overlay, reaches, callers_recursive, callees_recursive, data_refs, survey_binary
+
+recipes:
+    title: 'Recipe Tools: One-Call RE Playbooks'
+    description: The api_recipes composite family - recipe_function_report (full single-function dossier), recipe_string_to_code (string -> referencing code), recipe_import_usage (who calls an import and how), recipe_dispatch_scan (find opcode/jump-table dispatchers), recipe_crypto_candidates (rank crypto-shaped functions) - each fans many primitives into one structured report so you skip the manual xref/decompile/profile chaining.
+    priority: 76
+    tools: recipe_function_report, recipe_string_to_code, recipe_import_usage, recipe_dispatch_scan, recipe_crypto_candidates
 
 idapython-cookbook:
     title: IDAPython Cookbook
@@ -57,11 +67,13 @@ opcode-and-packet-re:
     title: Opcode & Packet Protocol Recovery
     description: End-to-end recipe - find the recv dispatch/switch, map opcode->handler, infer packet field layouts, and confirm live with probe_net pre/post capture.
     priority: 68
+    tools: recipe_dispatch_scan, recipe_string_to_code, probe_net, xrefs_to, decompile
 
 type-reconstruction:
     title: Type Reconstruction End-to-End
     description: The declare -> apply -> verify loop - declare_type C decls, infer_types seeding, set_type/type_apply_batch to attach, read_struct to confirm against static bytes, and read_struct_live to confirm at a live runtime pointer.
     priority: 67
+    tools: declare_type, infer_types, set_type, type_apply_batch, read_struct, read_struct_live, struct_member_edit, enum_upsert, add_til, list_tils, type_inspect, type_query, search_structs
 
 struct-and-vtable-recovery:
     title: C++ Struct, vtable & RTTI Recovery
@@ -77,16 +89,19 @@ crypto-hunting:
     title: 'Crypto Hunting: Ciphers and Key Schedules'
     description: Find packet ciphers and key schedules - crypto-shaped XOR/ROL/ROR loops, S-box/constant-table detection, walking out from the recv/decrypt path, and proving the boundary live with a buffer pre/post probe.
     priority: 64
+    tools: recipe_crypto_candidates, recipe_function_report, probe_net, watch_region, decompile
 
 debugging-and-tracing:
     title: Live Debugging and Tracing
     description: Driving a live IDA debugger via the dbg_* tools plus the non-stopping PROBE/AUTOPILOT model - instrument, run free, drain, reason.
     priority: 62
+    tools: dbg_status, dbg_continue, dbg_run_to, dbg_step_into, dbg_step_over, dbg_step_out, dbg_add_bp, dbg_set_bp_condition, dbg_set_bp_hit_count, dbg_set_reg, dbg_read, dbg_write, dbg_attach, dbg_detach, dbg_threads, dbg_select_thread, stop_context, memory_map, classify_pointer, exception_config
 
 probe-toolkit:
     title: Probe / Watch / Autopilot Toolkit
     description: The non-stopping live-debugger probe layer and the instrument -> run -> drain loop.
     priority: 60
+    tools: probe_add, probe_drain, probe_list, probe_stats, probe_clear, probe_arm, run_until, watch_field, watch_region, trace_calls, probe_net, probe_api_call, memory_scan, autopilot_run, snapshot_save, snapshot_restore, snapshot_list, snapshot_delete, snapshot_diff, read_struct_live, appcall
 
 autopilot-playbook:
     title: 'Autopilot Playbook: Worked Examples'

@@ -25,8 +25,15 @@ family's deep-dive doc for usage.
 Pro-tip: the committed `.mcp.json` registers `?ext=dbg` — that is a **superset**
 (all static tools + debugger + probe tools). If `dbg_*` / `probe_*` are missing
 you are on the bare base endpoint; re-register on `?ext=dbg`. Always-on families
-(core/query, memory, modify, types, stack, analysis, composite, survey, sigmaker,
-domain, docs) need **no** ext param.
+(core/query, memory, modify, types, stack, analysis, composite, hierarchy,
+decompiler, graph, survey, sigmaker, recipes, domain, docs) need **no** ext
+param.
+
+> **Authoritative live list:** this index is hand-maintained and may lag the
+> code. For the exact set of tools your endpoint exposes (with current schemas),
+> query the **`ida://tools`** resource — it is generated from the live registry.
+> Use `search_docs` to find the right family doc, then `ida://tools` to confirm
+> the precise tool name and signature.
 
 ---
 
@@ -39,13 +46,16 @@ domain, docs) need **no** ext param.
 | Modify | `api_modify` | — | WRITE + DESTRUCTIVE | Legibility edits: rename, comment, bookmark, (re)define code/data, patch asm. |
 | Types | `api_types` | — | READ + DESTRUCTIVE | Declare/inspect/apply C types, enums, structs; overlay a type on bytes. |
 | Stack | `api_stack` | — | READ + DESTRUCTIVE | Inspect and declare/delete a function's stack-frame variables. |
-| Analysis | `api_analysis` | — | READ | Decompile/disasm, xrefs, callees/callgraph, byte/insn search, profiling. |
+| Analysis | `api_analysis` | — | READ | Decompile/disasm, xrefs, callees/callgraph, byte/insn search, profiling, EA<->pseudocode maps. |
 | Composite | `api_composite` | — | READ (+1 DESTRUCTIVE) | One-call bundles: analyze a function/component, data-flow, before/after diff. |
 | Hierarchy | `api_hierarchy` | — (+`dbg` overlay) | READ | Russian-doll comprehension: nested In/Out call bands, per-function CFG skeleton + guarded calls, auto-grown subsystems, runtime overlay. |
+| Decompiler | `api_decomp` | — | READ + WRITE | Ctree/lvar/microcode layer: query pseudocode items, lvar usage, rename/retype locals, dump microcode + its calls. |
+| Graph | `api_graph` | — | READ | Recursive caller/callee closures, data refs, reachability between two functions. |
 | Survey | `api_survey` | — | READ | Single broad first-look census of the whole binary. |
 | Sigmaker | `api_sigmaker` | — | READ | Synthesize AOB / wildcarded byte-pattern signatures to relocate code/data. |
-| Debugger | `api_debug` | **dbg** | READ + EXECUTE | Drive a live debugger: bps, step/continue, regs, stack, live read/write. |
-| Probes | `api_probes` | **probes** / dbg | READ → EXECUTE/DESTRUCTIVE | Non-stopping probes/watchpoints/autopilot + live struct/appcall helpers. |
+| Debugger | `api_debug` | **dbg** | READ + EXECUTE | Drive a live debugger: bps (incl. hit-count), step/continue/out, regs (set), threads, attach/detach, memory map, pointer classify, exception config, live read/write. |
+| Probes | `api_probes` | **dbg** | READ → EXECUTE/DESTRUCTIVE | Non-stopping probes/watchpoints/autopilot, API-call + memory scans, snapshots, live struct/appcall helpers. |
+| Recipes | `api_recipes` | — | READ | One-call RE playbooks: function dossier, string->code, import usage, dispatch scan, crypto candidates. |
 | Domain | `api_domain` | **domain** | READ | ida-domain SDK mirror: functions/strings/xrefs/types/segments/pseudocode. |
 | Python | `api_python` | — | EXECUTE | Run arbitrary IDAPython: `py_eval`, `py_exec_file`. The escape hatch. |
 | Docs | `api_docs` | — | READ | Search this in-server documentation corpus (`search_docs`). |
@@ -69,9 +79,12 @@ The baseline IDB census layer. Start here every session.
 Static (IDB) byte/value access at an address. For **live** memory use the dbg
 readers below.
 - READ: `get_bytes`, `get_int`, `get_string`, `get_global_value`.
-- DESTRUCTIVE: `patch`, `put_int`.
+- DESTRUCTIVE: `patch`, `put_int`, `revert_patch`.
+- READ: `list_patches` (audit every patch applied to the IDB).
 - Pitfall: `patch`/`put_int` rewrite the IDB bytes — not the on-disk file and not
-  the live process. They are destructive + non-idempotent.
+  the live process. They are destructive + non-idempotent. `revert_patch`
+  restores the original bytes for a patched range; `list_patches` enumerates them
+  for selective revert.
 
 ### Modify — `api_modify` (no ext)
 The legibility / annotation surface (clean-room: never paste pseudo-C).
@@ -84,11 +97,15 @@ The legibility / annotation surface (clean-room: never paste pseudo-C).
 ### Types — `api_types` (no ext)
 C type / struct / enum reconstruction and application.
 - READ: `read_struct`, `search_structs`, `type_query`, `type_inspect`,
-  `infer_types`.
-- DESTRUCTIVE: `declare_type`, `enum_upsert`, `set_type`, `type_apply_batch`.
+  `infer_types`, `list_tils`.
+- DESTRUCTIVE: `declare_type`, `enum_upsert`, `set_type`, `type_apply_batch`,
+  `struct_member_edit`, `add_til`.
 - Pro-tip: `read_struct` overlays an IDB type onto a static EA's bytes into a
   named-field dict; the live twin is `read_struct_live` (a probe, `?ext=dbg`).
   `type_apply_batch` applies many type assignments in one call.
+  `struct_member_edit` adds/renames/retypes/removes one struct member without a
+  full re-declare. `add_til` / `list_tils` load and enumerate type-info libraries
+  (TILs) so library struct/prototype definitions are available to apply.
 
 ### Stack — `api_stack` (no ext)
 Per-function stack-frame variables.
@@ -99,10 +116,13 @@ Per-function stack-frame variables.
 The deep static-reading workhorse (all READ).
 - `decompile`, `disasm`, `func_profile`, `analyze_batch`, `xrefs_to`,
   `xref_query`, `xrefs_to_field`, `callees`, `callgraph`, `find_bytes`,
-  `basic_blocks`, `find`, `insn_query`, `export_funcs`.
+  `basic_blocks`, `find`, `insn_query`, `export_funcs`,
+  `map_ea_to_pseudocode`, `map_pseudocode_line_to_eas`.
 - Pro-tip: `analyze_batch` profiles a whole candidate subsystem in one call —
   the fast way to triage many related functions before reading one closely with
   `decompile`. `xrefs_to_field` is offset-aware ("who touches `this+0x10`").
+  `map_ea_to_pseudocode` / `map_pseudocode_line_to_eas` bridge an address to its
+  pseudocode line and back — pair them with the `api_decomp` ctree tools.
 
 ### Composite — `api_composite` (no ext)
 High-level one-call bundles that fan several primitives internally.
@@ -132,6 +152,28 @@ are exact transposes and chunk/switch/tail-call aware.
   `indirect_leaves` / `indirect_sites` before calling a node isolated. See the
   `call-hierarchy-russian-doll` doc for the full wide-then-fine workflow.
 
+### Decompiler — `api_decomp` (no ext)
+The Hex-Rays **ctree / lvar / microcode** layer — read and edit below the
+pseudocode-text surface.
+- READ: `pseudocode_query` (query ctree items — calls, assignments, conditions —
+  on a function), `lvar_usage` (every read/write site of a local variable),
+  `microcode_text` (dump the microcode at a chosen maturity level),
+  `microcode_calls` (the call instructions extracted from microcode, with args).
+- WRITE: `set_lvar` (rename and/or retype one local variable).
+- Pro-tip: `set_lvar` is the precise twin of `rename` for **locals** —
+  retype a fused/spilled variable to fix the pseudocode. `microcode_*` is for
+  when the pseudocode hides what the raw IR shows (e.g. obfuscated dispatch).
+
+### Graph — `api_graph` (no ext, all READ)
+Recursive call-graph and reachability closures (the primitive layer the
+`api_hierarchy` russian-doll family builds on).
+- `callers_recursive`, `callees_recursive` (bounded transitive closures up/down),
+  `data_refs` (data references to/from an address), `reaches` (does function A
+  reach function B, and by what path).
+- Pro-tip: prefer the `api_hierarchy` tools (`call_hierarchy`, `module_hierarchy`)
+  for comprehension; reach for these when you want a raw closure or a single
+  reachability path without the russian-doll framing.
+
 ### Survey — `api_survey` (no ext)
 - READ: `survey_binary` — one broad first-look census (segments, imports,
   exports, strings, candidate subsystems) to orient before drilling in.
@@ -148,26 +190,37 @@ Drive a live session the maintainer already F9-launched. **Never `dbg_start`**
 on this project (it exists but is the wrong door for the live-attach workflow).
 - READ: `dbg_status`, `dbg_bps`, `dbg_regs_all`, `dbg_regs`, `dbg_regs_remote`,
   `dbg_gpregs`, `dbg_gpregs_remote`, `dbg_regs_named`, `dbg_regs_named_remote`,
-  `dbg_stacktrace`, `dbg_read`.
+  `dbg_stacktrace`, `dbg_read`, `stop_context`, `memory_map`, `classify_pointer`,
+  `dbg_threads`.
 - EXECUTE: `dbg_start`, `dbg_exit`, `dbg_continue`, `dbg_run_to`,
-  `dbg_step_into`, `dbg_step_over`, `dbg_add_bp`, `dbg_delete_bp`,
-  `dbg_toggle_bp`, `dbg_set_bp_condition`, `dbg_write`.
+  `dbg_step_into`, `dbg_step_over`, `dbg_step_out`, `dbg_add_bp`, `dbg_delete_bp`,
+  `dbg_toggle_bp`, `dbg_set_bp_condition`, `dbg_set_bp_hit_count`, `dbg_write`,
+  `dbg_set_reg`, `dbg_attach`, `dbg_detach`, `dbg_select_thread`,
+  `exception_config`.
 - Pro-tip: `dbg_read` reads **through** PAGE_NOACCESS — use it to read live
-  packet buffers a normal read would fault on.
+  packet buffers a normal read would fault on. `stop_context` is the one-call
+  "where am I stopped" snapshot (regs + disasm window + stack); `memory_map` and
+  `classify_pointer` answer "what region is this address in / what does it point
+  at". `dbg_set_bp_hit_count` arms a breakpoint to fire only after N hits;
+  `dbg_set_reg` writes a register; `dbg_attach`/`dbg_detach` and `dbg_threads`/
+  `dbg_select_thread` manage process + thread selection.
 
 ### Probes — `api_probes` (**`?ext=dbg`** — entire toolkit, including read-only tools)
 The non-stopping observe-while-running layer + live-memory helpers.
 - READ: `probe_list`, `probe_drain`, `probe_stats`, `trace_summary`,
-  `diff_buffers`, `snapshot_list`, `appcall_inspect`, `read_struct_live`.
+  `diff_buffers`, `snapshot_list`, `snapshot_diff`, `appcall_inspect`,
+  `read_struct_live`.
 - EXECUTE: `probe_add`, `run_until`, `watch_field`, `watch_region`,
-  `trace_calls`, `probe_net`, `appcall`, `snapshot_save`,
-  `snapshot_restore`, `autopilot_run`.
-- DESTRUCTIVE: `probe_clear`, `probe_arm`.
+  `trace_calls`, `probe_net`, `probe_api_call`, `memory_scan`, `appcall`,
+  `snapshot_save`, `snapshot_restore`, `autopilot_run`.
+- DESTRUCTIVE: `probe_clear`, `probe_arm`, `snapshot_delete`.
 - Pro-tip: the loop is **instrument → run → drain** — `probe_add`/`trace_calls`/
   `watch_field`, then `run_until`, then `probe_drain` (pass the returned `cursor`
   back as `since_cursor`). Probes always return `False`, so the target never
   halts. `appcall` actually CALLS debuggee code — single, human-confirmed only,
-  never in a loop.
+  never in a loop. `probe_api_call` traces calls to a named import; `memory_scan`
+  searches live process memory; `snapshot_diff` compares two saved memory
+  snapshots and `snapshot_delete` drops one.
 
 ### Domain — `api_domain` (base `/mcp`, no ext, all READ)
 A Pythonic ida-domain SDK mirror of the core queries.
@@ -176,6 +229,19 @@ A Pythonic ida-domain SDK mirror of the core queries.
 - Pro-tip: these overlap the core/analysis tools; reach for them when you want
   the ida-domain object model's shape. Part of the base static view (no ext
   param); they degrade gracefully when the ida-domain SDK is unavailable.
+
+### Recipes — `api_recipes` (no ext, all READ)
+One-call **RE playbooks** that fan many primitives into a single structured
+report — the fast path for the most common multi-step chores.
+- `recipe_function_report` (full single-function dossier: proto + pseudocode head
+  + callers/callees + strings + xref count),
+  `recipe_string_to_code` (a string -> the functions that emit it),
+  `recipe_import_usage` (who calls an import, and from which functions),
+  `recipe_dispatch_scan` (find large switch/jump-table opcode dispatchers),
+  `recipe_crypto_candidates` (rank crypto-shaped XOR/ROL/ROR-loop functions).
+- Pro-tip: reach for a recipe before hand-chaining `xrefs_to` -> `decompile` ->
+  `func_profile`. See the `recipes` doc for the full playbook and how each fits
+  the opcode / crypto workflows.
 
 ### Python — `api_python` (no ext, EXECUTE)
 - `py_eval` — run an inline IDAPython snippet (the escape hatch for any one-off
@@ -206,6 +272,11 @@ A Pythonic ida-domain SDK mirror of the core queries.
 - *Recover a struct / vtable* → Types (`read_struct`, `declare_type`) + Stack.
 - *Annotate the IDB* → Modify (`rename`, `set_comments`) + Types.
 - *Relocate code across builds* → Sigmaker.
+- *One-call dossier / dispatcher / crypto sweep* → Recipes
+  (`recipe_function_report`, `recipe_dispatch_scan`, `recipe_crypto_candidates`).
+- *Rename / retype a local variable* → Decompiler `set_lvar`; *read the raw IR* →
+  `microcode_text` / `microcode_calls`.
 - *Anything no fixed tool covers* → Python (`py_eval`).
 - *Watch live values without stopping* → Probes (instrument→run→drain).
 - *Step / breakpoint / read live memory* → Debugger (`?ext=dbg`).
+- *Confirm the exact live tool name/signature* → read the `ida://tools` resource.
