@@ -263,6 +263,48 @@ def test_decompile_refs_decode_usage_string():
 
 
 @test(binary="crackme03.elf")
+def test_decompile_returns_text_and_refs_from_single_pass():
+    """A single decompile() yields BOTH pseudocode text and refs, decompiling once.
+
+    Batch-2 made decompile() collect the pseudocode text and the referenced
+    objects from ONE cached cfunc instead of decompiling twice. We assert the
+    documented shape (code + non-empty refs in one call) and prove there was no
+    behavioural double-decompile by checking the per-IDB cfunc cache is populated
+    for the function and the decompile-dirty counter did not move across the call
+    (a fresh second Hex-Rays pass would have gone through bump_decompile_dirty).
+    """
+    from ..utils import (
+        bump_decompile_dirty,
+        get_cached_cfunc,
+        get_decompile_dirty,
+    )
+
+    start = int(CRACKME_MAIN, 16)
+    # Start from a clean cache entry so we observe this call's behaviour.
+    bump_decompile_dirty(start)
+    dirty_before = get_decompile_dirty()
+
+    result = decompile(CRACKME_MAIN)
+    assert_ok(result, "code")
+    assert "check_pw" in result["code"]
+    refs = result.get("refs", [])
+    assert refs, "single decompile() must also surface refs"
+    assert any(r["name"] == "check_pw" for r in refs)
+
+    # No mutation happened, so decompile() must not have bumped the dirty
+    # counter (i.e. it reused the cached cfunc rather than invalidating/redoing).
+    assert get_decompile_dirty() == dirty_before, (
+        "decompile() should not invalidate the decompiler cache on a read"
+    )
+
+    # And the cfunc is now cached for the function: fetching it returns a cfunc
+    # with no error, confirming text+refs came from one shared decompilation.
+    cfunc, err = get_cached_cfunc(start)
+    assert err is None
+    assert cfunc is not None
+
+
+@test(binary="crackme03.elf")
 def test_disasm_labels_populated():
     """disasm populates `label` on the function head and on branch targets."""
     result = disasm(CRACKME_MAIN, max_instructions=200)

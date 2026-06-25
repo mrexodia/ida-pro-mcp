@@ -27,6 +27,7 @@ from .utils import (
     parse_address,
     decompile_checked,
     refresh_decompiler_ctext,
+    bump_decompile_dirty,
     hexrays_local_var_exists,
     CommentOp,
     CommentAppendOp,
@@ -226,6 +227,10 @@ def set_comments(
                 )
                 continue
 
+            # Disassembly comment landed: drop the enclosing function's cached
+            # cfunc so subsequent decompile() reflects this edit.
+            bump_decompile_dirty(ea)
+
             if not ida_hexrays.init_hexrays_plugin():
                 results.append({"addr": addr_str})
                 continue
@@ -338,6 +343,7 @@ def append_comments(
                         }
                     )
                     continue
+                bump_decompile_dirty(target_ea)
                 results.append({"addr": addr_str, "scope": "func", "appended": True})
                 continue
 
@@ -354,6 +360,7 @@ def append_comments(
                     }
                 )
                 continue
+            bump_decompile_dirty(ea)
             results.append({"addr": addr_str, "scope": "line", "appended": True})
         except Exception as e:
             results.append({"addr": addr_str, "error": str(e)})
@@ -672,6 +679,9 @@ def rename(
                     placed, place_error = _place_func_in_vibe_dir(func.start_ea)
                 if success and not dry_run:
                     refresh_decompiler_ctext(func.start_ea)
+                    # A function rename changes pseudocode of EVERY caller (and
+                    # of this function), so clear the whole cfunc cache.
+                    bump_decompile_dirty()
 
                 result = {
                     "addr": addr_text,
@@ -746,6 +756,10 @@ def rename(
                     continue
 
                 success, error = _set_name_checked(ea, str(new_name))
+                if success and not dry_run:
+                    # A renamed global can appear in any function's pseudocode,
+                    # so the referencing function is ambiguous: clear all.
+                    bump_decompile_dirty()
                 result = {
                     "addr": hex(ea),
                     "old": old_name,
@@ -816,6 +830,7 @@ def rename(
                         )
                         if success:
                             refresh_decompiler_ctext(func.start_ea)
+                            bump_decompile_dirty(func.start_ea)
                         elif not hexrays_local_var_exists(func.start_ea, old_name):
                             error = (
                                 f"Local variable {old_name!r} not found in function at "
@@ -954,7 +969,9 @@ def rename(
                     else:
                         sval = ida_frame.soff_to_fpoff(func, offset)
                         success = ida_frame.define_stkvar(func, new_name, sval, udm.type)
-                        if not success:
+                        if success:
+                            bump_decompile_dirty(func.start_ea)
+                        else:
                             error = (
                                 f"Rename failed: could not rename stack variable "
                                 f"{old_name!r} to {new_name!r} in function at "
@@ -1121,6 +1138,9 @@ def define_func(
             results.append({"addr": addr_str, "error": str(e)})
 
     invalidate_strings_cache()
+    # New/changed function boundaries can alter callers' pseudocode and the
+    # decompiler's view of these addresses; clear the whole cfunc cache.
+    bump_decompile_dirty()
     return results
 
 
@@ -1152,6 +1172,7 @@ def define_code(
             ea = parse_address(addr_str)
             length = ida_ua.create_insn(ea)
             if length > 0:
+                bump_decompile_dirty(ea)
                 results.append(
                     {"addr": addr_str, "ea": hex(ea), "length": length}
                 )
@@ -1211,6 +1232,7 @@ def undefine(
 
             success = ida_bytes.del_items(start_ea, ida_bytes.DELIT_EXPAND, nbytes)
             if success:
+                bump_decompile_dirty(start_ea)
                 results.append(
                     {
                         "addr": addr_str,
@@ -1424,6 +1446,11 @@ def set_op_type(
         except Exception as e:
             err = str(e)
 
+        if ok:
+            # Operand reinterpretation changes the enclosing function's
+            # pseudocode; drop its cached cfunc.
+            bump_decompile_dirty(ea)
+
         result: SetOpTypeResult = {"addr": addr_str, "op_n": op_n, "kind": kind, "ok": ok}
         if err is not None and not ok:
             result["error"] = err
@@ -1513,6 +1540,9 @@ def make_data(
 
             # Mark all dependent decompiles dirty so subsequent decompile() gets fresh output.
             ida_hexrays.clear_cached_cfuncs()
+            # Also clear the seam-level cfunc cache (separate from IDA's): a
+            # typed global can appear in any referencing function's pseudocode.
+            bump_decompile_dirty()
 
             results.append({
                 "addr": addr_str,

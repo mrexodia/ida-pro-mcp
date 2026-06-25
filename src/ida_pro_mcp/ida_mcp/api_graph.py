@@ -14,13 +14,16 @@ graph?" questions that the single-level primitives (`callees`, `xrefs_to`,
   * reaches            -- a bounded reachability query between two functions,
     returning the call path when one exists ("can A call B?").
 
-The IDA-touching work is delegated to the existing xref/caller/callee helpers
-in utils/api_analysis. The traversal, deduplication and depth-bounding logic
-lives in idaapi-free pure helpers (`_bfs_bounded`, `_dedup_chain`,
-`_reconstruct_path`) so it can be unit-tested headless without a live database.
+The IDA-touching work is delegated to the unified call-edge / call-tree seams
+in `utils` (`iter_func_call_edges`, `walk_call_tree`, `_call_neighbors`). Those
+seams are chunk-aware, switch-resolved, deadline-aware and surface indirect
+sites explicitly, so both directions are exact transposes of one another and
+recursion/cycles are handled centrally. The remaining pure helpers here
+(`_dedup_chain`) and the WalkNode->result adapters are idaapi-free and unit
+testable headless.
 """
 
-from typing import Annotated, Callable, NotRequired, TypedDict
+from typing import Annotated, Callable, NotRequired, Optional, TypedDict
 
 import ida_bytes
 import ida_funcs
@@ -29,11 +32,13 @@ import idaapi
 import idautils
 
 from .rpc import safety, title, tool
-from .sync import idasync, tool_timeout
+from .sync import get_tool_deadline, idasync, tool_timeout
 from .utils import (
     Function,
     get_function,
+    iter_func_call_edges,
     parse_address,
+    walk_call_tree,
 )
 
 
@@ -42,16 +47,22 @@ from .utils import (
 # ============================================================================
 
 
-class GraphNode(TypedDict):
+class GraphNode(TypedDict, total=False):
     addr: str
     name: str
     depth: int
+    back_edge: bool
 
 
 GraphEdge = TypedDict(
     "GraphEdge",
-    {"from": str, "to": str},
+    {"from": str, "to": str, "indirect": NotRequired[bool], "kind": NotRequired[str]},
 )
+
+
+class IndirectSite(TypedDict):
+    from_addr: str
+    fn: Function | None
 
 
 class RecursiveGraphResult(TypedDict, total=False):
@@ -60,8 +71,10 @@ class RecursiveGraphResult(TypedDict, total=False):
     direction: str
     nodes: list[GraphNode]
     edges: list[GraphEdge]
+    indirect_sites: list[IndirectSite]
     node_count: int
     edge_count: int
+    indirect_count: int
     max_depth: int
     max_nodes: int
     truncated: bool
@@ -127,7 +140,13 @@ def _bfs_bounded(
     max_depth: int,
     max_nodes: int,
 ):
-    """Breadth-first traversal bounded by depth and node count.
+    """Pure depth-/node-bounded BFS closure (idaapi-free).
+
+    NOTE: the live graph tools no longer drive their traversal through this
+    helper -- they delegate to `utils.walk_call_tree`, which adds time budgets
+    and centralised cycle/back-edge handling. This function is retained as a
+    standalone, headless-testable reference implementation of the closure
+    semantics (and is still exported for those unit tests).
 
     `neighbors(node)` returns the adjacent node ids for one node. The start
     node is recorded at depth 0 and never re-expanded. Traversal stops once
@@ -138,8 +157,6 @@ def _bfs_bounded(
       * depths: dict[node -> depth] of every recorded node (incl. start),
       * edges:  list of (from, to) pairs actually traversed (deduplicated),
       * truncated: True when a cap stopped the walk early.
-
-    Pure: no IDA calls. `neighbors` is the only seam to the database.
     """
     if max_depth < 0:
         max_depth = 0
@@ -172,9 +189,6 @@ def _bfs_bounded(
         depth += 1
 
     if frontier and depth >= max_depth:
-        # There were still nodes whose neighbours we never expanded because the
-        # depth cap stopped us. Probe whether any expansion would have added a
-        # genuinely new node; if so the result is depth-truncated.
         for node in frontier:
             for nxt in neighbors(node):
                 if nxt not in depths:
@@ -190,7 +204,12 @@ def _reconstruct_path(
     neighbors: Callable[[int], list[int]],
     max_depth: int,
 ):
-    """Bounded BFS shortest path from `start` to `goal`.
+    """Pure bounded BFS shortest path (idaapi-free).
+
+    NOTE: `reaches` now delegates to `utils.walk_call_tree` (via `_reaches_path`)
+    for the live database. This function is retained as a standalone,
+    headless-testable reference implementation and remains exported for unit
+    tests.
 
     Returns (path, explored, truncated):
       * path: list of node ids from start..goal inclusive, or [] if `goal`
@@ -198,8 +217,6 @@ def _reconstruct_path(
       * explored: number of distinct nodes visited,
       * truncated: True when the depth bound stopped expansion while unvisited
         neighbours remained (so a longer path might exist beyond the bound).
-
-    Pure: `neighbors` is the only database seam.
     """
     if max_depth < 0:
         max_depth = 0
@@ -245,7 +262,7 @@ def _reconstruct_path(
 
 
 # ============================================================================
-# IDA-backed neighbour functions
+# IDA-backed neighbour functions (now derived from the unified call-edge seam)
 # ============================================================================
 
 
@@ -256,58 +273,133 @@ def _func_name(start_ea: int) -> str:
 def _direct_callees(start_ea: int) -> list[int]:
     """Distinct start-EAs of functions directly called from `start_ea`.
 
-    Walks the function's instructions and follows code refs to any address
-    that lands inside a known function, returning that function's start.
+    Derived from `utils.iter_func_call_edges(..., "out")`, so it is chunk- and
+    tail-call-aware and resolves switch/jump tables. Only resolved call/tailcall
+    targets that land inside a known function are returned (indirect sites with
+    no static target carry no expandable node). This is the exact transpose of
+    `_direct_callers`.
     """
-    func = idaapi.get_func(start_ea)
-    if not func:
-        return []
     out: list[int] = []
-    for item_ea in idautils.FuncItems(func.start_ea):
-        for target in idautils.CodeRefsFrom(item_ea, 0):
-            callee = idaapi.get_func(target)
-            if callee:
-                out.append(callee.start_ea)
+    for edge in iter_func_call_edges(start_ea, "out"):
+        if edge.get("kind") not in ("call", "tailcall"):
+            continue
+        target = edge.get("to")
+        if target is None:
+            continue
+        callee = idaapi.get_func(target)
+        if callee is not None:
+            out.append(callee.start_ea)
     return _dedup_chain(out)
 
 
 def _direct_callers(start_ea: int) -> list[int]:
     """Distinct start-EAs of functions that call into `start_ea`.
 
-    Only call-type references are counted, so fall-through/jump neighbours do
-    not masquerade as callers.
+    Derived from `utils.iter_func_call_edges(..., "in")`, which only emits
+    call/tailcall sites, so fall-through/jump neighbours never masquerade as
+    callers. The exact transpose of `_direct_callees`.
     """
     out: list[int] = []
-    for caller_site in idautils.CodeRefsTo(start_ea, 0):
-        caller = idaapi.get_func(caller_site)
-        if not caller:
+    for edge in iter_func_call_edges(start_ea, "in"):
+        if edge.get("kind") not in ("call", "tailcall"):
             continue
-        insn = idaapi.insn_t()
-        idaapi.decode_insn(insn, caller_site)
-        if insn.itype not in (idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni):
+        site = edge.get("from")
+        if site is None:
             continue
-        out.append(caller.start_ea)
+        caller = idaapi.get_func(site)
+        if caller is not None:
+            out.append(caller.start_ea)
     return _dedup_chain(out)
+
+
+def _indirect_sites(start_ea: int) -> list[IndirectSite]:
+    """Unresolved indirect/virtual call sites leaving `start_ea`.
+
+    Surfaced as explicit rows (rather than silently dropped) so a sparse callee
+    closure can be distinguished from one truncated by dynamic dispatch.
+    """
+    sites: list[IndirectSite] = []
+    seen: set[int] = set()
+    for edge in iter_func_call_edges(start_ea, "out"):
+        if not edge.get("indirect"):
+            continue
+        frm = edge.get("from")
+        if frm is None or frm in seen:
+            continue
+        seen.add(frm)
+        sites.append(
+            {"from_addr": hex(frm), "fn": get_function(frm, raise_error=False)}
+        )
+    return sites
 
 
 def _build_recursive_result(
     root: str,
     start_ea: int,
     direction: str,
-    neighbors: Callable[[int], list[int]],
     max_depth: int,
     max_nodes: int,
 ) -> RecursiveGraphResult:
-    depths, edges, truncated = _bfs_bounded(start_ea, neighbors, max_depth, max_nodes)
+    """Adapt a `walk_call_tree` traversal into the RecursiveGraphResult shape.
 
-    nodes: list[GraphNode] = [
-        {"addr": hex(ea), "name": _func_name(ea), "depth": depths[ea]}
-        for ea in sorted(depths, key=lambda e: (depths[e], e))
-    ]
+    Traversal correctness (depth labelling, cycle/back-edge detection, node and
+    time budgets) is owned by `utils.walk_call_tree`; this function only flattens
+    its WalkNode list into the {nodes, edges} contract. `walk_call_tree`'s
+    `direction` is "out" for callees and "in" for callers; for callers the parent
+    relation already points from the deeper caller toward the root, so edges are
+    oriented caller -> callee to keep them call-directional.
+    """
+    wdir = "in" if direction == "callers" else "out"
+    walk = walk_call_tree(
+        start_ea,
+        depth=max_depth,
+        node_budget=max_nodes,
+        direction=wdir,
+        deadline=get_tool_deadline(),
+    )
+
+    # Depth of each distinct expanded function (first/shallowest occurrence).
+    depths: dict[int, int] = {}
+    back_edge_eas: set[int] = set()
+    edge_pairs: list[tuple[int, int]] = []
+    edge_seen: set[tuple[int, int]] = set()
+
+    for node in walk:
+        ea = node["ea"]
+        parent = node["parent"]
+        if node.get("back_edge"):
+            back_edge_eas.add(ea)
+        else:
+            if ea not in depths or node["depth"] < depths[ea]:
+                depths[ea] = node["depth"]
+        if parent is not None:
+            # Orient edges in the call direction: callees -> child is callee,
+            # callers -> child is the caller, so the call edge is child -> parent.
+            if direction == "callers":
+                pair = (ea, parent)
+            else:
+                pair = (parent, ea)
+            if pair not in edge_seen:
+                edge_seen.add(pair)
+                edge_pairs.append(pair)
+
+    nodes: list[GraphNode] = []
+    for ea in sorted(depths, key=lambda e: (depths[e], e)):
+        row: GraphNode = {"addr": hex(ea), "name": _func_name(ea), "depth": depths[ea]}
+        if ea in back_edge_eas:
+            row["back_edge"] = True
+        nodes.append(row)
+
     edge_rows: list[GraphEdge] = [
-        {"from": hex(frm), "to": hex(to)} for frm, to in edges
+        {"from": hex(frm), "to": hex(to)} for frm, to in edge_pairs
     ]
-    return {
+
+    # The walk truncates when it hits the node budget: detect by comparing the
+    # distinct visited count against the cap. walk_call_tree stops adding once
+    # node_budget distinct functions are reached.
+    truncated = len(depths) >= max_nodes
+
+    result: RecursiveGraphResult = {
         "root": root,
         "resolved_addr": hex(start_ea),
         "direction": direction,
@@ -320,6 +412,17 @@ def _build_recursive_result(
         "truncated": truncated,
         "error": None,
     }
+
+    # Indirect call sites only make sense in the callee direction.
+    if direction == "callees":
+        try:
+            sites = _indirect_sites(start_ea)
+        except Exception:
+            sites = []
+        result["indirect_sites"] = sites
+        result["indirect_count"] = len(sites)
+
+    return result
 
 
 def _resolve_func_start(query: str) -> tuple[int | None, str | None]:
@@ -336,6 +439,72 @@ def _resolve_func_start(query: str) -> tuple[int | None, str | None]:
     if not func:
         return None, f"Not a function: {q}"
     return func.start_ea, None
+
+
+def _reaches_path(
+    start_ea: int,
+    goal_ea: int,
+    max_depth: int,
+) -> tuple[list[int], int, bool]:
+    """Shortest call path start_ea..goal_ea via `utils.walk_call_tree`.
+
+    Reuses the budgeted, deadline- and cycle-aware BFS traversal instead of a
+    bespoke path search. `walk_call_tree` records each distinct function once
+    with its discovery parent (BFS => shallowest parent), so the parent chain
+    rooted at start_ea is a shortest-path tree. We reconstruct the chain to
+    `goal_ea` from it.
+
+    Returns (path_eas, explored, truncated):
+      * path_eas: [start..goal] inclusive, or [] if goal not reached within the
+        depth/node/time budget,
+      * explored: distinct functions visited,
+      * truncated: True when goal was not found AND the walk stopped because the
+        depth bound was reached while real neighbours remained unexpanded (so a
+        longer path might exist beyond the bound).
+    """
+    if start_ea == goal_ea:
+        return [start_ea], 1, False
+
+    walk = walk_call_tree(
+        start_ea,
+        depth=max_depth,
+        node_budget=20000,
+        direction="out",
+        deadline=get_tool_deadline(),
+    )
+
+    parent_of: dict[int, Optional[int]] = {}
+    deepest_real: int = 0
+    for node in walk:
+        if node.get("back_edge"):
+            continue
+        ea = node["ea"]
+        if ea not in parent_of:
+            parent_of[ea] = node["parent"]
+        if node["depth"] > deepest_real:
+            deepest_real = node["depth"]
+
+    explored = len(parent_of)
+
+    if goal_ea in parent_of:
+        path = [goal_ea]
+        cur: Optional[int] = goal_ea
+        guard = 0
+        while cur is not None and cur != start_ea and guard <= explored:
+            cur = parent_of.get(cur)
+            if cur is None:
+                break
+            path.append(cur)
+            guard += 1
+        if path and path[-1] == start_ea:
+            path.reverse()
+            return path, explored, False
+
+    # Goal not reached: it is depth-truncated if the frontier actually reached
+    # the depth bound (some node sits at max_depth with neighbours we never
+    # expanded) -- approximated by "we hit the depth bound".
+    truncated = deepest_real >= max_depth and max_depth > 0
+    return [], explored, truncated
 
 
 # ============================================================================
@@ -366,7 +535,7 @@ def callers_recursive(
 
 WHEN TO USE: To answer "what reaches this function?" -- e.g. which subsystems funnel into a decrypt routine, an allocator, or a packet handler. For a single level of callers use `xrefs_to`; for the downward (callee) direction use `callees_recursive`.
 
-RETURNS: {root, resolved_addr, direction:'callers', nodes:[{addr,name,depth}], edges:[{from,to}], node_count, edge_count, max_depth, max_nodes, truncated, error?}. `depth` is the call distance from the target (0 = the target itself). `truncated=true` means a cap stopped the walk -- raise `max_depth`/`max_nodes` to widen.
+RETURNS: {root, resolved_addr, direction:'callers', nodes:[{addr,name,depth,back_edge?}], edges:[{from,to}], node_count, edge_count, max_depth, max_nodes, truncated, error?}. `depth` is the call distance from the target (0 = the target itself); a node with `back_edge:true` was reached via a cycle/recursion and not re-expanded. `truncated=true` means a node/time budget stopped the walk -- raise `max_depth`/`max_nodes` to widen.
 
 PRO-TIP: Start with `max_depth=2-3`; the caller closure of a hot leaf function fans out fast. PITFALL: only direct, statically-resolvable call sites are followed -- indirect calls through registers/vtables will not appear, so a sparse result can mean dynamic dispatch, not isolation."""
     try:
@@ -389,7 +558,7 @@ PRO-TIP: Start with `max_depth=2-3`; the caller closure of a hot leaf function f
         if max_nodes <= 0 or max_nodes > 20000:
             max_nodes = 20000
         return _build_recursive_result(
-            ea, start_ea, "callers", _direct_callers, max_depth, max_nodes
+            ea, start_ea, "callers", max_depth, max_nodes
         )
     except Exception as e:
         return {
@@ -427,9 +596,9 @@ def callees_recursive(
 
 WHEN TO USE: To answer "what does this subsystem touch?" -- map the full footprint of a feature entry point before reading it, or scope the blast radius of a change. For a single level use `callees`; for the upward (caller) direction use `callers_recursive`; for a richer edge graph with per-func caps use `callgraph`.
 
-RETURNS: {root, resolved_addr, direction:'callees', nodes:[{addr,name,depth}], edges:[{from,to}], node_count, edge_count, max_depth, max_nodes, truncated, error?}. `depth` is the call distance from the root (0 = the root itself). `truncated=true` means a cap stopped the walk.
+RETURNS: {root, resolved_addr, direction:'callees', nodes:[{addr,name,depth,back_edge?}], edges:[{from,to}], indirect_sites:[{from_addr,fn}], indirect_count, node_count, edge_count, max_depth, max_nodes, truncated, error?}. `depth` is the call distance from the root (0 = the root itself); a node with `back_edge:true` was reached via a cycle/recursion and not re-expanded. `truncated=true` means a node/time budget stopped the walk. `indirect_sites` lists the root's unresolved indirect/virtual call sites that the static walk could not follow.
 
-PRO-TIP: Use a small `max_depth` first and widen until `truncated` clears -- a deep closure over a generic entry point can pull in most of the CRT. PITFALL: indirect/virtual calls are not followed, so the closure is a lower bound on what actually runs."""
+PRO-TIP: Use a small `max_depth` first and widen until `truncated` clears -- a deep closure over a generic entry point can pull in most of the CRT. PITFALL: indirect/virtual calls are not followed, so the closure is a lower bound -- check `indirect_sites` for dispatch the static walk missed."""
     try:
         start_ea, err = _resolve_func_start(ea)
         if err is not None or start_ea is None:
@@ -450,7 +619,7 @@ PRO-TIP: Use a small `max_depth` first and widen until `truncated` clears -- a d
         if max_nodes <= 0 or max_nodes > 20000:
             max_nodes = 20000
         return _build_recursive_result(
-            ea, start_ea, "callees", _direct_callees, max_depth, max_nodes
+            ea, start_ea, "callees", max_depth, max_nodes
         )
     except Exception as e:
         return {
@@ -617,8 +786,8 @@ PRO-TIP: The returned `path` is a concrete call chain you can walk with `decompi
         if max_depth > 50:
             max_depth = 50
 
-        path_eas, explored, truncated = _reconstruct_path(
-            start_ea, goal_ea, _direct_callees, max_depth
+        path_eas, explored, truncated = _reaches_path(
+            start_ea, goal_ea, max_depth
         )
         path: list[GraphNode] = [
             {"addr": hex(node), "name": _func_name(node), "depth": i}

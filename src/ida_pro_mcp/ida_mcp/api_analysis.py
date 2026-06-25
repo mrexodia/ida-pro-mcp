@@ -17,10 +17,13 @@ import idaapi
 import idautils
 
 from . import compat
+from .errors import InvalidArgumentError
 from .rpc import safety, title, tool
 from .sync import idasync, tool_timeout
 from .utils import (
     parse_address,
+    get_cached_cfunc,
+    iter_func_call_edges,
     normalize_list_input,
     normalize_dict_list,
     get_function,
@@ -207,6 +210,7 @@ class CalleesResult(TypedDict, total=False):
     addr: str
     callees: list[CalleeResultItem] | None
     more: bool
+    has_indirect: bool
     error: str
 
 
@@ -773,19 +777,26 @@ RETURNS: {addr, code, refs?, error?}. `code` is null with `error` set when decom
 PRO-TIP: Keep `include_addresses=true` while exploring so you can copy a `/*0xNNNN*/` marker straight into `disasm`/`xrefs_to`; flip it off only for a final clean read. PITFALL: this takes one address, not a list -- call it once per function."""
     try:
         start = parse_address(addr)
+        # SINGLE-PASS: decompile once via the per-IDB cfunc cache, then derive
+        # BOTH the pseudocode text and the referenced-object `refs` from that one
+        # cfunc. decompile_function_safe() is backed by the same cache (keyed on
+        # the enclosing function's start_ea), so the text render reuses this exact
+        # decompilation rather than triggering a second Hex-Rays pass.
+        cfunc, cf_err = get_cached_cfunc(start)
+        if cfunc is None:
+            return {
+                "addr": addr,
+                "code": None,
+                "error": cf_err or "Decompilation failed",
+            }
         code, err = decompile_function_safe(start, include_addresses=include_addresses)
         if code is None:
             return {"addr": addr, "code": None, "error": err or "Decompilation failed"}
         result: DecompileResult = {"addr": addr, "code": code}
         try:
-            import ida_hexrays
-
-            if ida_hexrays.init_hexrays_plugin():
-                cfunc = ida_hexrays.decompile(start)
-                if cfunc:
-                    refs = _collect_decompile_refs(cfunc)
-                    if refs:
-                        result["refs"] = refs
+            refs = _collect_decompile_refs(cfunc)
+            if refs:
+                result["refs"] = refs
         except Exception:
             pass
         return result
@@ -1604,54 +1615,49 @@ PRO-TIP: The 'external' tag quickly surfaces which API/imports a function leans 
                     {"addr": fn_addr, "callees": None, "error": "No function found"}
                 )
                 continue
-            func_end = func.end_ea
-            callees_dict = {}
+
+            # Derive call edges from the shared chunk/tailcall/switch-aware
+            # primitive so `callees` agrees exactly with api_graph's traversal
+            # (same source of truth, transpose of `callers`). This picks up
+            # tailcalls and resolved jump-table targets that the old per-insn
+            # NN_call scan missed, and surfaces unresolved indirect sites.
+            callees_dict: dict[int, dict] = {}
+            indirect_seen = False
             more = False
-            current_ea = func_start
-            while current_ea < func_end:
+            for edge in iter_func_call_edges(func_start, "out"):
                 if len(callees_dict) >= limit:
                     more = True
                     break
-                insn = _decode_insn_at(current_ea)
-                if insn is None:
-                    next_ea = _next_head(current_ea, func_end)
-                    if next_ea == idaapi.BADADDR:
-                        break
-                    current_ea = next_ea
+                if edge.get("indirect") or edge.get("to") is None:
+                    # Unresolved indirect/virtual callsite: tag once so callers
+                    # know indirect targets exist without a per-site explosion.
+                    indirect_seen = True
                     continue
-                if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
-                    op0 = insn.ops[0]
-                    if op0.type in (ida_ua.o_mem, ida_ua.o_near, ida_ua.o_far):
-                        target = op0.addr
-                    elif op0.type == ida_ua.o_imm:
-                        target = op0.value
-                    else:
-                        target = None
-                    if target is not None and target not in callees_dict:
-                        func_type = (
-                            "internal"
-                            if idaapi.get_func(target) is not None
-                            else "external"
-                        )
-                        func_name = ida_name.get_name(target)
-                        if func_name is not None:
-                            callees_dict[target] = {
-                                "addr": hex(target),
-                                "name": func_name,
-                                "type": func_type,
-                            }
-                next_ea = _next_head(current_ea, func_end)
-                if next_ea == idaapi.BADADDR:
-                    break
-                current_ea = next_ea
-
-            results.append(
-                {
-                    "addr": fn_addr,
-                    "callees": list(callees_dict.values()),
-                    "more": more,
+                target = int(edge["to"])
+                if target in callees_dict:
+                    continue
+                func_name = edge.get("target_name") or ida_name.get_name(target)
+                if not func_name:
+                    continue
+                func_type = (
+                    "internal"
+                    if idaapi.get_func(target) is not None
+                    else "external"
+                )
+                callees_dict[target] = {
+                    "addr": hex(target),
+                    "name": func_name,
+                    "type": func_type,
                 }
-            )
+
+            entry: dict = {
+                "addr": fn_addr,
+                "callees": list(callees_dict.values()),
+                "more": more,
+            }
+            if indirect_seen:
+                entry["has_indirect"] = True
+            results.append(entry)
         except Exception as e:
             results.append({"addr": fn_addr, "callees": None, "error": str(e)})
 
@@ -1908,6 +1914,7 @@ PRO-TIP: 'immediate' tries both 4- and 8-byte encodings and back-resolves to the
             matches = []
             skipped = 0
             more = False
+            scan_error: str | None = None
             try:
                 ea = ida_ida.inf_get_min_ea()
                 max_ea = ida_ida.inf_get_max_ea()
@@ -1926,8 +1933,10 @@ PRO-TIP: 'immediate' tries both 4- and 8-byte encodings and back-resolves to the
                                 more = next_ea != idaapi.BADADDR
                                 break
                         ea += 1
-            except Exception:
-                pass
+            except Exception as e:
+                # Surface the failure instead of silently returning a partial
+                # set with error=None (the audit flagged this swallow).
+                scan_error = str(e)
 
             if ida_kernwin.user_cancelled():
                 cursor = {"next": offset + len(matches), "cancelled": True}
@@ -1941,22 +1950,48 @@ PRO-TIP: 'immediate' tries both 4- and 8-byte encodings and back-resolves to the
                     "matches": matches,
                     "count": len(matches),
                     "cursor": cursor,
-                    "error": None,
+                    "error": scan_error,
                 }
             )
 
     elif type == "immediate":
-        # Search for immediate values
+        # Search for immediate values.
+        #
+        # PAGING: `offset` is interpreted as a RESUME ADDRESS (next_start-style
+        # cursor), not a count of matches to skip. The previous implementation
+        # re-scanned from every executable segment's start each page and skipped
+        # `offset` already-seen matches -- quadratic, because cursor.next =
+        # offset+limit forced re-decoding (and re-`_resolve_immediate_insn_start`)
+        # of the entire prefix on every page. Here a page resumes exactly at the
+        # last cursor EA, so each page costs O(page) decode work. Dedup is stable
+        # *within a single scan* (seen_insn) which is all that is needed once
+        # scanning is monotonic in address.
         for value in targets:
             if isinstance(value, str):
+                raw_value = value
                 try:
                     value = int(value, 0)
                 except ValueError:
-                    value = 0
+                    # Previously coerced to 0 (a silent wrong-result swallow):
+                    # report it as a structured invalid-argument error instead.
+                    err = InvalidArgumentError(
+                        f"Not a valid immediate: {raw_value!r}"
+                    )
+                    results.append(
+                        {
+                            "query": raw_value,
+                            "matches": [],
+                            "count": 0,
+                            "cursor": {"done": True},
+                            "error": err.message,
+                        }
+                    )
+                    continue
 
-            matches = []
-            skipped = 0
+            matches: list[str] = []
             more = False
+            next_resume = 0
+            scan_error: str | None = None
             try:
                 candidates = _value_candidates_for_immediate(value)
                 if not candidates:
@@ -1971,46 +2006,79 @@ PRO-TIP: 'immediate' tries both 4- and 8-byte encodings and back-resolves to the
                     )
                     continue
 
-                seen_insn = set()
+                resume_ea = offset if offset > 0 else 0
+                seen_insn: set[int] = set()
                 for seg_ea in idautils.Segments():
+                    if more:
+                        break
                     seg = idaapi.getseg(seg_ea)
                     if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
                         continue
+                    # Skip whole segments that lie entirely before the resume EA.
+                    if resume_ea and seg.end_ea <= resume_ea:
+                        continue
+                    scan_from = max(seg.start_ea, resume_ea)
+
+                    # Collect address-ordered immediate matches in this segment by
+                    # merging the per-encoding byte searches, advancing the single
+                    # cursor that lies furthest behind on each step.
+                    cursors = []
                     for normalized, size, pattern_bytes in candidates:
-                        ea = seg.start_ea
-                        while ea != idaapi.BADADDR and ea < seg.end_ea:
-                            ea = _raw_bin_search(
-                                ea, seg.end_ea, pattern_bytes, b"\xff" * size
+                        cursors.append(
+                            {
+                                "size": size,
+                                "bytes": pattern_bytes,
+                                "mask": b"\xff" * size,
+                                "normalized": normalized,
+                                "ea": scan_from,
+                            }
+                        )
+
+                    while not more:
+                        # Find next raw byte hit for each candidate at/after its ea.
+                        best_ea = idaapi.BADADDR
+                        for c in cursors:
+                            if c["ea"] == idaapi.BADADDR or c["ea"] >= seg.end_ea:
+                                continue
+                            hit = _raw_bin_search(
+                                c["ea"], seg.end_ea, c["bytes"], c["mask"]
                             )
-                            if ea == idaapi.BADADDR:
-                                break
-
-                            insn_start = _resolve_immediate_insn_start(
-                                ea, value, seg.start_ea, normalized
-                            )
-                            if insn_start is not None and insn_start not in seen_insn:
-                                seen_insn.add(insn_start)
-                                if skipped < offset:
-                                    skipped += 1
-                                else:
-                                    matches.append(hex(insn_start))
-                                    if len(matches) >= limit:
-                                        more = True
-                                        break
-
-                            ea += 1
-
-                        if more:
+                            c["ea"] = hit if hit != idaapi.BADADDR else idaapi.BADADDR
+                            if c["ea"] != idaapi.BADADDR and c["ea"] < best_ea:
+                                best_ea = c["ea"]
+                        if best_ea == idaapi.BADADDR:
                             break
-                    if more:
-                        break
-            except Exception:
-                pass
+
+                        # The normalized (masked) encoding of whichever candidate
+                        # landed here -- preserves matching of negative immediates
+                        # whose operand value IDA reports in masked form.
+                        alt_value = next(
+                            (c["normalized"] for c in cursors if c["ea"] == best_ea),
+                            None,
+                        )
+                        insn_start = _resolve_immediate_insn_start(
+                            best_ea, value, seg.start_ea, alt_value
+                        )
+                        if insn_start is not None and insn_start not in seen_insn:
+                            seen_insn.add(insn_start)
+                            if len(matches) >= limit:
+                                more = True
+                                next_resume = best_ea
+                                break
+                            matches.append(hex(insn_start))
+
+                        # Advance every cursor sitting on best_ea past it.
+                        for c in cursors:
+                            if c["ea"] == best_ea:
+                                c["ea"] = best_ea + 1
+            except Exception as e:
+                # Surface the failure instead of silently swallowing it.
+                scan_error = str(e)
 
             if ida_kernwin.user_cancelled():
-                cursor = {"next": offset + len(matches), "cancelled": True}
+                cursor = {"next": next_resume or offset, "cancelled": True}
             elif more:
-                cursor = {"next": offset + limit}
+                cursor = {"next": next_resume}
             else:
                 cursor = {"done": True}
             results.append(
@@ -2019,7 +2087,7 @@ PRO-TIP: 'immediate' tries both 4- and 8-byte encodings and back-resolves to the
                     "matches": matches,
                     "count": len(matches),
                     "cursor": cursor,
-                    "error": None,
+                    "error": scan_error,
                 }
             )
 

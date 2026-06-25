@@ -24,6 +24,7 @@ from .utils import (
     hexrays_local_var_exists,
     read_bytes_bss_safe,
     read_int_bss_safe,
+    bump_decompile_dirty,
     StructRead,
     TypeEdit,
     TypeInspectQuery,
@@ -31,6 +32,42 @@ from .utils import (
     TypeApplyBatch,
     EnumUpsert,
 )
+
+
+def _tinfo_definite_flag() -> int:
+    """TINFO_DEFINITE flag for apply_tinfo (definitive type).
+
+    PT_SIL is a PARSE flag and is wrong to pass to apply_tinfo, whose flags are
+    the TINFO_* family. Use TINFO_DEFINITE when available; fall back to 0x1
+    (its canonical value) on older SDKs that don't expose the constant.
+    """
+    return int(getattr(ida_typeinf, "TINFO_DEFINITE", 0x1))
+
+
+def _type_stuck(ea: int, expected: ida_typeinf.tinfo_t) -> bool:
+    """Re-read the type at `ea` and confirm an applied type actually stuck.
+
+    Returns True if a type is now present at `ea` and (when comparable) matches
+    the type we just applied. Best-effort: if the re-read itself fails we return
+    False so the caller surfaces an error rather than a false success.
+    """
+    try:
+        readback = ida_typeinf.tinfo_t()
+        if not ida_nalt.get_tinfo(readback, ea):
+            return False
+        try:
+            if readback.equals_to(expected):
+                return True
+        except Exception:
+            pass
+        # Fall back to textual comparison when equals_to is unavailable or the
+        # decompiler normalised the type representation.
+        try:
+            return str(readback) == str(expected) or not readback.empty()
+        except Exception:
+            return not readback.empty()
+    except Exception:
+        return False
 
 
 class DeclareTypeResult(TypedDict, total=False):
@@ -190,6 +227,9 @@ def declare_type(
                 )
             else:
                 results.append({"decl": decl})
+                # A newly declared/changed type can alter any function's
+                # pseudocode, so invalidate the whole decompile cache.
+                bump_decompile_dirty(None)
         except Exception as e:
             results.append({"decl": decl, "error": str(e)})
 
@@ -337,6 +377,10 @@ def enum_upsert(
             if conflict_count > 0:
                 result_dict["error"] = f"{conflict_count} member conflict(s)"
             results.append(result_dict)
+            # Creating an enum or adding constants can change how the
+            # decompiler renders affected functions; drop cached pseudocode.
+            if created or created_count > 0:
+                bump_decompile_dirty(None)
         except Exception as exc:
             results.append({"name": enum_name, "error": str(exc)})
 
@@ -635,7 +679,7 @@ def type_query(
 
     # Build one local catalog and page/filter it per query.
     catalog: list[dict] = []
-    limit = ida_typeinf.get_ordinal_limit()
+    limit = compat.get_ordinal_limit()
     for ordinal in range(1, limit):
         tif = ida_typeinf.tinfo_t()
         if not tif.get_numbered_type(None, ordinal):
@@ -991,9 +1035,15 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
 
             signature = str(edit.get("signature") or type_text).strip()
             tif = _parse_function_tinfo(signature)
-            ok = ida_typeinf.apply_tinfo(func.start_ea, tif, ida_typeinf.PT_SIL)
+            ok = ida_typeinf.apply_tinfo(
+                func.start_ea, tif, _tinfo_definite_flag()
+            )
+            if ok and not _type_stuck(func.start_ea, tif):
+                ok = False
             result = {"edit": edit, "kind": kind, "ok": ok}
-            if not ok:
+            if ok:
+                bump_decompile_dirty(func.start_ea)
+            else:
                 result["error"] = (
                     f"Failed to apply function type at {hex(func.start_ea)} for signature "
                     f"{signature!r}; ensure all referenced types are declared in the local "
@@ -1017,9 +1067,13 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
                 ea = parse_address(addr_text)
 
             tif = _parse_type_tinfo(type_text)
-            ok = ida_typeinf.apply_tinfo(ea, tif, ida_typeinf.PT_SIL)
+            ok = ida_typeinf.apply_tinfo(ea, tif, _tinfo_definite_flag())
+            if ok and not _type_stuck(ea, tif):
+                ok = False
             result = {"edit": edit, "kind": kind, "ok": ok}
-            if not ok:
+            if ok:
+                bump_decompile_dirty(ea)
+            else:
                 result["error"] = (
                     f"Failed to apply global type at {hex(ea)} for type {type_text!r}"
                 )
@@ -1042,6 +1096,8 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             modifier = my_modifier_t(var_name, new_tif)
             ok = ida_hexrays.modify_user_lvars(func.start_ea, modifier)
             result = {"edit": edit, "kind": kind, "ok": ok}
+            if ok:
+                bump_decompile_dirty(func.start_ea)
             if not ok:
                 if not hexrays_local_var_exists(func.start_ea, var_name):
                     result["error"] = (
@@ -1086,6 +1142,8 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             tif = _parse_type_tinfo(type_text)
             ok = ida_frame.set_frame_member_type(func, offset, tif)
             result = {"edit": edit, "kind": kind, "ok": ok}
+            if ok:
+                bump_decompile_dirty(func.start_ea)
             if not ok:
                 result["error"] = (
                     f"Failed to set stack member type for {stack_name!r} at offset "

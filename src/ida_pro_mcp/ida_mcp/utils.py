@@ -5,6 +5,8 @@ import re
 import struct
 import sys
 import tempfile
+import threading
+import time
 from typing import (
     Annotated,
     Any,
@@ -28,7 +30,7 @@ import idaapi
 import idautils
 import idc
 
-from .sync import IDAError
+from .sync import IDAError, get_tool_deadline
 
 # ============================================================================
 # Analysis Prompt Configuration
@@ -1122,8 +1124,77 @@ def compact_whitespace(line: str) -> str:
     return lead + _STRING_OR_SPACES_RE.sub(_repl, stripped)
 
 
+# ============================================================================
+# Decompiler cfunc cache
+# ============================================================================
+#
+# decompile() previously decompiled a function TWICE per call -- once for the
+# pseudocode text and once again to collect refs. Hex-Rays decompilation is
+# the single most expensive operation in the server, so we memoise the cfunc_t
+# per function start_ea. Entries are invalidated explicitly when a tool mutates
+# the function (rename, retype, patch, ...) via bump_decompile_dirty(); a
+# module-level dirty counter lets callers cheaply detect "did anything change?"
+
+_cfunc_cache_lock = threading.RLock()
+# func_start_ea -> (cfunc_or_None, error_str_or_None)
+_cfunc_cache: dict[int, tuple[object, str | None]] = {}
+_decompile_dirty_counter = 0
+
+
+def get_decompile_dirty() -> int:
+    """Return the current decompiler dirty counter (monotonically increasing)."""
+    return _decompile_dirty_counter
+
+
+def bump_decompile_dirty(ea: int | None = None) -> int:
+    """Invalidate cached cfunc(s) and increment the dirty counter.
+
+    Call after any mutation that changes decompiler output (rename, set_type,
+    comment, asm patch, ...). `ea=None` clears the whole cache; otherwise the
+    cache entry for the *enclosing function* of `ea` is dropped. Returns the new
+    counter value. Thread-safe.
+    """
+    global _decompile_dirty_counter
+    with _cfunc_cache_lock:
+        if ea is None:
+            _cfunc_cache.clear()
+        else:
+            func = idaapi.get_func(ea)
+            key = func.start_ea if func is not None else ea
+            _cfunc_cache.pop(key, None)
+        _decompile_dirty_counter += 1
+        return _decompile_dirty_counter
+
+
+def get_cached_cfunc(ea: int) -> tuple[object, str | None]:
+    """Decompile the function containing `ea`, caching the cfunc_t.
+
+    Returns (cfunc_or_None, error_str_or_None): exactly one is non-None. The
+    cfunc is keyed by the enclosing function's start_ea so repeated calls within
+    one logical operation (text + refs) decompile only once. Errors are cached
+    too, so a function the decompiler refuses is not retried on every call until
+    bump_decompile_dirty() invalidates it. Thread-safe.
+    """
+    func = idaapi.get_func(ea)
+    key = func.start_ea if func is not None else ea
+    with _cfunc_cache_lock:
+        if key in _cfunc_cache:
+            return _cfunc_cache[key]
+    cfunc: object = None
+    err: str | None = None
+    try:
+        cfunc = decompile_checked(key)
+    except IDAError as e:
+        err = str(e)
+    except Exception as e:
+        err = f"Decompilation failed at {hex(key)}: {e}"
+    with _cfunc_cache_lock:
+        _cfunc_cache[key] = (cfunc, err)
+    return cfunc, err
+
+
 def decompile_checked(addr: int):
-    """Decompile a function and raise IDAError on failure (uses cache)"""
+    """Decompile a function and raise IDAError on failure (uncached)."""
     if not ida_hexrays.init_hexrays_plugin():
         raise IDAError("Hex-Rays decompiler is not available")
     hf = ida_hexrays.hexrays_failure_t()
@@ -1146,12 +1217,19 @@ def decompile_checked(addr: int):
 def decompile_function_safe(
     ea: int, include_addresses: bool = True
 ) -> tuple[str | None, str | None]:
-    """Safely decompile a function. Returns (code, error); exactly one is non-None."""
+    """Safely decompile a function. Returns (code, error); exactly one is non-None.
+
+    Routes through the per-IDB cfunc cache (get_cached_cfunc) so callers that
+    also need refs/lvars reuse the same decompilation instead of paying for a
+    second decompile.
+    """
     import ida_lines
     import ida_kernwin
 
     try:
-        cfunc = decompile_checked(ea)
+        cfunc, err = get_cached_cfunc(ea)
+        if cfunc is None:
+            return None, err or f"Decompilation failed at {hex(ea)}"
         sv = cfunc.get_pseudocode()
         lines = []
         for sl in sv:
@@ -1242,38 +1320,414 @@ def get_all_comments(ea: int) -> dict:
     return comments
 
 
+# ============================================================================
+# Unified call-edge classification
+# ============================================================================
+#
+# Historically `_direct_callees` followed *all* CodeRefsFrom (including
+# tail-call jmps and fallthroughs) while `_direct_callers` filtered to
+# NN_call* only. The two directions were therefore NOT transposes of each
+# other, which silently corrupted the recursive callee walk and `reaches`.
+# The helpers below are the single source of truth both directions use.
+
+CallEdgeKind = Literal["call", "tailcall", "jump", "fallthrough", "indirect"]
+
+# One classified control-flow edge, returned by iter_func_call_edges, is a
+# plain dict with these keys (declared functionally because 'from' is a
+# reserved word and cannot be a class attribute):
+#   from:        int           -- the originating instruction EA
+#   to:          int | None    -- target EA (None for unresolved indirect)
+#   kind:        str           -- one of CallEdgeKind
+#   indirect:    bool          -- True for unresolved indirect/virtual sites
+#   target_name: str | None    -- IDA name of the target, when known
+CallEdge = TypedDict(
+    "CallEdge",
+    {
+        "from": int,
+        "to": Optional[int],
+        "kind": str,
+        "indirect": bool,
+        "target_name": Optional[str],
+    },
+)
+
+
+def _insn_at(ea: int) -> Optional[idaapi.insn_t]:
+    """Decode and return the instruction at `ea`, or None if undecodable."""
+    insn = idaapi.insn_t()
+    if idaapi.decode_insn(insn, ea) <= 0:
+        return None
+    return insn
+
+
+def classify_code_edge(frm_ea: int) -> CallEdgeKind:
+    """Classify the control-flow edge originating at instruction `frm_ea`.
+
+    Returns one of {"call","tailcall","jump","fallthrough","indirect"} by
+    decoding the instruction:
+
+      * call       -- a direct call instruction (is_call_insn, resolvable
+                      operand 0 target).
+      * indirect   -- a call/jump whose target is computed (register/memory
+                      operand) and not statically resolvable to one address.
+      * tailcall   -- an unconditional jump that lands on the *start* of a
+                      different function (classic tail call).
+      * jump       -- any other jump (conditional, or jump within the same
+                      function / into a non-function-start address).
+      * fallthrough-- no branch (the instruction simply continues to the next).
+
+    Defaults to "fallthrough" when the instruction cannot be decoded.
+    """
+    insn = _insn_at(frm_ea)
+    if insn is None:
+        return "fallthrough"
+
+    op0_type = idc.get_operand_type(frm_ea, 0)
+    direct_target_op = op0_type in (idaapi.o_near, idaapi.o_far, idaapi.o_mem)
+
+    if idaapi.is_call_insn(insn):
+        # A call whose op0 is a register/computed operand is indirect; o_mem
+        # (call [rip+x]) is treated as indirect too because the real callee is
+        # the pointed-to value, not the memory address itself.
+        if op0_type in (idaapi.o_near, idaapi.o_far):
+            return "call"
+        return "indirect"
+
+    # Jump family (conditional or unconditional). itype is in the NN_j* range
+    # on x86; rather than enumerate, detect via mnemonic prefix + code ref.
+    mnem = (idc.print_insn_mnem(frm_ea) or "").lower()
+    is_jump = mnem.startswith("j") or mnem in ("b", "bl", "br", "bx", "jmp")
+    if is_jump:
+        if not direct_target_op:
+            return "indirect"
+        target = idc.get_operand_value(frm_ea, 0)
+        tfunc = idaapi.get_func(target)
+        if tfunc is not None and tfunc.start_ea == target:
+            src_func = idaapi.get_func(frm_ea)
+            if src_func is None or src_func.start_ea != tfunc.start_ea:
+                return "tailcall"
+        return "jump"
+
+    return "fallthrough"
+
+
+def _iter_func_chunk_items(func_ea: int):
+    """Yield every instruction head across ALL chunks of the function.
+
+    Uses idautils.Chunks, which enumerates the main entry chunk AND every
+    out-of-line tail (cold paths, shared tails) — unlike idautils.FuncItems
+    (main chunk only) and unlike func_tail_iterator_t.first(), which skips the
+    main chunk for a function that has no separate tails.
+    """
+    if idaapi.get_func(func_ea) is None:
+        return
+    for chunk_start, chunk_end in idautils.Chunks(func_ea):
+        ea = chunk_start
+        while ea < chunk_end and ea != idaapi.BADADDR:
+            yield ea
+            ea = idc.next_head(ea, chunk_end)
+
+
+def _switch_targets(ea: int) -> list[int]:
+    """Resolve jump-table / switch case targets at instruction `ea`.
+
+    Returns the distinct case target addresses (incl. default) when `ea` is an
+    indirect jump driven by a switch IDA has recognised; empty list otherwise.
+    """
+    try:
+        si = idaapi.get_switch_info(ea)
+    except Exception:
+        si = None
+    if si is None:
+        return []
+    targets: list[int] = []
+    try:
+        results = idaapi.calc_switch_cases(ea, si)
+    except Exception:
+        results = None
+    if results is not None:
+        try:
+            for tgt in results.targets:
+                targets.append(int(tgt))
+        except Exception:
+            pass
+    if not targets:
+        # Fallback: read the jump table directly.
+        try:
+            jtable = si.jumps
+            elsize = si.get_jtable_element_size()
+            ncases = int(si.get_jtable_size())
+            for i in range(ncases):
+                slot = jtable + i * elsize
+                val = read_int_bss_safe(slot, elsize) if elsize in (1, 2, 4, 8) else 0
+                if si.flags & idaapi.SWI_ELBASE:
+                    val += si.elbase
+                if val:
+                    targets.append(val)
+        except Exception:
+            pass
+    default = getattr(si, "defjump", idaapi.BADADDR)
+    if default not in (None, idaapi.BADADDR):
+        targets.append(int(default))
+    return _dedup_ints(targets)
+
+
+def _dedup_ints(items: list[int]) -> list[int]:
+    seen: set[int] = set()
+    out: list[int] = []
+    for it in items:
+        if it in seen:
+            continue
+        seen.add(it)
+        out.append(it)
+    return out
+
+
+def iter_func_call_edges(func_ea: int, direction: str = "out") -> list[CallEdge]:
+    """Chunk-aware, switch-aware call/jump edge enumeration for a function.
+
+    This is the single source of truth that both the callee and caller
+    directions build on, so they are exact transposes of one another.
+
+    direction:
+      * "out" -- edges leaving `func_ea`: every call/tailcall/indirect site in
+        any of the function's chunks, plus resolved switch/jump-table targets.
+        Unresolved indirect / virtual call sites are surfaced as explicit
+        edges with indirect=True and to=None.
+      * "in"  -- edges entering `func_ea`: every call/tailcall site (in any
+        caller, across that caller's chunks) whose target is `func_ea`.
+
+    Returns list of dicts: {"from": int, "to": int|None, "kind": str,
+    "indirect": bool, "target_name": str|None}. Only call/tailcall/indirect
+    edges are emitted (plain intra-function jumps and fallthroughs are not
+    call-graph edges and are filtered out).
+    """
+    func = idaapi.get_func(func_ea)
+    if func is None:
+        return []
+    start_ea = func.start_ea
+
+    def _name_for(tea: Optional[int]) -> Optional[str]:
+        if tea is None or tea == idaapi.BADADDR:
+            return None
+        nm = idc.get_name(tea)
+        return nm or None
+
+    edges: list[dict] = []
+    seen: set[tuple] = set()
+
+    def _add(frm: int, to: Optional[int], kind: str, indirect: bool):
+        key = (frm, to, kind, indirect)
+        if key in seen:
+            return
+        seen.add(key)
+        edges.append(
+            {
+                "from": frm,
+                "to": to,
+                "kind": kind,
+                "indirect": indirect,
+                "target_name": _name_for(to),
+            }
+        )
+
+    if direction == "out":
+        for item_ea in _iter_func_chunk_items(start_ea):
+            kind = classify_code_edge(item_ea)
+            if kind == "call":
+                target = idc.get_operand_value(item_ea, 0)
+                _add(item_ea, int(target), "call", False)
+            elif kind == "tailcall":
+                target = idc.get_operand_value(item_ea, 0)
+                _add(item_ea, int(target), "tailcall", False)
+            elif kind == "indirect":
+                # Try to resolve via a switch/jump table first.
+                sw_targets = _switch_targets(item_ea)
+                if sw_targets:
+                    for t in sw_targets:
+                        _add(item_ea, t, "jump", False)
+                else:
+                    _add(item_ea, None, "indirect", True)
+            # plain "jump"/"fallthrough" are not call-graph edges
+        return edges
+
+    # direction == "in": find call/tailcall sites whose target is this func.
+    for ref in idautils.CodeRefsTo(start_ea, 0):
+        kind = classify_code_edge(ref)
+        if kind not in ("call", "tailcall"):
+            continue
+        _add(int(ref), start_ea, kind, False)
+    return edges
+
+
+# ============================================================================
+# Budgeted call-tree traversal primitive
+# ============================================================================
+
+
+class WalkNode(TypedDict):
+    ea: int
+    depth: int
+    parent: Optional[int]
+    is_leaf: bool
+    is_recursive: bool
+    back_edge: bool
+
+
+def _call_neighbors(func_ea: int, direction: str) -> list[int]:
+    """Distinct neighbour function start-EAs via iter_func_call_edges.
+
+    "out" -> callee function starts (resolved direct/tailcall targets that land
+    inside a known function); "in" -> caller function starts. Indirect edges
+    with no static target are skipped here (no node to expand).
+    """
+    out: list[int] = []
+    if direction == "in":
+        for edge in iter_func_call_edges(func_ea, "in"):
+            site = edge.get("from")
+            caller = idaapi.get_func(site) if site is not None else None
+            if caller is not None:
+                out.append(caller.start_ea)
+    else:
+        for edge in iter_func_call_edges(func_ea, "out"):
+            to = edge.get("to")
+            if to is None:
+                continue
+            callee = idaapi.get_func(to)
+            if callee is not None:
+                out.append(callee.start_ea)
+    return _dedup_ints(out)
+
+
+def walk_call_tree(
+    root_ea: int,
+    *,
+    depth: int,
+    node_budget: int,
+    direction: str = "out",
+    deadline: float | None = None,
+) -> list[WalkNode]:
+    """Iterative BFS over the call graph with depth, node, and time budgets.
+
+    Replaces recursive DFS (which mislabelled depth and risked RecursionError)
+    with an explicit BFS queue. Cycle detection uses a visited set; a neighbour
+    already visited produces a back-edge node (back_edge=True) that is recorded
+    but not re-expanded, so the result still surfaces recursion without looping.
+
+    Args:
+      root_ea: function start EA to walk from (recorded at depth 0).
+      depth: max levels to descend/ascend (0 = root only). Negative clamps to 0.
+      node_budget: hard cap on distinct functions recorded; hitting it stops
+        the walk (the node that would exceed it is not added).
+      direction: "out" (callees) or "in" (callers).
+      deadline: monotonic time at which to bail; defaults to
+        get_tool_deadline(). The walk stops once time.monotonic() >= deadline.
+
+    Yields/returns list of WalkNode: {ea, depth, parent, is_leaf, is_recursive,
+    back_edge}. `is_recursive` flags a self-call (neighbour == node). A leaf is
+    a node with no expandable neighbours (or one beyond the depth bound). The
+    root has parent=None.
+
+    The shared backbone for callgraph / callees_recursive / callers_recursive /
+    reaches and future call-tree tools, so they share cycle/budget semantics.
+    """
+    if depth < 0:
+        depth = 0
+    if node_budget < 1:
+        node_budget = 1
+    if deadline is None:
+        deadline = get_tool_deadline()
+    direction = "in" if direction == "in" else "out"
+
+    def _expired() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
+    visited: set[int] = {root_ea}
+    nodes: list[WalkNode] = []
+    # frontier holds (ea, depth, parent)
+    frontier: list[tuple[int, int, Optional[int]]] = [(root_ea, 0, None)]
+
+    while frontier:
+        if _expired():
+            break
+        next_frontier: list[tuple[int, int, Optional[int]]] = []
+        for ea, d, parent in frontier:
+            if _expired():
+                break
+            neighbors = [] if d >= depth else _call_neighbors(ea, direction)
+            is_recursive = any(n == ea for n in neighbors)
+            expandable = [n for n in neighbors if n != ea]
+            is_leaf = len(expandable) == 0
+            nodes.append(
+                {
+                    "ea": ea,
+                    "depth": d,
+                    "parent": parent,
+                    "is_leaf": is_leaf,
+                    "is_recursive": is_recursive,
+                    "back_edge": False,
+                }
+            )
+            if d >= depth:
+                continue
+            for nxt in expandable:
+                if nxt in visited:
+                    # Cycle / shared subtree: record a back-edge node but do
+                    # not re-expand it.
+                    nodes.append(
+                        {
+                            "ea": nxt,
+                            "depth": d + 1,
+                            "parent": ea,
+                            "is_leaf": True,
+                            "is_recursive": False,
+                            "back_edge": True,
+                        }
+                    )
+                    continue
+                if len(visited) >= node_budget:
+                    return nodes
+                visited.add(nxt)
+                next_frontier.append((nxt, d + 1, ea))
+        frontier = next_frontier
+
+    return nodes
+
+
 def get_callees(addr: str) -> list[dict]:
-    """Get callees for a single function address"""
+    """Get callees for a single function address.
+
+    Chunk- and tail-call-aware via iter_func_call_edges. RETURN CONTRACT
+    (unchanged shape): list of {"addr","name","type"} dicts, deduplicated by
+    target. `type` is "internal" when the target lands inside a known function,
+    else "external". Unresolved indirect call sites are not included (they have
+    no named target).
+    """
     try:
         func_start = parse_address(addr)
         func = idaapi.get_func(func_start)
         if not func:
             return []
-        func_end = idc.find_func_end(func_start)
         callees: list[dict[str, str]] = []
-        current_ea = func_start
-        while current_ea < func_end:
-            insn = idaapi.insn_t()
-            idaapi.decode_insn(insn, current_ea)
-            if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
-                target = idc.get_operand_value(current_ea, 0)
-                target_type = idc.get_operand_type(current_ea, 0)
-                if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
-                    func_type = (
-                        "internal"
-                        if idaapi.get_func(target) is not None
-                        else "external"
-                    )
-                    func_name = idc.get_name(target)
-                    if func_name is not None:
-                        callees.append(
-                            {
-                                "addr": hex(target),
-                                "name": func_name,
-                                "type": func_type,
-                            }
-                        )
-            current_ea = idc.next_head(current_ea, func_end)
+        for edge in iter_func_call_edges(func_start, "out"):
+            target = edge.get("to")
+            if target is None:
+                continue
+            if edge.get("kind") not in ("call", "tailcall"):
+                continue
+            func_name = edge.get("target_name") or idc.get_name(target)
+            if not func_name:
+                continue
+            func_type = (
+                "internal" if idaapi.get_func(target) is not None else "external"
+            )
+            callees.append(
+                {
+                    "addr": hex(target),
+                    "name": func_name,
+                    "type": func_type,
+                }
+            )
 
         unique_callee_tuples = {tuple(callee.items()) for callee in callees}
         unique_callees = [dict(callee) for callee in unique_callee_tuples]
@@ -1283,28 +1737,25 @@ def get_callees(addr: str) -> list[dict]:
 
 
 def get_callers(addr: str, limit: int = 50) -> list[Function]:
-    """Get callers for a single function address"""
+    """Get callers for a single function address.
+
+    Chunk- and tail-call-aware via iter_func_call_edges. RETURN CONTRACT
+    (unchanged shape): list of Function dicts {"addr","name","size"}, one per
+    distinct calling function, capped at `limit`.
+    """
     try:
-        callers = {}
-        iterations = 0
-        max_iterations = limit * 100
-        for caller_addr in idautils.CodeRefsTo(parse_address(addr), 0):
-            iterations += 1
-            if len(callers) >= limit or iterations >= max_iterations:
+        target = parse_address(addr)
+        callers: dict[str, Function] = {}
+        for edge in iter_func_call_edges(target, "in"):
+            if len(callers) >= limit:
                 break
-            func = get_function(caller_addr, raise_error=False)
+            site = edge.get("from")
+            if site is None:
+                continue
+            func = get_function(site, raise_error=False)
             if not func:
                 continue
-            insn = idaapi.insn_t()
-            idaapi.decode_insn(insn, caller_addr)
-            if insn.itype not in [
-                idaapi.NN_call,
-                idaapi.NN_callfi,
-                idaapi.NN_callni,
-            ]:
-                continue
             callers[func["addr"]] = func
-
         return list(callers.values())
     except Exception:
         return []
