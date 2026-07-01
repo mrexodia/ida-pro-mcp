@@ -23,6 +23,7 @@ from .utils import (
     CommentOp,
     CommentAppendOp,
     AsmPatchOp,
+    FunctionFolderOp,
     FunctionRename,
     GlobalRename,
     LocalRename,
@@ -84,6 +85,28 @@ class RenameResult(TypedDict, total=False):
     local: list[RenameItemResult]
     stack: list[RenameItemResult]
     summary: RenameSummaryResult
+
+
+class OrganizeFunctionResult(TypedDict, total=False):
+    addr: str
+    ea: str
+    name: str
+    folder: str
+    created: bool
+    dry_run: bool
+    error: str
+
+
+class OrganizeFunctionsSummary(TypedDict, total=False):
+    total: int
+    ok: int
+    failed: int
+    dry_run: bool
+
+
+class OrganizeFunctionsResult(TypedDict):
+    results: list[OrganizeFunctionResult]
+    summary: OrganizeFunctionsSummary
 
 
 class DefineResult(TypedDict, total=False):
@@ -900,6 +923,208 @@ def rename(
         summary["stopped_at"] = stopped_at
     result["summary"] = summary
     return result
+
+
+def _normalize_folder_path(path: str) -> str:
+    folder = str(path or "").strip().replace("\\", "/")
+    if not folder:
+        raise ValueError("Folder path is required")
+    if folder in {".", "/"}:
+        return "/"
+
+    parts = [part for part in folder.split("/") if part]
+    if not parts:
+        return "/"
+    return "/" + "/".join(parts) + "/"
+
+
+def _dirtree_error(tree: Any, err: int) -> str:
+    try:
+        text = tree.errstr(err)
+    except Exception:
+        text = ""
+    return text or f"dirtree error {err}"
+
+
+def _ensure_function_folder(tree: Any, folder: str, create_missing: bool) -> tuple[bool, bool, str | None]:
+    if folder == "/" or tree.isdir(folder):
+        return True, False, None
+
+    if not create_missing:
+        return False, False, f"Folder does not exist: {folder}"
+
+    created = False
+    current = "/"
+    for part in [part for part in folder.split("/") if part]:
+        current = f"{current}{part}/"
+        if tree.isdir(current):
+            continue
+        err = tree.mkdir(current)
+        if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):
+            return False, created, f"mkdir {current!r} failed: {_dirtree_error(tree, err)}"
+        created = True
+    return True, created, None
+
+
+def _move_function_to_folder(tree: Any, ea: int, folder: str) -> str | None:
+    de = ida_dirtree.direntry_t()
+    de.idx = ea
+    de.isdir = False
+    cursor = tree.find_entry(de)
+    if cursor.valid():
+        items = ida_dirtree.dirtree_cursor_vec_t()
+        items.push_back(cursor)
+        err = tree.bulk_move(items, folder)
+        if err == ida_dirtree.DTE_OK:
+            return None
+
+    old_cwd = tree.getcwd()
+    try:
+        err = tree.chdir(folder)
+        if err != ida_dirtree.DTE_OK:
+            return f"chdir {folder!r} failed: {_dirtree_error(tree, err)}"
+        err = tree.link(ea)
+        if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):
+            return f"link failed: {_dirtree_error(tree, err)}"
+        return None
+    finally:
+        if old_cwd:
+            tree.chdir(old_cwd)
+
+
+@tool
+@idasync
+def organize_functions(
+    items: Annotated[
+        list[FunctionFolderOp] | FunctionFolderOp,
+        "Function folder operations: {addr, folder, create_missing?, dry_run?}",
+    ],
+) -> OrganizeFunctionsResult:
+    """Move functions into IDA function folders, creating folders by default."""
+    if isinstance(items, dict):
+        items = [items]
+
+    normalized_items = [item for item in items if isinstance(item, dict)]
+    results: list[OrganizeFunctionResult] = []
+    any_dry_run = False
+    changed = False
+
+    tree = ida_dirtree.get_std_dirtree(ida_dirtree.DIRTREE_FUNCS)
+    if tree is None:
+        for item in normalized_items:
+            results.append(
+                {
+                    "addr": str(item.get("addr", "")),
+                    "folder": str(item.get("folder", "")),
+                    "error": "Function dirtree not available",
+                }
+            )
+        return {
+            "results": results,
+            "summary": {
+                "total": len(results),
+                "ok": 0,
+                "failed": len(results),
+            },
+        }
+
+    if not tree.load():
+        for item in normalized_items:
+            results.append(
+                {
+                    "addr": str(item.get("addr", "")),
+                    "folder": str(item.get("folder", "")),
+                    "error": "Failed to load function dirtree",
+                }
+            )
+        return {
+            "results": results,
+            "summary": {
+                "total": len(results),
+                "ok": 0,
+                "failed": len(results),
+            },
+        }
+
+    for item in normalized_items:
+        addr_text = str(item.get("addr", "") or "")
+        folder_text = str(item.get("folder", "") or "")
+        dry_run = bool(item.get("dry_run", False))
+        create_missing = bool(item.get("create_missing", True))
+        any_dry_run = any_dry_run or dry_run
+
+        try:
+            folder = _normalize_folder_path(folder_text)
+        except Exception as e:
+            results.append({"addr": addr_text, "folder": folder_text, "error": str(e)})
+            continue
+
+        try:
+            ea = parse_address(addr_text)
+            func = ida_funcs.get_func(ea)
+            if func is None:
+                results.append(
+                    {
+                        "addr": addr_text,
+                        "folder": folder,
+                        "error": "Function not found",
+                    }
+                )
+                continue
+
+            start_ea = func.start_ea
+            result: OrganizeFunctionResult = {
+                "addr": addr_text,
+                "ea": hex(start_ea),
+                "name": ida_funcs.get_func_name(start_ea) or "",
+                "folder": folder,
+            }
+
+            if dry_run:
+                if not create_missing and folder != "/" and not tree.isdir(folder):
+                    result["error"] = f"Folder does not exist: {folder}"
+                else:
+                    result["dry_run"] = True
+                results.append(result)
+                continue
+
+            ok, created, error = _ensure_function_folder(tree, folder, create_missing)
+            if created:
+                result["created"] = True
+            if error:
+                result["error"] = error
+                results.append(result)
+                continue
+            if not ok:
+                result["error"] = f"Failed to prepare folder: {folder}"
+                results.append(result)
+                continue
+
+            error = _move_function_to_folder(tree, start_ea, folder)
+            if error:
+                result["error"] = error
+            else:
+                changed = True
+            results.append(result)
+        except Exception as e:
+            results.append({"addr": addr_text, "folder": folder, "error": str(e)})
+
+    if changed and not tree.save():
+        for result in results:
+            if "error" not in result and not result.get("dry_run"):
+                result["error"] = "Failed to save function dirtree"
+
+    total = len(results)
+    failed = sum(1 for result in results if "error" in result)
+    summary: OrganizeFunctionsSummary = {
+        "total": total,
+        "ok": total - failed,
+        "failed": failed,
+    }
+    if any_dry_run:
+        summary["dry_run"] = True
+
+    return {"results": results, "summary": summary}
 
 
 @tool
