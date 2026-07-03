@@ -972,9 +972,12 @@ def _move_function_to_folder(tree: Any, ea: int, folder: str) -> str | None:
     de.isdir = False
     cursor = tree.find_entry(de)
     if cursor.valid():
-        items = ida_dirtree.dirtree_cursor_vec_t()
-        items.push_back(cursor)
-        err = tree.bulk_move(items, folder)
+        # dirtree_t.bulk_move is missing from the Python bindings before IDA 9.2
+        old_path = tree.get_abspath(cursor)
+        new_path = folder + old_path.rsplit("/", 1)[-1]
+        if old_path == new_path:
+            return None
+        err = tree.rename(old_path, new_path)
         if err == ida_dirtree.DTE_OK:
             return None
 
