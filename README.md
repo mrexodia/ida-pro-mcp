@@ -178,6 +178,14 @@ For stdio-based clients, use:
 uv run idalib-mcp --stdio
 ```
 
+With Autohand Code, register that same headless stdio server from the command line:
+
+```sh
+autohand mcp add ida-pro-mcp uv run idalib-mcp --stdio
+```
+
+Add `--scope project` after `add` to keep the server configuration in the current project. See [Autohand Code](https://github.com/autohandai/code-cli/) for current installation and CLI details.
+
 Database workers are persistent: each one runs as a detached process that
 outlives the supervisor that spawned it. When a new supervisor (over stdio
 or HTTP) calls `idb_open` for a binary that is already open under a worker
