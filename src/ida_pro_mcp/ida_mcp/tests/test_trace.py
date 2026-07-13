@@ -197,6 +197,38 @@ def test_trace_idb_shutdown_flushes_pending_buffer():
 
 
 @test()
+def test_trace_idb_savebase_does_not_flush_pending_buffer():
+    """savebase must not write trace records while IDA is saving the database."""
+    _reset_trace(batch_records=100)
+    try:
+        _call_through_registry("server_health", {})
+        backend = trace._state["idb_backend"]
+        hook = trace._state["idb_hook"]
+        assert backend is not None
+        assert hook is not None
+        assert _read_stats()["segments"] == 0
+
+        flush_calls = []
+        original_flush = backend.flush
+
+        def counted_flush():
+            flush_calls.append(True)
+            return original_flush()
+
+        backend.flush = counted_flush
+        hook.savebase()
+
+        assert flush_calls == []
+        assert _read_stats()["segments"] == 0
+
+        backend.flush = original_flush
+        trace.shutdown()
+        assert _read_stats()["segments"] == 1
+    finally:
+        _teardown_trace()
+
+
+@test()
 def test_trace_idb_records_duration_and_timestamp_shape():
     """Each record has numeric duration_ms and ISO-8601 UTC timestamp."""
     _reset_trace(batch_records=1)

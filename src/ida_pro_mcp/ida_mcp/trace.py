@@ -176,7 +176,7 @@ def _ensure_atexit() -> None:
 
 
 def _install_idb_hook() -> None:
-    """Flush pending records when the IDB is saved or closed."""
+    """Install IDB lifecycle hooks for trace cleanup."""
     with _state_lock:
         if _state["idb_hook"] is not None:
             return
@@ -189,12 +189,10 @@ def _install_idb_hook() -> None:
 
     class _TraceFlushHook(ida_idp.IDB_Hooks):
         def savebase(self, *args):
-            b = backend_ref.get("idb_backend")
-            if b is not None:
-                try:
-                    b.flush()
-                except Exception:
-                    pass
+            # Do not write trace netnodes while IDA is saving the database.
+            # Reentrant IDB mutation from this hook can destabilize GUI saves;
+            # buffered records still flush on threshold, iteration, shutdown,
+            # or close.
             return 0
 
         def closebase(self, *args):
