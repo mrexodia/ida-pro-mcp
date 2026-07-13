@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "idalib": {
+      "command": "uv",
+      "args": [
+        "run",
+        "idalib-mcp",
+        "--stdio"
+      ],
+      "cwd": "."
+    }
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "name": "ida-pro",
+  "name": "ida-pro-mcp",
   "version": "0.1.0",
   "description": "AI-powered reverse engineering assistant that bridges IDA Pro with language models through MCP.",
   "mcpServers": {

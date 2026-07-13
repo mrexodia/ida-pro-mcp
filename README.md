@@ -37,21 +37,6 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
   - [Zed](https://zed.dev/)
   - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `ida-pro-mcp --config` to get the JSON config for your client.
 
-## Installation (Claude Code)
-
-To install the headless IDA Pro MCP in Claude Code:
-
-```bash
-claude plugin marketplace add mrexodia/claude-marketplace
-claude plugin install ida-pro-mcp@mrexodia
-```
-
-To update to the latest version:
-
-```bash
-claude plugin update ida-pro-mcp@mrexodia
-```
-
 **Note**: This requires having idalib activated globally and [uv](https://astral.sh/uv) installed:
 
 ```bash
@@ -59,6 +44,26 @@ claude plugin update ida-pro-mcp@mrexodia
 uv run "C:\Program Files\IDA Professional 9.3\idalib\python\py-activate-idalib.py"
 # macos
 uv run "/Applications/IDA Professional 9.3.app/Contents/MacOS/idalib/python/py-activate-idalib.py"
+```
+
+## Installation (Claude Code)
+
+To install the latest IDA Pro MCP in Claude Code:
+
+```bash
+claude plugin marketplace add mrexodia/claude-marketplace
+claude plugin uninstall ida-pro-mcp@mrexodia
+claude plugin install ida-pro-mcp@mrexodia
+```
+
+## Installation (Codex)
+
+To install the latest IDA Pro MCP in Codex:
+
+```bash
+codex plugin marketplace add mrexodia/codex-marketplace
+codex plugin remove ida-pro-mcp@mrexodia
+codex plugin add ida-pro-mcp@mrexodia
 ```
 
 ## Installation (GUI)
