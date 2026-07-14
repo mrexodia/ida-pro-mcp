@@ -380,13 +380,19 @@ def server_health() -> ServerHealthResult:
     return _build_health_payload()
 
 
+@tool
 @idasync
 def server_warmup(
-    wait_auto_analysis: bool = True,
-    build_caches: bool = True,
-    init_hexrays: bool = True,
+    wait_auto_analysis: Annotated[bool, "Wait for auto-analysis to finish before returning"] = True,
+    build_caches: Annotated[bool, "Build core caches (e.g. strings) now instead of on first use"] = True,
+    init_hexrays: Annotated[bool, "Initialize the Hex-Rays decompiler"] = True,
 ) -> ServerWarmupResult:
-    """Warm up IDA subsystems. Called by idb_open; no longer exposed as an MCP tool."""
+    """Warm up IDA subsystems (auto-analysis wait, caches, Hex-Rays).
+
+    idb_open calls this automatically, including for GUI instances it adopts
+    via mode="prefer_gui"/"force_gui". Safe to call again manually (e.g. after
+    invalidating a cache, or on a session opened before this behavior existed)
+    - each step is a cheap no-op if already warmed."""
     steps = []
 
     if wait_auto_analysis:
