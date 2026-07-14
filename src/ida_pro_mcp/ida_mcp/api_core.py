@@ -739,7 +739,17 @@ def entity_query(
         "Generic entity query with filtering, projection, and pagination",
     ],
 ) -> list[EntityQueryPage]:
-    """Query IDB entities with typed filters, projection, and pagination."""
+    """Query IDB entities with typed filters, projection, and pagination.
+
+    `total` in the response is always an exact count of every matching row,
+    which requires scanning the whole corpus - unavoidable on any binary, but
+    the per-row cost varies a lot by kind. For kind="functions" specifically,
+    omitting `fields` computes segment and has_type for every function (an
+    extra type-info probe and segment lookup each), which on a binary with
+    hundreds of thousands+ functions can turn even a small `count` into a
+    slow, multi-second-or-more call. If you don't need segment/has_type,
+    pass fields=["addr","name","size"] (or similar) to skip computing them -
+    this is often a 4x-or-more reduction in per-function work."""
     queries = normalize_dict_list(queries)
     results: list[dict] = []
 
