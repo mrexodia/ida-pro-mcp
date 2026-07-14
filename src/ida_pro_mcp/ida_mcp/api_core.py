@@ -21,7 +21,7 @@ import ida_typeinf
 import idc
 
 from .rpc import tool
-from .sync import idasync, get_tool_deadline
+from .sync import idasync, get_tool_deadline, tool_timeout
 from .utils import (
     ConvertedNumber,
     EntityQuery,
@@ -382,6 +382,7 @@ def server_health() -> ServerHealthResult:
 
 @tool
 @idasync
+@tool_timeout(600.0)
 def server_warmup(
     wait_auto_analysis: Annotated[bool, "Wait for auto-analysis to finish before returning"] = True,
     build_caches: Annotated[bool, "Build core caches (e.g. strings) now instead of on first use"] = True,
