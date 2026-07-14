@@ -34,11 +34,13 @@ from .utils import (
     Page,
     ImportQuery,
     get_function,
+    lazy_paginate_filter,
     normalize_dict_list,
     normalize_list_input,
     parse_address,
     paginate,
     pattern_filter,
+    _pattern_matcher,
 )
 
 
@@ -244,7 +246,14 @@ def _primary_text_key(kind: str) -> str:
     return "name"
 
 
-def _collect_entities(kind: str) -> list[dict]:
+def _collect_entities(kind: str, *, needs_segment: bool = True, needs_has_type: bool = True) -> list[dict]:
+    """Collect all rows for `kind`.
+
+    `needs_segment`/`needs_has_type` let callers skip the per-row segment-name
+    lookup and type-info probe for "functions" when neither the active filters
+    nor the requested output fields need them - these two calls dominate the
+    per-function cost on binaries with huge function counts.
+    """
     if kind == "functions":
         rows: list[dict] = []
         for ea in idautils.Functions():
@@ -259,8 +268,8 @@ def _collect_entities(kind: str) -> list[dict]:
                     "name": ida_funcs.get_func_name(fn.start_ea) or "<unnamed>",
                     "size": hex(size_int),
                     "size_int": size_int,
-                    "segment": _segment_name_for_ea(fn.start_ea),
-                    "has_type": bool(ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), fn.start_ea)),
+                    "segment": _segment_name_for_ea(fn.start_ea) if needs_segment else None,
+                    "has_type": bool(ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), fn.start_ea)) if needs_has_type else False,
                 }
             )
         return rows
@@ -552,7 +561,6 @@ def list_funcs(
 ) -> list[Page[Function]]:
     """List functions with optional filtering and offset/count pagination."""
     queries = normalize_dict_list(queries)
-    all_functions = [get_function(addr) for addr in idautils.Functions()]
 
     results = []
     for query in queries:
@@ -564,8 +572,22 @@ def list_funcs(
         if filter_pattern in ("", "*"):
             filter_pattern = ""
 
-        filtered = pattern_filter(all_functions, filter_pattern, "name")
-        results.append(paginate(filtered, offset, count))
+        if count == 0:
+            # Unbounded page still needs the full corpus to compute next_offset.
+            all_functions = [get_function(addr) for addr in idautils.Functions()]
+            filtered = pattern_filter(all_functions, filter_pattern, "name")
+            results.append(paginate(filtered, offset, count))
+        else:
+            results.append(
+                lazy_paginate_filter(
+                    idautils.Functions(),
+                    lambda addr: get_function(addr, raise_error=False),
+                    filter_pattern,
+                    "name",
+                    offset,
+                    count,
+                )
+            )
 
     return results
 
@@ -581,32 +603,45 @@ def func_query(
     """Query functions with richer filtering than list_funcs."""
     queries = normalize_dict_list(queries)
 
-    all_functions: list[dict] = []
-    for addr in idautils.Functions():
+    def build_row(addr: int) -> dict | None:
         fn = idaapi.get_func(addr)
         if not fn:
-            continue
+            return None
         size_int = fn.end_ea - fn.start_ea
         fn_name = ida_funcs.get_func_name(fn.start_ea) or "<unnamed>"
         has_type = ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), fn.start_ea)
-        all_functions.append(
-            {
-                "addr": hex(fn.start_ea),
-                "name": fn_name,
-                "size": hex(size_int),
-                "size_int": size_int,
-                "has_type": has_type,
-            }
-        )
+        return {
+            "addr": hex(fn.start_ea),
+            "name": fn_name,
+            "size": hex(size_int),
+            "size_int": size_int,
+            "has_type": has_type,
+        }
 
-    def apply_name_regex(items: list[dict], expr: str) -> list[dict]:
-        if not expr:
-            return items
-        try:
-            compiled = re.compile(expr)
-        except re.error:
-            return []
-        return [item for item in items if compiled.search(item["name"])]
+    def make_row_predicate(name_filter: str, name_regex: str, min_size, max_size, has_type_req) -> Any:
+        name_pred = _pattern_matcher(name_filter, "name")
+        regex_pred = None
+        if name_regex:
+            try:
+                compiled = re.compile(name_regex)
+                regex_pred = lambda item: bool(compiled.search(item["name"]))
+            except re.error:
+                regex_pred = lambda item: False
+
+        def predicate(item: dict) -> bool:
+            if not name_pred(item):
+                return False
+            if regex_pred is not None and not regex_pred(item):
+                return False
+            if min_size is not None and item["size_int"] < int(min_size):
+                return False
+            if max_size is not None and item["size_int"] > int(max_size):
+                return False
+            if has_type_req is not None and bool(item["has_type"]) is not has_type_req:
+                return False
+            return True
+
+        return predicate
 
     results = []
     for query in queries:
@@ -617,35 +652,48 @@ def func_query(
         if sort_by not in ("addr", "name", "size"):
             sort_by = "addr"
 
-        filtered = all_functions
         name_filter = query.get("filter", "")
-        if name_filter:
-            filtered = pattern_filter(filtered, name_filter, "name")
-
         name_regex = query.get("name_regex", "")
-        if name_regex:
-            filtered = apply_name_regex(filtered, name_regex)
-
         min_size = query.get("min_size")
-        if min_size is not None:
-            filtered = [f for f in filtered if f["size_int"] >= int(min_size)]
-
         max_size = query.get("max_size")
-        if max_size is not None:
-            filtered = [f for f in filtered if f["size_int"] <= int(max_size)]
+        has_type_req = bool(query.get("has_type")) if "has_type" in query else None
 
-        if "has_type" in query:
-            require_type = bool(query.get("has_type"))
-            filtered = [f for f in filtered if bool(f["has_type"]) is require_type]
+        predicate = make_row_predicate(name_filter, name_regex, min_size, max_size, has_type_req)
 
-        if sort_by == "name":
-            filtered.sort(key=lambda f: f["name"].lower(), reverse=descending)
-        elif sort_by == "size":
-            filtered.sort(key=lambda f: f["size_int"], reverse=descending)
+        # Fast path: default address-ascending order matches idautils.Functions()'s
+        # own iteration order, so we can stop once enough matches are collected
+        # instead of materializing every function up front. Sorting by name/size,
+        # descending order, or an unbounded page (count=0) all require the full
+        # corpus, so those fall back to eager evaluation.
+        if sort_by == "addr" and not descending and count != 0:
+            collected: list[dict] = []
+            skipped = 0
+            has_more = False
+            for addr in idautils.Functions():
+                row = build_row(addr)
+                if row is None or not predicate(row):
+                    continue
+                if skipped < offset:
+                    skipped += 1
+                    continue
+                if len(collected) >= count:
+                    has_more = True
+                    break
+                collected.append(row)
+            next_offset = offset + len(collected) if has_more else None
+            page = {"data": collected, "next_offset": next_offset}
         else:
-            filtered.sort(key=lambda f: int(f["addr"], 16), reverse=descending)
+            filtered = [row for row in (build_row(addr) for addr in idautils.Functions()) if row and predicate(row)]
 
-        page = paginate(filtered, offset, count)
+            if sort_by == "name":
+                filtered.sort(key=lambda f: f["name"].lower(), reverse=descending)
+            elif sort_by == "size":
+                filtered.sort(key=lambda f: f["size_int"], reverse=descending)
+            else:
+                filtered.sort(key=lambda f: int(f["addr"], 16), reverse=descending)
+
+            page = paginate(filtered, offset, count)
+
         page["data"] = [{k: v for k, v in item.items() if k != "size_int"} for item in page["data"]]
         results.append(page)
 
@@ -709,7 +757,29 @@ def entity_query(
             )
             continue
 
-        rows = _collect_entities(kind)
+        fields_raw = query.get("fields")
+        requested_fields: set[str] | None = None
+        if fields_raw is not None:
+            if isinstance(fields_raw, str):
+                requested_fields = set(normalize_list_input(fields_raw))
+            elif isinstance(fields_raw, list):
+                requested_fields = {str(f) for f in fields_raw}
+            else:
+                requested_fields = {str(fields_raw)}
+
+        sort_by = str(query.get("sort_by", "addr") or "addr")
+        segment_filter_active = bool(str(query.get("segment", "") or ""))
+        # An empty fields list means "no projection" (same as omitting it, see
+        # _apply_projection's `if not fields`), so treat it like requested_fields=None.
+        restricts_fields = bool(requested_fields)
+        needs_segment = kind != "functions" or segment_filter_active or (
+            not restricts_fields or "segment" in requested_fields
+        )
+        needs_has_type = kind != "functions" or sort_by == "has_type" or (
+            not restricts_fields or "has_type" in requested_fields
+        )
+
+        rows = _collect_entities(kind, needs_segment=needs_segment, needs_has_type=needs_has_type)
         primary_key = _primary_text_key(kind)
         filter_pattern = str(query.get("filter", "") or "")
         if filter_pattern:
@@ -747,7 +817,6 @@ def entity_query(
             except Exception:
                 rows = []
 
-        sort_by = str(query.get("sort_by", "addr") or "addr")
         descending = bool(query.get("descending", False))
         if sort_by == "addr":
             rows.sort(key=lambda row: int(str(row.get("addr", "0x0")), 16), reverse=descending)
@@ -763,17 +832,7 @@ def entity_query(
         count = int(query.get("count", 100) or 100)
         page = paginate(rows, offset, count)
         data = [{k: v for k, v in item.items() if k != "size_int"} for item in page["data"]]
-
-        fields_raw = query.get("fields")
-        fields = None
-        if fields_raw is not None:
-            if isinstance(fields_raw, str):
-                fields = normalize_list_input(fields_raw)
-            elif isinstance(fields_raw, list):
-                fields = [str(f) for f in fields_raw]
-            else:
-                fields = [str(fields_raw)]
-        data = _apply_projection(data, fields)
+        data = _apply_projection(data, list(requested_fields) if requested_fields is not None else None)
 
         results.append(
             {

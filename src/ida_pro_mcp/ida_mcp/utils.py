@@ -10,6 +10,7 @@ from typing import (
     Any,
     Callable,
     Generic,
+    Iterable,
     Literal,
     NotRequired,
     Optional,
@@ -968,6 +969,94 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
         return pattern.lower() in text.lower()
 
     return [item for item in data if matches(item)]
+
+
+def _pattern_matcher(pattern: str, key: str) -> Callable[[Any], bool]:
+    """Build a standalone predicate equivalent to pattern_filter's matching logic."""
+    if not pattern:
+        return lambda item: True
+
+    regex = None
+    use_glob = False
+
+    if pattern.startswith("/") and pattern.count("/") >= 2:
+        last_slash = pattern.rfind("/")
+        body = pattern[1:last_slash]
+        flag_str = pattern[last_slash + 1 :]
+
+        flags = 0
+        for ch in flag_str:
+            if ch == "i":
+                flags |= re.IGNORECASE
+            elif ch == "m":
+                flags |= re.MULTILINE
+            elif ch == "s":
+                flags |= re.DOTALL
+
+        try:
+            regex = re.compile(body, flags or re.IGNORECASE)
+        except re.error:
+            regex = None
+    elif "*" in pattern or "?" in pattern:
+        use_glob = True
+
+    def get_value(item) -> str:
+        try:
+            v = item[key]
+        except Exception:
+            v = getattr(item, key, "")
+        return "" if v is None else str(v)
+
+    def matches(item) -> bool:
+        text = get_value(item)
+        if regex is not None:
+            return bool(regex.search(text))
+        if use_glob:
+            return fnmatch.fnmatch(text.lower(), pattern.lower())
+        return pattern.lower() in text.lower()
+
+    return matches
+
+
+def lazy_paginate_filter(
+    addrs: Iterable[int],
+    build: Callable[[int], Optional[dict]],
+    pattern: str,
+    key: str,
+    offset: int,
+    count: int,
+) -> Page[dict]:
+    """Build, filter, and paginate items lazily, stopping once enough matches are found.
+
+    Unlike ``pattern_filter`` + ``paginate``, this avoids materializing ``build(addr)``
+    for every address up front — critical on binaries with huge function/name counts,
+    where building metadata for every item before slicing to ``count`` makes even a
+    small page cost O(total items).
+
+    ``count == 0`` still means "return everything", which requires a full scan;
+    callers that need this should use pattern_filter/paginate directly for clarity.
+    """
+    matches = _pattern_matcher(pattern, key)
+    unbounded = count == 0
+
+    collected: list[dict] = []
+    skipped = 0
+    has_more = False
+
+    for addr in addrs:
+        item = build(addr)
+        if item is None or not matches(item):
+            continue
+        if skipped < offset:
+            skipped += 1
+            continue
+        if not unbounded and len(collected) >= count:
+            has_more = True
+            break
+        collected.append(item)
+
+    next_offset = offset + len(collected) if has_more else None
+    return {"data": collected, "next_offset": next_offset}
 
 
 def refresh_decompiler_widget():
