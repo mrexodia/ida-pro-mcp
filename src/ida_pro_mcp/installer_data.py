@@ -28,6 +28,8 @@ CLIENT_ALIASES: dict[str, str] = {
     "antigravity": "Antigravity IDE",
     "boltai": "BoltAI",
     "bolt": "BoltAI",
+    "kimi": "Kimi Code",
+    "kimi-code": "Kimi Code",
 }
 
 # Project-level config definitions: name -> (subdirectory, config_file)
@@ -39,6 +41,7 @@ PROJECT_LEVEL_CONFIGS: dict[str, tuple[str, str]] = {
     "VS Code Insiders": (".vscode", "mcp.json"),
     "Windsurf": (".windsurf", "mcp.json"),
     "Zed": (".zed", "settings.json"),
+    "Kimi Code": (".kimi-code", "mcp.json"),
 }
 
 # Special JSON structures for project-level configs
@@ -55,6 +58,13 @@ GLOBAL_SPECIAL_JSON_STRUCTURES: dict[str, tuple[str | None, str]] = {
     "Visual Studio 2022": (None, "servers"),
     "Opencode": (None, "mcp"),
 }
+
+
+def kimi_code_home() -> str:
+    # Kimi Code resolves its data root from KIMI_CODE_HOME, falling back to ~/.kimi-code
+    return os.getenv("KIMI_CODE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".kimi-code"
+    )
 
 
 def get_global_configs() -> dict[str, tuple[str, str]]:
@@ -108,6 +118,7 @@ def get_global_configs() -> dict[str, tuple[str, str]]:
                 "mcp.json",
             ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
+            "Kimi Code": (kimi_code_home(), "mcp.json"),
             "Zed": (
                 os.path.join(os.getenv("APPDATA", ""), "Zed"),
                 "settings.json",
@@ -243,6 +254,7 @@ def get_global_configs() -> dict[str, tuple[str, str]]:
                 "mcp.json",
             ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
+            "Kimi Code": (kimi_code_home(), "mcp.json"),
             "Antigravity IDE": (
                 os.path.join(os.path.expanduser("~"), ".gemini", "config"),
                 "mcp_config.json",
@@ -397,6 +409,7 @@ def get_global_configs() -> dict[str, tuple[str, str]]:
                 "mcp.json",
             ),
             "Codex": (os.path.join(os.path.expanduser("~"), ".codex"), "config.toml"),
+            "Kimi Code": (kimi_code_home(), "mcp.json"),
             "Antigravity IDE": (
                 os.path.join(os.path.expanduser("~"), ".gemini", "config"),
                 "mcp_config.json",
