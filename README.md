@@ -35,6 +35,7 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
   - [Warp](https://www.warp.dev/)
   - [Windsurf](https://windsurf.com)
   - [Zed](https://zed.dev/)
+  - [Kimi Code](https://moonshotai.github.io/kimi-code/en/)
   - [Other MCP Clients](https://modelcontextprotocol.io/clients#example-clients): Run `ida-pro-mcp --config` to get the JSON config for your client.
 
 **Note**: This requires having idalib activated globally and [uv](https://astral.sh/uv) installed:
@@ -71,7 +72,7 @@ codex plugin add ida-pro-mcp@mrexodia
 To install the latest IDA Pro MCP in Kimi Code, run this slash command in the chat:
 
 ```
-/plugins install https://github.com/mrexodia/ida-pro-mcp
+/plugins install https://github.com/mrexodia/ida-pro-mcp/tree/main
 /reload
 ```
 
