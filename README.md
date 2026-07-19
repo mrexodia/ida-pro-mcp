@@ -66,6 +66,19 @@ codex plugin remove ida-pro-mcp@mrexodia
 codex plugin add ida-pro-mcp@mrexodia
 ```
 
+## Installation (Kimi Code)
+
+To install the latest IDA Pro MCP in Kimi Code, run this slash command in the chat:
+
+```
+/plugins install https://github.com/mrexodia/ida-pro-mcp
+/reload
+```
+
+This installs the `idalib` MCP server and the `idapython` skill. Plugins are copied to
+`$KIMI_CODE_HOME/plugins/managed/`, so `uv` must be on your `PATH`. The first session after
+installing is slower, because `uv` resolves the dependencies before the server responds.
+
 ## Installation (GUI)
 
 **Note**: the MCP plugin is no longer recommended and will eventually be deprecated. Use `idalib-mcp` instead.
