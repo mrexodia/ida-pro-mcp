@@ -1194,6 +1194,15 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8745, help="HTTP port, default: 8745")
     parser.add_argument("--unsafe", action="store_true", help="Enable unsafe worker tools (DANGEROUS)")
     parser.add_argument(
+        "--ext",
+        type=str,
+        default=os.environ.get("IDA_MCP_EXT", ""),
+        metavar="GROUPS",
+        help="Comma-separated extension groups to enable over stdio (e.g. 'dbg'). "
+        "HTTP transports enable these via the ?ext= query param; stdio has no URL, "
+        "so use this flag. Gated tools may also require --unsafe.",
+    )
+    parser.add_argument(
         "--profile",
         type=Path,
         default=None,
@@ -1244,6 +1253,11 @@ def main() -> None:
 
     try:
         if args.stdio:
+            if args.ext:
+                # stdio has no ?ext= query param, so enable the requested extension
+                # groups here for the (single-threaded) stdio dispatch loop. The
+                # supervisor forwards them to workers via the ?ext= URL it builds.
+                mcp._enabled_extensions.data = {g.strip() for g in args.ext.split(",") if g.strip()}
             mcp.stdio()
         else:
             mcp.serve(host=args.host, port=args.port, background=False)

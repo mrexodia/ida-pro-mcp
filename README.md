@@ -314,11 +314,27 @@ Worker controls:
 
 ## Debugger Operations (Extension)
 
-Debugger tools are hidden by default. Enable with `?ext=dbg` query parameter:
+Debugger tools are hidden by default (they are also `unsafe`). Enable them per transport:
 
-```
-http://127.0.0.1:13337/mcp?ext=dbg
-```
+- **HTTP** — add the `?ext=dbg` query parameter (and start the server with `--unsafe`):
+  ```
+  http://127.0.0.1:13337/mcp?ext=dbg
+  ```
+- **stdio** — pass `--unsafe --ext dbg` (stdio has no URL to carry `?ext=`):
+  ```
+  uv run idalib-mcp --stdio --unsafe --ext dbg
+  ```
+  `--ext` also reads the `IDA_MCP_EXT` environment variable.
+
+### Headless debugging (idalib)
+
+The debugger works fully headless via `idalib-mcp` — no IDA GUI required. `dbg_start()`
+selects the platform debugger and launches the database's own input file, blocking until
+it suspends at the entry breakpoint; `dbg_continue` / `dbg_step_*` / `dbg_run_to` likewise
+block until the debuggee next suspends (breakpoint or exit), since idalib has no UI event
+loop to drive it. Pass command-line arguments to the debuggee via the `IDA_MCP_DBG_ARGS`
+environment variable. (Attaching to an already-running process is not supported headless;
+`dbg_start` launches the input file.)
 
 **Control:**
 - `dbg_start()`: Start debugger process.
