@@ -925,6 +925,10 @@ def paginate(data: list[T], offset: int, count: int) -> Page[T]:
 def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
     if not pattern:
         return data
+    if not isinstance(pattern, str):
+        raise IDAError(
+            f"Filter pattern must be a string, got {type(pattern).__name__}"
+        )
 
     regex = None
     use_glob = False
