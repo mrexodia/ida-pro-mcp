@@ -145,10 +145,19 @@ _server_started_at = time.time()
 
 
 def _get_strings_cache() -> list[tuple[int, str]]:
-    """Get cached strings, building cache on first access."""
+    """Get cached strings, building cache on first access.
+
+    Both ASCII (C-style) and UTF-16 (wide) strings are scanned so that
+    ``find_regex`` can locate wide-char strings, which are common in Unreal
+    Engine and Windows binaries. ``idautils.Strings()`` defaults to
+    ``strtypes=[0]`` (C strings only), missing UTF-16 content — see #263.
+    """
     global _strings_cache
     if _strings_cache is None:
-        _strings_cache = [(s.ea, str(s)) for s in idautils.Strings() if s is not None]
+        strings = idautils.Strings()
+        # strtype 0 = C (ASCII/UTF-8), strtype 1 = Unicode C-Style (UTF-16).
+        strings.setup(strtypes=[0, 1])
+        _strings_cache = [(s.ea, str(s)) for s in strings if s is not None]
     return _strings_cache
 
 

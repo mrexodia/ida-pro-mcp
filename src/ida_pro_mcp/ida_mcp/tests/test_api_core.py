@@ -30,6 +30,7 @@ from ..api_core import (
     server_warmup,
     find_regex,
     search_text,
+    invalidate_strings_cache,
 )
 
 
@@ -465,6 +466,21 @@ def test_imports_query():
 @test()
 def test_find_regex():
     """find_regex can search for patterns"""
+    result = find_regex(".*")
+    assert_has_keys(result, "matches", "cursor")
+
+
+@test()
+def test_find_regex_strings_cache_includes_wide_strings():
+    """Strings cache is built with UTF-16 (strtype 1) included (#263).
+
+    Smoke test: invalidate the cache, rebuild, and confirm find_regex still
+    returns a well-formed result. The cache setup now passes
+    ``strtypes=[0, 1]`` to ``idautils.Strings().setup()`` so wide-char strings
+    are scanned alongside ASCII. Verifying actual UTF-16 hits requires a binary
+    with known wide strings (e.g. a UE4/Windows binary).
+    """
+    invalidate_strings_cache()
     result = find_regex(".*")
     assert_has_keys(result, "matches", "cursor")
 
