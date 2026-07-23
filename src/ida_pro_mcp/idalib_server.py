@@ -18,6 +18,7 @@ from ida_pro_mcp.ida_mcp.discovery import register_instance, unregister_instance
 from ida_pro_mcp.ida_mcp.http import IdaMcpHttpRequestHandler
 from ida_pro_mcp.ida_mcp.profile import apply_profile, load_profile
 from ida_pro_mcp.ida_mcp.rpc import set_download_base_url, tool
+from ida_pro_mcp.ida_mcp.sync import busy
 from ida_pro_mcp.idalib_session_manager import get_session_manager
 from ida_pro_mcp.worker_lifecycle import WorkerLifecycle
 
@@ -113,19 +114,20 @@ def idb_open(
         manager = get_session_manager()
         resolved_path = Path(input_path).resolve()
         load_started_at = time.monotonic()
-        opened_session_id = manager.open_binary(
-            resolved_path,
-            run_auto_analysis=run_auto_analysis,
-            session_id=preferred_session_id or None,
-        )
-        session = manager.activate_session(opened_session_id)
-        warmup: ServerWarmupResult | None = None
-        if build_caches or init_hexrays:
-            warmup = server_warmup(
-                wait_auto_analysis=False,
-                build_caches=build_caches,
-                init_hexrays=init_hexrays,
+        with busy("idb_open"):
+            opened_session_id = manager.open_binary(
+                resolved_path,
+                run_auto_analysis=run_auto_analysis,
+                session_id=preferred_session_id or None,
             )
+            session = manager.activate_session(opened_session_id)
+            warmup: ServerWarmupResult | None = None
+            if build_caches or init_hexrays:
+                warmup = server_warmup(
+                    wait_auto_analysis=False,
+                    build_caches=build_caches,
+                    init_hexrays=init_hexrays,
+                )
         _LIFECYCLE.set_idle_ttl(float(idle_ttl_sec), time.monotonic() - load_started_at)
         if _REGISTERED_PORT is None and _BOUND_HOST and _BOUND_PORT:
             _register_in_discovery(_BOUND_HOST, _BOUND_PORT, session.input_path)
@@ -295,6 +297,14 @@ def main():
             host=args.host,
             port=args.port,
             background=False,
+            # Serial HTTPServer would let one long-running tool call (idb_open,
+            # server_warmup on a huge binary) block every other connection —
+            # including health/ping probes — until it returns. Threaded HTTP
+            # lets those be accepted and handled concurrently; execute_sync
+            # on the IDA main thread still serializes actual IDA SDK work
+            # (see sync.py), so this only fixes the network layer, not IDA's
+            # single-threaded execution model.
+            threaded=True,
             request_handler=IdaMcpHttpRequestHandler,
         )
     finally:

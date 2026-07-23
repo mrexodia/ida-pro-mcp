@@ -623,7 +623,52 @@ class IdalibSupervisor:
         )
         return worker_stub
 
-    def _launch_gui_and_adopt(self, resolved_path: str, session_id: str) -> WorkerSession:
+    def _warmup_gui_session(
+        self,
+        session: WorkerSession,
+        *,
+        wait_auto_analysis: bool,
+        build_caches: bool,
+        init_hexrays: bool,
+    ) -> None:
+        """Best-effort warmup RPC into a GUI-backed session.
+
+        GUI instances are adopted rather than launched by idb_open, so unlike
+        headless workers they never got build_caches/run_auto_analysis/init_hexrays
+        forwarded to them - callers saw those flags silently do nothing. This
+        can genuinely take a long time on a huge binary (e.g. building the
+        strings cache cold), so failures here must not fail session creation;
+        the session is already valid and usable without a warm cache.
+        """
+        try:
+            self.call_worker_tool(
+                session,
+                "server_warmup",
+                {
+                    "wait_auto_analysis": wait_auto_analysis,
+                    "build_caches": build_caches,
+                    "init_hexrays": init_hexrays,
+                },
+                timeout=WORKER_OPEN_TIMEOUT_SEC or None,
+            )
+        except Exception as e:
+            logger.warning(
+                "Warmup failed for GUI session %s:%s (%s): %s",
+                session.host,
+                session.port,
+                session.input_path,
+                e,
+            )
+
+    def _launch_gui_and_adopt(
+        self,
+        resolved_path: str,
+        session_id: str,
+        *,
+        run_auto_analysis: bool = True,
+        build_caches: bool = True,
+        init_hexrays: bool = True,
+    ) -> WorkerSession:
         launched = _discovery.launch_gui_instance(resolved_path)
         if not launched.get("success"):
             raise RuntimeError(launched.get("error") or "Failed to launch GUI IDA process")
@@ -656,7 +701,15 @@ class IdalibSupervisor:
                 session.port,
                 resolved_path,
             )
-            return session
+
+        if build_caches or run_auto_analysis or init_hexrays:
+            self._warmup_gui_session(
+                session,
+                wait_auto_analysis=run_auto_analysis,
+                build_caches=build_caches,
+                init_hexrays=init_hexrays,
+            )
+        return session
 
     def open_session(
         self,
@@ -688,6 +741,7 @@ class IdalibSupervisor:
             elif session_id in self.sessions:
                 raise ValueError(f"Session already exists: {session_id}")
 
+            adopted_gui_session: WorkerSession | None = None
             if mode in ("prefer_gui", "force_gui"):
                 gui_instance = self._find_instance_for_path(resolved, backend="gui")
                 if gui_instance is not None:
@@ -699,8 +753,12 @@ class IdalibSupervisor:
                         session.port,
                         resolved,
                     )
-                    return session
-                if mode == "force_gui":
+                    # Defer warmup until the lock is released below - it RPCs
+                    # into the GUI instance and can run long (e.g. building
+                    # the strings cache cold on a huge binary).
+                    adopted_gui_session = session
+                    break_for_launch = False
+                elif mode == "force_gui":
                     # Drop the lock so the long-running subprocess launch + poll
                     # doesn't block other supervisor operations.
                     break_for_launch = True
@@ -717,11 +775,27 @@ class IdalibSupervisor:
                     if adopted is not None:
                         return adopted
 
-            if not break_for_launch:
+            if not break_for_launch and adopted_gui_session is None:
                 worker = self._allocate_worker_locked()
 
+        if adopted_gui_session is not None:
+            if build_caches or run_auto_analysis or init_hexrays:
+                self._warmup_gui_session(
+                    adopted_gui_session,
+                    wait_auto_analysis=run_auto_analysis,
+                    build_caches=build_caches,
+                    init_hexrays=init_hexrays,
+                )
+            return adopted_gui_session
+
         if break_for_launch:
-            return self._launch_gui_and_adopt(resolved, session_id)
+            return self._launch_gui_and_adopt(
+                resolved,
+                session_id,
+                run_auto_analysis=run_auto_analysis,
+                build_caches=build_caches,
+                init_hexrays=init_hexrays,
+            )
 
         open_timeout = (WORKER_OPEN_TIMEOUT_SEC or None) if run_auto_analysis else None
         try:
@@ -1246,7 +1320,14 @@ def main() -> None:
         if args.stdio:
             mcp.stdio()
         else:
-            mcp.serve(host=args.host, port=args.port, background=False)
+            # threaded=True: dispatch_supervisor forwards tools/call to a
+            # worker over a blocking HTTP request (_worker_rpc) and waits
+            # for its response. A serial HTTPServer would let one such
+            # forwarded call (e.g. a big.lib worker mid auto-analysis) block
+            # every other client of the gateway, including calls meant for
+            # an unrelated, idle small.lib worker. Threaded HTTP lets those
+            # be accepted and handled concurrently.
+            mcp.serve(host=args.host, port=args.port, background=False, threaded=True)
     finally:
         if supervisor is not None:
             supervisor.shutdown()

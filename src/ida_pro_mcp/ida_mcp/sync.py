@@ -69,6 +69,50 @@ def _get_tool_timeout_seconds() -> float:
         return _DEFAULT_TOOL_TIMEOUT_SEC
 
 
+# Process-wide "long operation in progress" flag. Set around idb_open /
+# server_warmup (auto-analysis, cache builds, Hex-Rays init) so callers like
+# server_health can report "busy" immediately instead of queuing behind
+# execute_sync on the IDA main thread — which won't run until the long
+# operation yields. A plain str under a Lock is enough: writers only flip it
+# at the start/end of a long op, readers just need the current value.
+_busy_lock = threading.Lock()
+_busy_reason: str | None = None
+
+
+def is_busy() -> str | None:
+    """Return the current busy reason, or None if no long operation is running."""
+    with _busy_lock:
+        return _busy_reason
+
+
+class busy:
+    """Context manager marking a process-wide long-running IDA operation.
+
+    Nests safely: only the outermost `with busy(...)` clears the flag on
+    exit, so server_warmup running inside idb_open's `with busy("idb_open")`
+    doesn't prematurely report "not busy" when its own block exits.
+    """
+
+    def __init__(self, reason: str):
+        self._reason = reason
+        self._is_outermost = False
+
+    def __enter__(self):
+        global _busy_reason
+        with _busy_lock:
+            if _busy_reason is None:
+                _busy_reason = self._reason
+                self._is_outermost = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        global _busy_reason
+        if self._is_outermost:
+            with _busy_lock:
+                _busy_reason = None
+        return False
+
+
 call_stack = queue.LifoQueue()
 
 # Thread-local: while a synchronized tool body is running, holds the batch
