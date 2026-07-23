@@ -100,7 +100,8 @@ def idb_open(
     init_hexrays: Annotated[bool, "Initialize Hex-Rays decompiler after open"] = True,
     idle_ttl_sec: Annotated[
         int,
-        "Minimum idle TTL in seconds before the headless worker self-exits.",
+        "Minimum idle TTL in seconds before the headless worker self-exits. "
+        "Use 0 (or any value <= 0) to keep the worker resident forever.",
     ] = 600,
     preferred_session_id: Annotated[
         str,
