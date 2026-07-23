@@ -1320,7 +1320,14 @@ def main() -> None:
         if args.stdio:
             mcp.stdio()
         else:
-            mcp.serve(host=args.host, port=args.port, background=False)
+            # threaded=True: dispatch_supervisor forwards tools/call to a
+            # worker over a blocking HTTP request (_worker_rpc) and waits
+            # for its response. A serial HTTPServer would let one such
+            # forwarded call (e.g. a big.lib worker mid auto-analysis) block
+            # every other client of the gateway, including calls meant for
+            # an unrelated, idle small.lib worker. Threaded HTTP lets those
+            # be accepted and handled concurrently.
+            mcp.serve(host=args.host, port=args.port, background=False, threaded=True)
     finally:
         if supervisor is not None:
             supervisor.shutdown()

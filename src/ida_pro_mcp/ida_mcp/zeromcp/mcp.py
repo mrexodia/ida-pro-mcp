@@ -600,14 +600,27 @@ class McpServer:
     def prompt(self, func: Callable) -> Callable:
         return self.prompts.method(func)
 
-    def serve(self, host: str, port: int, *, background = True, request_handler = McpHttpRequestHandler):
+    def serve(self, host: str, port: int, *, background = True, threaded = None, request_handler = McpHttpRequestHandler):
         if self._running:
             logger.info("[MCP] Server is already running")
             return
 
+        # `background` controls whether serve_forever() runs on a spawned
+        # thread or blocks the calling thread. `threaded` controls whether
+        # the HTTP layer itself can accept/handle multiple connections
+        # concurrently (ThreadingHTTPServer) or serially (HTTPServer) — the
+        # two are independent. Default threaded to background for backward
+        # compatibility (callers that didn't pass background=False keep
+        # getting ThreadingHTTPServer; callers that did pass background=False
+        # previously always got serial HTTPServer, which is what made a
+        # single long-running tool call block every other request, including
+        # health probes, until it returned).
+        if threaded is None:
+            threaded = background
+
         # Create server with deferred binding
         assert issubclass(request_handler, McpHttpRequestHandler)
-        self._http_server = (ThreadingHTTPServer if background else HTTPServer)(
+        self._http_server = (ThreadingHTTPServer if threaded else HTTPServer)(
             (host, port),
             request_handler,
             bind_and_activate=False
