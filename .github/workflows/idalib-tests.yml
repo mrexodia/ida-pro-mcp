@@ -41,6 +41,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          # Fork PRs are gated by the externally approved `approval` job above.
+          allow-unsafe-pr-checkout: true
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - uses: astral-sh/setup-uv@v7
