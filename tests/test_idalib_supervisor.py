@@ -644,19 +644,15 @@ def test_open_session_ignores_dead_workers_for_max_worker_limit(tmp_path):
         restore()
 
 
-def test_resolve_session_removes_unreachable_worker(tmp_path):
+def test_resolve_session_removes_dead_worker(tmp_path):
+    # A worker whose OS process has actually exited is reaped and reported
+    # unreachable. (Busy-but-alive workers are handled separately below.)
     sample = tmp_path / "sample.bin"
     sample.write_bytes(b"x")
     sup = _FakeSupervisor()
     session = sup.open_session(str(sample), session_id="sample")
-    unreachable = {session.session_id}
-
-    def fake_reachable(candidate):
-        if candidate.session_id in unreachable:
-            return False
-        return candidate.is_alive()
-
-    sup._session_is_reachable = fake_reachable
+    # Simulate the worker process having exited.
+    session.process = _DeadProcess()
 
     try:
         sup.resolve_session("sample")
@@ -666,7 +662,147 @@ def test_resolve_session_removes_unreachable_worker(tmp_path):
         raise AssertionError("expected RuntimeError")
 
     assert "sample" not in sup.sessions
-    assert session.process.returncode == 0
+
+
+def test_resolve_session_keeps_busy_but_alive_worker(tmp_path, monkeypatch):
+    # A worker that fails the health probe while its process is still alive is
+    # busy/wedged, NOT dead: it must be kept registered and a retryable error
+    # surfaced, never reaped. This is the core "session never lost" guarantee.
+    monkeypatch.setattr(supmod, "WORKER_HEALTH_RETRY_BACKOFF_SEC", 0.0)
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+    # Process stays alive (_FakeProcess.poll() -> None) but probe says unreachable.
+    sup._session_is_reachable = lambda candidate: False
+
+    try:
+        sup.resolve_session("sample")
+    except RuntimeError as e:
+        assert "not responding" in str(e)
+        assert "kept" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+    # Session must still be registered and the process must NOT have been killed.
+    assert "sample" in sup.sessions
+    assert session.process.returncode is None
+
+
+def test_resolve_session_retries_then_recovers_busy_worker(tmp_path, monkeypatch):
+    # If a transiently-busy worker becomes reachable on a retry, resolve_session
+    # returns it instead of erroring — no spurious session loss on a slow probe.
+    monkeypatch.setattr(supmod, "WORKER_HEALTH_RETRY_BACKOFF_SEC", 0.0)
+    monkeypatch.setattr(supmod, "WORKER_HEALTH_RETRIES", 3)
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+
+    calls = {"n": 0}
+
+    def flaky_reachable(candidate):
+        calls["n"] += 1
+        return calls["n"] >= 2  # first probe fails, second succeeds
+
+    sup._session_is_reachable = flaky_reachable
+
+    resolved = sup.resolve_session("sample")
+    assert resolved.session_id == "sample"
+    assert "sample" in sup.sessions
+
+
+def test_resolve_session_reaps_wedged_worker_after_grace(tmp_path, monkeypatch):
+    # A live worker that stays unresponsive past the wedged-grace window is
+    # declared permanently stuck and reaped, so it cannot pin a worker slot
+    # forever. (Within the window it would be kept; see the busy test above.)
+    monkeypatch.setattr(supmod, "WORKER_HEALTH_RETRY_BACKOFF_SEC", 0.0)
+    monkeypatch.setattr(supmod, "WORKER_WEDGED_GRACE_SEC", 300.0)
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+    sup._session_is_reachable = lambda candidate: False  # never responds
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(supmod.time, "monotonic", lambda: clock["t"])
+
+    # First call: marks unhealthy_since, still within grace -> kept.
+    try:
+        sup.resolve_session("sample")
+    except RuntimeError as e:
+        assert "kept" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError (kept)")
+    assert "sample" in sup.sessions
+    assert session.unhealthy_since == 1000.0
+
+    # Advance past the grace window: now reaped as wedged.
+    clock["t"] = 1000.0 + 301.0
+    try:
+        sup.resolve_session("sample")
+    except RuntimeError as e:
+        assert "wedged" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError (wedged)")
+    assert "sample" not in sup.sessions
+    assert session.process.returncode == 0  # terminated
+
+
+def test_resolve_session_grace_zero_never_reaps_live_worker(tmp_path, monkeypatch):
+    # IDA_MCP_WEDGED_GRACE_SEC<=0 means a live worker is never reaped, no matter
+    # how long it stays unresponsive — pure keep-forever for long-lived setups.
+    monkeypatch.setattr(supmod, "WORKER_HEALTH_RETRY_BACKOFF_SEC", 0.0)
+    monkeypatch.setattr(supmod, "WORKER_WEDGED_GRACE_SEC", 0.0)
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+    sup._session_is_reachable = lambda candidate: False
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(supmod.time, "monotonic", lambda: clock["t"])
+    for advance in (0.0, 10_000.0):
+        clock["t"] = 1000.0 + advance
+        try:
+            sup.resolve_session("sample")
+        except RuntimeError as e:
+            assert "kept" in str(e)
+        else:
+            raise AssertionError("expected RuntimeError (kept)")
+    assert "sample" in sup.sessions
+    assert session.process.returncode is None  # never terminated
+
+
+def test_resolve_session_recovery_clears_wedged_tracking(tmp_path, monkeypatch):
+    # Once a worker answers a probe again, its unhealthy_since stamp resets so a
+    # later blip starts a fresh grace window rather than counting stale time.
+    monkeypatch.setattr(supmod, "WORKER_HEALTH_RETRY_BACKOFF_SEC", 0.0)
+    monkeypatch.setattr(supmod, "WORKER_WEDGED_GRACE_SEC", 300.0)
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(supmod.time, "monotonic", lambda: clock["t"])
+
+    state = {"ok": False}
+    sup._session_is_reachable = lambda candidate: state["ok"]
+
+    # Unresponsive once -> stamped.
+    try:
+        sup.resolve_session("sample")
+    except RuntimeError:
+        pass
+    assert session.unhealthy_since == 1000.0
+
+    # Now healthy -> stamp cleared.
+    state["ok"] = True
+    clock["t"] = 1100.0
+    resolved = sup.resolve_session("sample")
+    assert resolved.session_id == "sample"
+    assert session.unhealthy_since is None
 
 
 def test_open_session_prunes_unreachable_existing_mapping(tmp_path):
@@ -675,16 +811,16 @@ def test_open_session_prunes_unreachable_existing_mapping(tmp_path):
     restore = _patch_discovery(instances=[], probe=False)
     try:
         sup = _FakeSupervisor()
+        # A genuinely dead worker process (poll() -> non-None) for the same path.
+        # Pruning keys off real process death, not just a failed probe.
         stale = supmod.WorkerSession(
             session_id="stale",
             input_path=str(sample.resolve()),
             filename="sample.bin",
-            process=_FakeProcess(),
+            process=_DeadProcess(),
         )
         with sup._lock:
             sup._register_session_locked(stale, str(sample.resolve()))
-
-        sup._session_is_reachable = lambda session: session.session_id != "stale" and session.is_alive()
 
         session = sup.open_session(str(sample), session_id="new")
 

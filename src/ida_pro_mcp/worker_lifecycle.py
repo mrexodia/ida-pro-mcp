@@ -64,6 +64,12 @@ class WorkerLifecycle:
 
     def set_idle_ttl(self, user_ttl_sec: float, load_time_sec: float = 0.0) -> None:
         with self._lock:
+            # A non-positive TTL means "never self-exit" — for long-lived workers
+            # the user keeps attached to across many sessions. Preserved verbatim
+            # (no MIN clamp) so check_shutdown_reason() can detect the sentinel.
+            if user_ttl_sec <= 0:
+                self.idle_ttl_sec = 0.0
+                return
             self.idle_ttl_sec = (
                 max(self.MIN_IDLE_TTL_SEC, user_ttl_sec) + max(0.0, load_time_sec)
             )
@@ -80,6 +86,10 @@ class WorkerLifecycle:
         with self._lock:
             last_req = self._last_request_at
             ttl = self.idle_ttl_sec
+        # ttl <= 0 is the "never self-exit" sentinel: the worker stays resident
+        # until explicitly stopped, regardless of idle time.
+        if ttl <= 0:
+            return None
         now = time.monotonic()
         if (now - last_req) > ttl:
             return f"no requests for {now - last_req:.1f}s"
