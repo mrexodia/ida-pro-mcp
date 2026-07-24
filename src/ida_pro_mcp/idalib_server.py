@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import signal
+import threading
 import time
 from pathlib import Path
 from typing import Annotated, Any, TypedDict
@@ -248,10 +249,19 @@ def main():
 
     def cleanup_and_exit(signum, frame):
         logger.info("Signal %s received; shutting down", signum)
-        try:
-            MCP_SERVER.stop()
-        except Exception:
-            logger.exception("MCP_SERVER.stop() failed in signal handler")
+        # MCP_SERVER.stop() blocks until serve_forever() returns, but this
+        # handler runs on the main thread — the same thread that is parked
+        # inside serve_forever() underneath this frame. Calling stop() here
+        # deadlocks the process forever (and, having flipped _running to
+        # False, turns every later stop() — watchdog TTL, repeat signals —
+        # into a no-op). Stop from a helper thread instead.
+        def _stop():
+            try:
+                MCP_SERVER.stop()
+            except Exception:
+                logger.exception("MCP_SERVER.stop() failed in signal handler")
+
+        threading.Thread(target=_stop, daemon=True, name="signal-stop").start()
 
     signal.signal(signal.SIGINT, cleanup_and_exit)
     signal.signal(signal.SIGTERM, cleanup_and_exit)
