@@ -16,6 +16,8 @@ from datetime import datetime
 import idapro
 import ida_auto
 
+from .ida_mcp.api_core import invalidate_strings_cache
+
 logger = logging.getLogger(__name__)
 
 
@@ -115,8 +117,7 @@ class IDASessionManager:
             logger.info(f"Closing session: {session_id} ({session.input_path.name})")
 
             if self._active_session_id == session_id:
-                idapro.close_database()
-                self._active_session_id = None
+                self._close_active_database()
 
             del self._sessions[session_id]
             logger.info(f"Session closed: {session_id}")
@@ -153,9 +154,7 @@ class IDASessionManager:
         with self._lock:
             logger.info(f"Closing all {len(self._sessions)} sessions")
 
-            if self._active_session_id is not None:
-                idapro.close_database()
-                self._active_session_id = None
+            self._close_active_database()
 
             self._sessions.clear()
             logger.info("All sessions closed")
@@ -171,13 +170,20 @@ class IDASessionManager:
         logger.info("Activated session %s (%s)", session_id, session.input_path.name)
 
     def _activate_database_path(self, input_path: str, run_auto_analysis: bool) -> None:
-        if self._active_session_id is not None:
-            logger.debug("Closing active database before opening %s", input_path)
-            idapro.close_database()
-            self._active_session_id = None
+        self._close_active_database()
 
         if idapro.open_database(input_path, run_auto_analysis=run_auto_analysis):
             raise RuntimeError(f"Failed to open database: {input_path}")
+
+    def _close_active_database(self) -> None:
+        if self._active_session_id is not None:
+            logger.debug("Closing active database (session: %s)", self._active_session_id)
+            idapro.close_database()
+            self._active_session_id = None
+
+        # The strings cache is process-global, so drop it on every DB change or
+        # the next binary would serve the previous one's strings.
+        invalidate_strings_cache()
 
 
 _session_manager: Optional[IDASessionManager] = None
