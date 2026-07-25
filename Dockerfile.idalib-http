@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    IDA_DIR=/opt/ida \
+    IDADIR=/opt/ida
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md /app/
+COPY src /app/src
+
+RUN pip install --no-cache-dir uv \
+    && uv pip install --system .
+
+EXPOSE 8745
+
+ENTRYPOINT ["idalib-mcp"]
+CMD ["--host", "0.0.0.0", "--port", "8745"]

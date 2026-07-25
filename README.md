@@ -206,6 +206,35 @@ hit them for an idle interval.
 
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
+### Docker (HTTP mode)
+
+Run `idalib-mcp` in a container with IDA mounted from the host:
+
+```sh
+export IDADIR=/path/to/ida-pro-9.3
+
+docker build -f Dockerfile.idalib-http -t idalib-http .
+docker run --rm -p 8745:8745 \
+  -v "$IDADIR:/opt/ida" \
+  -v "$HOME/.idapro:/root/.idapro" \
+  -v "$PWD/work:/work" \
+  idalib-http
+```
+
+Mounts:
+
+- `/opt/ida` — IDA installation directory pointed to by `$IDADIR` (required)
+- `/root/.idapro` — IDA user config with license/EULA acceptance (required)
+- `/work` — directory containing binaries to analyze
+
+Then open a binary over HTTP:
+
+```sh
+curl -sS -X POST http://127.0.0.1:8745/mcp \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"idb_open","arguments":{"input_path":"/work/binary"}}}'
+```
+
 ## Headless idalib Session Model
 
 `idalib-mcp` is a supervisor that keeps each open database in its own idalib worker process. Workers register themselves in a host-local discovery directory and outlive the supervisor that spawned them; any subsequent supervisor that wants the same path adopts the running worker. A worker self-exits when no request has hit it for its idle TTL (default 1 hour). There is no `idb_close` tool — clients that no longer care about a database simply stop using it, and only the user can close a GUI window.
