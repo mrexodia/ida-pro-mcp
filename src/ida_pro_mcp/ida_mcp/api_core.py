@@ -21,7 +21,7 @@ import ida_typeinf
 import idc
 
 from .rpc import tool
-from .sync import idasync, get_tool_deadline, tool_timeout
+from .sync import busy, idasync, is_busy, get_tool_deadline, tool_timeout
 from .utils import (
     ConvertedNumber,
     EntityQuery,
@@ -45,8 +45,9 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
-class ServerHealthResult(TypedDict):
+class ServerHealthResult(TypedDict, total=False):
     status: str
+    busy_reason: str
     uptime_sec: float
     idb_path: str | None
     module: str
@@ -374,15 +375,26 @@ def _build_health_payload() -> dict:
 
 
 @tool
-@idasync
 def server_health() -> ServerHealthResult:
-    """Health/ready probe for MCP server and current IDB state."""
+    """Health/ready probe for MCP server and current IDB state.
+
+    Returns immediately with {"status": "busy", "busy_reason": ...} while a
+    long operation (idb_open / server_warmup: auto-analysis, cache builds,
+    Hex-Rays init) is in progress, instead of queuing behind it on the IDA
+    main thread — that queue won't drain until the long operation yields, so
+    waiting for it defeats the point of a health probe."""
+    busy_reason = is_busy()
+    if busy_reason is not None:
+        return {"status": "busy", "busy_reason": busy_reason}
+    return _server_health_sync()
+
+
+@idasync
+def _server_health_sync() -> ServerHealthResult:
     return _build_health_payload()
 
 
 @tool
-@idasync
-@tool_timeout(600.0)
 def server_warmup(
     wait_auto_analysis: Annotated[bool, "Wait for auto-analysis to finish before returning"] = True,
     build_caches: Annotated[bool, "Build core caches (e.g. strings) now instead of on first use"] = True,
@@ -394,6 +406,19 @@ def server_warmup(
     via mode="prefer_gui"/"force_gui". Safe to call again manually (e.g. after
     invalidating a cache, or on a session opened before this behavior existed)
     - each step is a cheap no-op if already warmed."""
+    # Set the busy flag before submitting to execute_sync (not inside the
+    # @idasync body) so server_health can see "busy" for the entire time
+    # this call is queued on the IDA main thread, not just while it's
+    # actually executing.
+    with busy("server_warmup"):
+        return _server_warmup_sync(wait_auto_analysis, build_caches, init_hexrays)
+
+
+@idasync
+@tool_timeout(600.0)
+def _server_warmup_sync(
+    wait_auto_analysis: bool, build_caches: bool, init_hexrays: bool
+) -> ServerWarmupResult:
     steps = []
 
     if wait_auto_analysis:
