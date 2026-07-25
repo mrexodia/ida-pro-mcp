@@ -116,8 +116,15 @@ def _sync_wrapper(ff, keep_batch=False):
                 last_func_name = call_stack.get_nowait()
             except queue.Empty:
                 last_func_name = "<empty>"
-            error_str = f"Call stack is not empty while calling the function {ff.__name__} from {last_func_name}"
-            raise IDASyncError(error_str)
+            # Hand the error back through res_container rather than raising.
+            # execute_sync() discards exceptions escaping the callback, so a
+            # raise here leaves res_container empty and the requesting thread
+            # blocked forever on the res_container.get() below (issue #217).
+            res_container.put(IDASyncError(
+                f"Call stack is not empty while calling the function "
+                f"{ff.__name__} from {last_func_name}"
+            ))
+            return
 
         call_stack.put((ff.__name__))
         # Enable batch mode for all synchronized operations
