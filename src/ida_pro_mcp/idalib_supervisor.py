@@ -55,6 +55,7 @@ IDB_MANAGEMENT_TOOLS = {
 }
 WORKER_TCP_HEALTH_TIMEOUT_SEC = 0.5
 WORKER_RPC_HEALTH_TIMEOUT_SEC = 2.0
+PARTIAL_DATABASE_EXTENSIONS = (".id0", ".id1", ".id2", ".nam", ".til")
 
 # Upper bound (seconds) on how long a worker may take to open and auto-analyze a
 # binary before it is reaped and an error is returned. A malformed or hostile
@@ -289,18 +290,41 @@ class IdalibSupervisor:
             proc.wait(timeout=5)
 
     @staticmethod
-    def _cleanup_partial_database(input_path: str) -> None:
+    def _partial_database_paths(input_path: str) -> tuple[Path, ...]:
+        base = Path(input_path)
+        return tuple(
+            base.with_name(base.name + ext)
+            for ext in PARTIAL_DATABASE_EXTENSIONS
+        )
+
+    @classmethod
+    def _existing_partial_database_parts(cls, input_path: str) -> set[Path]:
+        return {
+            part
+            for part in cls._partial_database_paths(input_path)
+            if part.exists()
+        }
+
+    @classmethod
+    def _cleanup_partial_database(
+        cls,
+        input_path: str,
+        *,
+        preserve: set[Path] | None = None,
+    ) -> None:
         """Remove leftover unpacked IDA database parts after a failed/aborted open.
 
         When a worker is reaped mid-open (for example on an analysis timeout), the
         partially written .id0/.id1/.id2/.nam/.til files are left next to the input.
         IDA then rejects every subsequent open of that path with
         "database is corrupted beyond repair", turning a one-off failure into a
-        permanent one. The packed .i64/.idb (a complete saved database) is kept.
+        permanent one. The packed .i64/.idb (a complete saved database) and any
+        unpacked parts that predated this open attempt are kept.
         """
-        base = Path(input_path)
-        for ext in (".id0", ".id1", ".id2", ".nam", ".til"):
-            part = base.with_name(base.name + ext)
+        preserved = preserve or set()
+        for part in cls._partial_database_paths(input_path):
+            if part in preserved:
+                continue
             try:
                 if part.exists():
                     part.unlink()
@@ -724,6 +748,7 @@ class IdalibSupervisor:
             return self._launch_gui_and_adopt(resolved, session_id)
 
         open_timeout = (WORKER_OPEN_TIMEOUT_SEC or None) if run_auto_analysis else None
+        preexisting_parts = self._existing_partial_database_parts(resolved)
         try:
             opened = self.call_worker_tool(
                 worker,
@@ -742,7 +767,7 @@ class IdalibSupervisor:
                 raise RuntimeError(str(opened["error"]))
         except TimeoutError:
             self._terminate_worker(worker)
-            self._cleanup_partial_database(resolved)
+            self._cleanup_partial_database(resolved, preserve=preexisting_parts)
             raise RuntimeError(
                 f"idalib worker timed out after {open_timeout:.0f}s while opening and "
                 f"analyzing {resolved}. The binary may drive auto-analysis into an "
@@ -751,6 +776,7 @@ class IdalibSupervisor:
             ) from None
         except Exception:
             self._terminate_worker(worker)
+            self._cleanup_partial_database(resolved, preserve=preexisting_parts)
             raise
 
         worker_session = opened.get("session", {}) if isinstance(opened, dict) else {}
@@ -826,6 +852,7 @@ class IdalibSupervisor:
         resolved = self._resolve_gui_fallback_path(session)
         with self._lock:
             worker = self._allocate_worker_locked()
+        preexisting_parts = self._existing_partial_database_parts(resolved)
         try:
             opened = self.call_worker_tool(
                 worker,
@@ -842,6 +869,7 @@ class IdalibSupervisor:
                 raise RuntimeError(str(opened["error"]))
         except Exception:
             self._terminate_worker(worker)
+            self._cleanup_partial_database(resolved, preserve=preexisting_parts)
             raise
 
         worker_session = opened.get("session", {}) if isinstance(opened, dict) else {}

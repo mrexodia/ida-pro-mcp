@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 from ida_pro_mcp import idalib_supervisor as supmod
 
 
@@ -170,6 +172,88 @@ def test_worker_rpc_default_has_no_socket_timeout(monkeypatch):
 
     assert _FakeConnection.instances[0].timeout is None
     assert _FakeConnection.instances[1].timeout == 2.0
+
+
+def test_cleanup_partial_database_removes_only_new_parts(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"sample")
+    existing = Path(str(sample) + ".id0")
+    existing.write_bytes(b"existing database state")
+    packed = Path(str(sample) + ".i64")
+    packed.write_bytes(b"packed database")
+
+    preserved = supmod.IdalibSupervisor._existing_partial_database_parts(str(sample))
+    new_id1 = Path(str(sample) + ".id1")
+    new_id1.write_bytes(b"incomplete")
+    new_nam = Path(str(sample) + ".nam")
+    new_nam.write_bytes(b"incomplete")
+
+    supmod.IdalibSupervisor._cleanup_partial_database(
+        str(sample),
+        preserve=preserved,
+    )
+
+    assert existing.read_bytes() == b"existing database state"
+    assert not new_id1.exists()
+    assert not new_nam.exists()
+    assert packed.read_bytes() == b"packed database"
+
+
+def test_open_session_cleans_new_parts_after_worker_failure(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"sample")
+    existing = Path(str(sample) + ".id0")
+    existing.write_bytes(b"existing database state")
+    packed = Path(str(sample) + ".i64")
+    packed.write_bytes(b"packed database")
+
+    class _FailingSupervisor(_FakeSupervisor):
+        def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
+            assert arguments is not None
+            Path(arguments["input_path"] + ".id1").write_bytes(b"incomplete")
+            raise ConnectionResetError(10054, "worker reset")
+
+    sup = _FailingSupervisor()
+    with pytest.raises(ConnectionResetError):
+        sup.open_session(
+            str(sample),
+            mode="force_headless",
+            run_auto_analysis=False,
+            build_caches=False,
+            init_hexrays=False,
+        )
+
+    assert existing.read_bytes() == b"existing database state"
+    assert not Path(str(sample) + ".id1").exists()
+    assert packed.read_bytes() == b"packed database"
+
+
+def test_failed_gui_fallback_cleans_new_parts_after_worker_failure(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"sample")
+    existing = Path(str(sample) + ".id0")
+    existing.write_bytes(b"existing database state")
+
+    class _FailingSupervisor(_FakeSupervisor):
+        def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
+            assert arguments is not None
+            Path(arguments["input_path"] + ".id1").write_bytes(b"incomplete")
+            raise ConnectionResetError(10054, "worker reset")
+
+    gui_session = supmod.WorkerSession(
+        session_id="gui",
+        input_path=str(sample),
+        filename=sample.name,
+        backend="gui",
+        owned=False,
+    )
+    sup = _FailingSupervisor()
+    with pytest.raises(ConnectionResetError):
+        sup._reopen_gui_session_headless(gui_session)
+
+    assert existing.read_bytes() == b"existing database state"
+    assert not Path(str(sample) + ".id1").exists()
+
 
 def test_worker_tools_inject_database_and_filter_management_tools():
     sup = _FakeSupervisor()
