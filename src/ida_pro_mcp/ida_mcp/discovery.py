@@ -5,6 +5,7 @@ IDA plugin instances register themselves by writing JSON files to
 instances by reading these files and validating PID liveness.
 """
 
+from __future__ import annotations
 import datetime
 import glob
 import json
@@ -126,13 +127,13 @@ def probe_instance(host: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
-def discover_instances() -> list[InstanceInfo]:
+def discover_instances() -> List[InstanceInfo]:
     """Scan for registered instances, cleaning up stale entries."""
     instances_dir = get_instances_dir()
     if not os.path.isdir(instances_dir):
         return []
 
-    result: list[InstanceInfo] = []
+    result: List[InstanceInfo] = []
     pattern = os.path.join(instances_dir, "instance_*.json")
     for file_path in glob.glob(pattern):
         try:

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """IDA Pro MCP Plugin - Modular Package Version
 
 This package provides MCP (Model Context Protocol) integration for IDA Pro,

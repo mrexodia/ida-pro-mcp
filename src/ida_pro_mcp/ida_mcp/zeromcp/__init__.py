@@ -1,3 +1,4 @@
+from __future__ import annotations
 # NOTE: Vendored from zeromcp 1.3.0
 
 from .mcp import (

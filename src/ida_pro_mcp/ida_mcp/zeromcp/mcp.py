@@ -1,3 +1,4 @@
+from __future__ import annotations
 import re
 import select
 import socket
@@ -12,8 +13,12 @@ import inspect
 import logging
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer, HTTPServer
-from typing import Any, Callable, Union, Annotated, BinaryIO, NotRequired, get_origin, get_args, get_type_hints, is_typeddict
-from types import UnionType
+from typing import Any, Callable, Union, BinaryIO, get_origin, get_args, get_type_hints
+from typing_extensions import Annotated, NotRequired, is_typeddict
+try:
+    from types import UnionType  # Python 3.10+
+except ImportError:
+    UnionType = ()  # Python 3.8/3.9: | syntax not supported, never matches
 from urllib.parse import urlparse, parse_qs, urlunparse
 from io import BufferedIOBase
 
@@ -72,7 +77,7 @@ class _McpSseConnection:
 
 
 def _origin_allowed_by_policy(
-    allowed: Callable[[str], bool] | list[str] | str | None,
+    allowed: Callable[[str], bool] | List[str] | str | None,
     origin: str,
 ) -> bool:
     if not origin or allowed is None:
@@ -181,10 +186,10 @@ def _append_forwarded_port(authority: str, port: str | None) -> str:
     return authority
 
 
-def _parse_forwarded_header(forwarded: str | None) -> dict[str, str]:
+def _parse_forwarded_header(forwarded: str | None) -> Dict[str, str]:
     if not forwarded:
         return {}
-    result: dict[str, str] = {}
+    result: Dict[str, str] = {}
     first_entry = forwarded.split(",", 1)[0]
     for item in first_entry.split(";"):
         if "=" not in item:
@@ -239,7 +244,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.mcp_server: "McpServer" = getattr(server, "mcp_server")
         super().__init__(request, client_address, server)
 
-    def _parse_extensions(self, path: str) -> set[str]:
+    def _parse_extensions(self, path: str) -> Set[str]:
         """Parse ?ext=dbg,foo query param into set of enabled extensions"""
         query = parse_qs(urlparse(path).query)
         ext_param = query.get("ext", [""])[0]
@@ -301,13 +306,13 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._check_api_request():
             return
-        match urlparse(self.path).path:
-            case "/sse":
-                self._handle_sse_get()
-            case "/mcp":
-                self.send_error(405, "Method Not Allowed")
-            case _:
-                self.send_error(404, "Not Found")
+        path = urlparse(self.path).path
+        if path == "/sse":
+            self._handle_sse_get()
+        elif path == "/mcp":
+            self.send_error(405, "Method Not Allowed")
+        else:
+            self.send_error(404, "Not Found")
 
     def do_POST(self):
         if not self._check_api_request():
@@ -316,13 +321,13 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         if body is None:
             return
 
-        match urlparse(self.path).path:
-            case "/sse":
-                self._handle_sse_post(body)
-            case "/mcp":
-                self._handle_mcp_post(body)
-            case _:
-                self.send_error(404, "Not Found")
+        path = urlparse(self.path).path
+        if path == "/sse":
+            self._handle_sse_post(body)
+        elif path == "/mcp":
+            self._handle_mcp_post(body)
+        else:
+            self.send_error(404, "Not Found")
 
     def do_OPTIONS(self):
         """Handle CORS preflight requests"""
@@ -551,10 +556,10 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             send_response(200, json.dumps(response).encode("utf-8"))
 
 class McpServer:
-    def __init__(self, name: str, version = "1.0.0", *, extensions: dict[str, set[str]] | None = None):
+    def __init__(self, name: str, version = "1.0.0", *, extensions: Dict[str, Set[str]] | None = None):
         self.name = name
         self.version = version
-        self.cors_allowed_origins: Callable[[str], bool] | list[str] | str | None = self.cors_localhost
+        self.cors_allowed_origins: Callable[[str], bool] | List[str] | str | None = self.cors_localhost
         self.post_body_limit = 10 * 1024 * 1024  # 10MB
         self.tools = McpRpcRegistry()
         self.resources = McpRpcRegistry()
@@ -563,14 +568,14 @@ class McpServer:
         self._http_server: HTTPServer | None = None
         self._server_thread: threading.Thread | None = None
         self._running = False
-        self._sse_connections: dict[str, _McpSseConnection] = {}
-        self._http_sessions: dict[str, float] = {}
+        self._sse_connections: Dict[str, _McpSseConnection] = {}
+        self._http_sessions: Dict[str, float] = {}
         self._http_sessions_lock = threading.Lock()
         self.http_session_ttl_sec = 24 * 60 * 60
         self.http_session_max_count = 4096
         self._protocol_version = threading.local()
         self._transport_session_id = threading.local()
-        self._enabled_extensions = threading.local()  # set[str] per request
+        self._enabled_extensions = threading.local()  # Set[str] per request
         self._extensions_registry = extensions if extensions is not None else {}  # group -> set of tool names
         self.require_streamable_http_session = False
 
@@ -932,7 +937,7 @@ class McpServer:
                 }
 
         # No matching resource found
-        available: list[str] = [getattr(f, "__resource_uri__") for f in self.resources.methods.values()]
+        available: List[str] = [getattr(f, "__resource_uri__") for f in self.resources.methods.values()]
         return {
             "contents": [{
                 "uri": uri,
@@ -1001,7 +1006,7 @@ class McpServer:
         # Build arguments list (PromptArgument format)
         arguments = []
         for param_name, param_type in hints.items():
-            arg: dict[str, Any] = {"name": param_name}
+            arg: Dict[str, Any] = {"name": param_name}
 
             # Extract description from Annotated
             origin = get_origin(param_type)
@@ -1016,7 +1021,7 @@ class McpServer:
 
             arguments.append(arg)
 
-        schema: dict[str, Any] = {
+        schema: Dict[str, Any] = {
             "name": func_name,
             "description": (func.__doc__ or f"Prompt {func_name}").strip(),
         }
@@ -1060,14 +1065,14 @@ class McpServer:
         if origin in (Union, UnionType):
             return {"anyOf": [self._type_to_json_schema(t) for t in get_args(py_type)]}
 
-        # list[T]
+        # List[T]
         if origin is list:
             return {
                 "type": "array",
                 "items": self._type_to_json_schema(get_args(py_type)[0]),
             }
 
-        # dict[str, T]
+        # Dict[str, T]
         if origin is dict:
             return {
                 "type": "object",
@@ -1131,7 +1136,7 @@ class McpServer:
                 else:
                     properties[param_name]["default"] = param.default
 
-        schema: dict[str, Any] = {
+        schema: Dict[str, Any] = {
             "name": func_name,
             "description": (func.__doc__ or f"Call {func_name}").strip(),
             "inputSchema": {

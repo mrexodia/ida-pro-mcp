@@ -1,10 +1,13 @@
+from __future__ import annotations
 """Stack frame operations for IDA Pro MCP.
 
 This module provides batch operations for managing stack frame variables,
 including reading, creating, and deleting stack variables in functions.
 """
 
-from typing import Annotated, NotRequired, TypedDict
+from typing import TypedDict
+from typing_extensions import Annotated
+from typing_extensions import NotRequired
 import ida_typeinf
 import ida_frame
 import idaapi
@@ -26,7 +29,7 @@ from .utils import (
 
 class StackFrameResult(TypedDict):
     addr: str
-    vars: list[StackFrameVariable] | None
+    vars: List[StackFrameVariable] | None
     error: NotRequired[str]
 
 
@@ -44,8 +47,8 @@ class StackMutationResult(TypedDict):
 @tool
 @idasync
 def stack_frame(
-    addrs: Annotated[list[str] | str, "Address(es)"]
-) -> list[StackFrameResult]:
+    addrs: Annotated[List[str] | str, "Address(es)"]
+) -> List[StackFrameResult]:
     """Return stack variables for function address(es)."""
     addrs = normalize_list_input(addrs)
     results = []
@@ -64,8 +67,8 @@ def stack_frame(
 @tool
 @idasync
 def declare_stack(
-    items: list[StackVarDecl] | StackVarDecl,
-) -> list[StackMutationResult]:
+    items: List[StackVarDecl] | StackVarDecl,
+) -> List[StackMutationResult]:
     """Create stack variables from typed stack declarations."""
     items = normalize_dict_list(items)
     results = []
@@ -109,8 +112,8 @@ def declare_stack(
 @tool
 @idasync
 def delete_stack(
-    items: list[StackVarDelete] | StackVarDelete,
-) -> list[StackMutationResult]:
+    items: List[StackVarDelete] | StackVarDelete,
+) -> List[StackMutationResult]:
     """Delete stack variables by name or offset."""
 
     items = normalize_dict_list(items)

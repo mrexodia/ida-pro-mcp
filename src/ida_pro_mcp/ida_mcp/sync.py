@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 import queue
 import functools
@@ -198,7 +199,7 @@ def sync_wrapper(
             # set_cancelled() is THREAD_SAFE so firing it from a Timer
             # thread is safe.
             ida_kernwin.clr_cancelled()
-            cancel_fired_at: list[float | None] = [None]
+            cancel_fired_at: List[float | None] = [None]
             native_timer: threading.Timer | None = None
             if deadline is not None:
                 def _fire_native_cancel():

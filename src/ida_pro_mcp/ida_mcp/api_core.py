@@ -1,9 +1,12 @@
 """Core API Functions - IDB metadata and basic queries"""
 
+from __future__ import annotations
 import logging
 import re
 import time
-from typing import Annotated, Any, NotRequired, TypedDict
+from typing import Any, TypedDict
+from typing_extensions import Annotated
+from typing_extensions import NotRequired
 
 import ida_auto
 import ida_bytes
@@ -67,7 +70,7 @@ class ServerWarmupStep(TypedDict, total=False):
 
 class ServerWarmupResult(TypedDict):
     ok: bool
-    steps: list[ServerWarmupStep]
+    steps: List[ServerWarmupStep]
     health: ServerHealthResult
 
 
@@ -89,21 +92,21 @@ class FunctionQueryRow(Function, total=False):
 
 
 class FunctionQueryPage(TypedDict, total=False):
-    data: list[FunctionQueryRow]
+    data: List[FunctionQueryRow]
     next_offset: int | None
     error: str | None
 
 
 class EntityQueryPage(TypedDict, total=False):
     kind: str
-    data: list[dict[str, Any]]
+    data: List[Dict[str, Any]]
     next_offset: int | None
     total: int
     error: str | None
 
 
 class ImportsQueryPage(TypedDict):
-    data: list[Import]
+    data: List[Import]
     next_offset: int | None
 
 
@@ -115,8 +118,8 @@ class IdbSaveResult(TypedDict):
 
 class FindRegexResult(TypedDict, total=False):
     n: int
-    matches: list[dict[str, Any]]
-    cursor: dict[str, Any]
+    matches: List[Dict[str, Any]]
+    cursor: Dict[str, Any]
     error: str | None
 
 
@@ -129,22 +132,22 @@ class SearchTextHit(TypedDict, total=False):
     addr: str
     function: str
     segment: str
-    matches: list[SearchTextLine]
+    matches: List[SearchTextLine]
 
 
 class SearchTextResult(TypedDict, total=False):
     n: int
-    hits: list[SearchTextHit]
-    cursor: dict[str, Any]
+    hits: List[SearchTextHit]
+    cursor: Dict[str, Any]
     error: str
 
 
 # Cached strings list: [(ea, text), ...]
-_strings_cache: list[tuple[int, str]] | None = None
+_strings_cache: List[Tuple[int, str]] | None = None
 _server_started_at = time.time()
 
 
-def _get_strings_cache() -> list[tuple[int, str]]:
+def _get_strings_cache() -> List[Tuple[int, str]]:
     """Get cached strings, building cache on first access."""
     global _strings_cache
     if _strings_cache is None:
@@ -204,9 +207,9 @@ def _coerce_sort_number(value, default: int = 0) -> int:
         return default
 
 
-def _collect_imports() -> list[Import]:
+def _collect_imports() -> List[Import]:
     """Collect all imports in the current database."""
-    all_imports: list[Import] = []
+    all_imports: List[Import] = []
     nimps = ida_nalt.get_import_module_qty()
 
     for i in range(nimps):
@@ -244,9 +247,9 @@ def _primary_text_key(kind: str) -> str:
     return "name"
 
 
-def _collect_entities(kind: str) -> list[dict]:
+def _collect_entities(kind: str) -> List[dict]:
     if kind == "functions":
-        rows: list[dict] = []
+        rows: List[dict] = []
         for ea in idautils.Functions():
             fn = idaapi.get_func(ea)
             if not fn:
@@ -329,7 +332,7 @@ def _collect_entities(kind: str) -> list[dict]:
     return []
 
 
-def _apply_projection(items: list[dict], fields: list[str] | None) -> list[dict]:
+def _apply_projection(items: List[dict], fields: List[str] | None) -> List[dict]:
     if not fields:
         return items
     normalized = [str(f).strip() for f in fields if str(f).strip()]
@@ -433,8 +436,8 @@ def server_warmup(
 @tool
 @idasync
 def lookup_funcs(
-    queries: Annotated[list[str] | str, "Address(es) or name(s)"],
-) -> list[LookupFuncResult]:
+    queries: Annotated[List[str] | str, "Address(es) or name(s)"],
+) -> List[LookupFuncResult]:
     """Get functions by address or name (auto-detects)"""
     queries = normalize_list_input(queries)
 
@@ -476,10 +479,10 @@ def lookup_funcs(
 @tool
 def int_convert(
     inputs: Annotated[
-        list[NumberConversion] | NumberConversion,
+        List[NumberConversion] | NumberConversion,
         "Convert numbers to various formats (hex, decimal, binary, ascii)",
     ],
-) -> list[IntConvertResult]:
+) -> List[IntConvertResult]:
     """Convert numbers to different formats"""
     inputs = normalize_dict_list(inputs, lambda s: {"text": s, "size": 64})
 
@@ -546,10 +549,10 @@ def int_convert(
 @idasync
 def list_funcs(
     queries: Annotated[
-        list[ListQuery] | ListQuery,
+        List[ListQuery] | ListQuery,
         "List functions with optional filtering and pagination",
     ],
-) -> list[Page[Function]]:
+) -> List[Page[Function]]:
     """List functions with optional filtering and offset/count pagination."""
     queries = normalize_dict_list(queries)
     all_functions = [get_function(addr) for addr in idautils.Functions()]
@@ -574,14 +577,14 @@ def list_funcs(
 @idasync
 def func_query(
     queries: Annotated[
-        list[FunctionQuery] | FunctionQuery,
+        List[FunctionQuery] | FunctionQuery,
         "Richer function query (size/type/name filters + pagination)",
     ],
-) -> list[FunctionQueryPage]:
+) -> List[FunctionQueryPage]:
     """Query functions with richer filtering than list_funcs."""
     queries = normalize_dict_list(queries)
 
-    all_functions: list[dict] = []
+    all_functions: List[dict] = []
     for addr in idautils.Functions():
         fn = idaapi.get_func(addr)
         if not fn:
@@ -599,7 +602,7 @@ def func_query(
             }
         )
 
-    def apply_name_regex(items: list[dict], expr: str) -> list[dict]:
+    def apply_name_regex(items: List[dict], expr: str) -> List[dict]:
         if not expr:
             return items
         try:
@@ -656,13 +659,13 @@ def func_query(
 @idasync
 def list_globals(
     queries: Annotated[
-        list[ListQuery] | ListQuery,
+        List[ListQuery] | ListQuery,
         "List global variables with optional filtering and pagination",
     ],
-) -> list[Page[Global]]:
+) -> List[Page[Global]]:
     """List globals with optional filtering and offset/count pagination."""
     queries = normalize_dict_list(queries)
-    all_globals: list[Global] = []
+    all_globals: List[Global] = []
     for addr, name in idautils.Names():
         if not idaapi.get_func(addr) and name is not None:
             all_globals.append(Global(addr=hex(addr), name=name))
@@ -687,13 +690,13 @@ def list_globals(
 @idasync
 def entity_query(
     queries: Annotated[
-        list[EntityQuery] | EntityQuery,
+        List[EntityQuery] | EntityQuery,
         "Generic entity query with filtering, projection, and pagination",
     ],
-) -> list[EntityQueryPage]:
+) -> List[EntityQueryPage]:
     """Query IDB entities with typed filters, projection, and pagination."""
     queries = normalize_dict_list(queries)
-    results: list[dict] = []
+    results: List[dict] = []
 
     for query in queries:
         kind = str(query.get("kind", "functions") or "functions").lower()
@@ -802,10 +805,10 @@ def imports(
 @idasync
 def imports_query(
     queries: Annotated[
-        list[ImportQuery] | ImportQuery,
+        List[ImportQuery] | ImportQuery,
         "Import query with import/module filters and pagination",
     ],
-) -> list[ImportsQueryPage]:
+) -> List[ImportsQueryPage]:
     """Query imports with richer filtering than imports(offset,count)."""
     queries = normalize_dict_list(queries)
     all_imports = _collect_imports()
@@ -941,9 +944,9 @@ def _classify_hit_lines(
     want_disasm: bool,
     want_comments: bool,
     max_lines: int = 32,
-) -> list[SearchTextLine]:
+) -> List[SearchTextLine]:
     """Render the listing for `ea` once, classify each line, return matching lines."""
-    out: list[SearchTextLine] = []
+    out: List[SearchTextLine] = []
     try:
         result = ida_lines.generate_disassembly(ea, max_lines, False, False)
     except Exception:
@@ -972,9 +975,9 @@ def _classify_hit_lines(
     return out
 
 
-def _exec_segments() -> list[tuple[int, int]]:
+def _exec_segments() -> List[Tuple[int, int]]:
     """Return [(start, end)] for executable segments in address order."""
-    ranges: list[tuple[int, int]] = []
+    ranges: List[Tuple[int, int]] = []
     for seg_ea in idautils.Segments():
         seg = idaapi.getseg(seg_ea)
         if not seg:
@@ -985,8 +988,8 @@ def _exec_segments() -> list[tuple[int, int]]:
     return ranges
 
 
-def _all_segments() -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
+def _all_segments() -> List[Tuple[int, int]]:
+    ranges: List[Tuple[int, int]] = []
     for seg_ea in idautils.Segments():
         seg = idaapi.getseg(seg_ea)
         if seg:
@@ -1068,7 +1071,7 @@ def search_text(
     if end_ea <= start_ea:
         return {"n": 0, "hits": [], "cursor": {"done": True}}
 
-    hits: list[SearchTextHit] = []
+    hits: List[SearchTextHit] = []
     next_cursor: int | None = None
     cancelled = False
     # Chunk the address space into fixed-size windows and call Heads() per
@@ -1125,7 +1128,7 @@ def search_text(
                     break
             chunk_ea = chunk_end
 
-    cursor: dict[str, Any]
+    cursor: Dict[str, Any]
     if cancelled:
         cursor = {"next": hex(next_cursor), "cancelled": True}
     elif next_cursor is not None:

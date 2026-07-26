@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import re
 from itertools import islice
-from typing import Annotated, TypedDict
+from typing import TypedDict
+from typing_extensions import Annotated
 
 from .rpc import tool
 from .sync import idasync, tool_timeout
@@ -69,28 +70,28 @@ class SurveyImportEntry(TypedDict):
 
 
 class SurveyImportsByCategory(TypedDict):
-    crypto: list[SurveyImportEntry]
-    network: list[SurveyImportEntry]
-    file_io: list[SurveyImportEntry]
-    process: list[SurveyImportEntry]
-    registry: list[SurveyImportEntry]
-    other: list[SurveyImportEntry]
+    crypto: List[SurveyImportEntry]
+    network: List[SurveyImportEntry]
+    file_io: List[SurveyImportEntry]
+    process: List[SurveyImportEntry]
+    registry: List[SurveyImportEntry]
+    other: List[SurveyImportEntry]
 
 
 class SurveyCallGraphSummary(TypedDict):
     total_edges: int
     max_depth_estimate: None
-    root_functions: list[str]
+    root_functions: List[str]
     leaf_functions_count: int
 
 
 class SurveyBinaryResult(TypedDict, total=False):
     metadata: SurveyMetadata
     statistics: SurveyStatistics
-    segments: list[SurveySegmentInfo]
-    entrypoints: list[SurveyEntrypoint]
-    interesting_strings: list[SurveyInterestingString]
-    interesting_functions: list[SurveyInterestingFunction]
+    segments: List[SurveySegmentInfo]
+    entrypoints: List[SurveyEntrypoint]
+    interesting_strings: List[SurveyInterestingString]
+    interesting_functions: List[SurveyInterestingFunction]
     imports_by_category: SurveyImportsByCategory
     call_graph_summary: SurveyCallGraphSummary
     _note: str
@@ -106,7 +107,7 @@ _MAX_XREFS_PER_STRING = 200
 
 # Import category rules: keyword -> category name.
 # Order matters: first match wins.
-_IMPORT_CATEGORIES: list[tuple[str, re.Pattern[str]]] = [
+_IMPORT_CATEGORIES: List[Tuple[str, re.Pattern[str]]] = [
     ("crypto", re.compile(r"crypt|aes|sha[^r]|md5|hash|rsa|\bssl\b|\btls\b|\bcert", re.IGNORECASE)),
     ("network", re.compile(r"socket|connect|send|recv|http|url|internet|ws2|winsock", re.IGNORECASE)),
     ("process", re.compile(r"process|thread|terminate|execute|shell|pipe|virtual", re.IGNORECASE)),
@@ -153,7 +154,7 @@ def _build_metadata() -> dict:
     }
 
 
-def _build_segments() -> list[dict]:
+def _build_segments() -> List[dict]:
     import idaapi
     import idautils
     import ida_segment
@@ -180,7 +181,7 @@ def _build_segments() -> list[dict]:
     return segments
 
 
-def _build_entrypoints() -> list[dict]:
+def _build_entrypoints() -> List[dict]:
     entrypoints = []
     entry_count = compat.get_entry_qty()
     for i in range(entry_count):
@@ -191,7 +192,7 @@ def _build_entrypoints() -> list[dict]:
     return entrypoints
 
 
-def _build_statistics(func_eas: list[int], string_count: int, segment_count: int) -> dict:
+def _build_statistics(func_eas: List[int], string_count: int, segment_count: int) -> dict:
     import idaapi
     import idc
 
@@ -222,7 +223,7 @@ def _build_statistics(func_eas: list[int], string_count: int, segment_count: int
     }
 
 
-def _build_interesting_strings() -> list[dict]:
+def _build_interesting_strings() -> List[dict]:
     import idautils
 
     strings = _get_strings_cache()
@@ -230,7 +231,7 @@ def _build_interesting_strings() -> list[dict]:
     if len(strings) > _MAX_STRING_ITER:
         strings = strings[:_MAX_STRING_ITER]
 
-    scored: list[tuple[int, int, str]] = []
+    scored: List[Tuple[int, int, str]] = []
 
     for ea, s in strings:
         count = sum(1 for _ in islice(idautils.XrefsTo(ea, 0), _MAX_XREFS_PER_STRING))
@@ -270,12 +271,12 @@ def _classify_func(ea: int, func, name: str, callee_count: int) -> str:
     return "complex"
 
 
-def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[dict]:
+def _build_interesting_functions(func_eas: List[int], truncated: bool) -> List[dict]:
     import idaapi
     import idautils
     import idc
 
-    candidates: list[tuple[int, int, str, int, int]] = []
+    candidates: List[Tuple[int, int, str, int, int]] = []
 
     for ea in func_eas:
         func = idaapi.get_func(ea)
@@ -316,10 +317,10 @@ def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[d
     return result
 
 
-def _build_imports_by_category() -> dict[str, list[dict]]:
+def _build_imports_by_category() -> Dict[str, List[dict]]:
     import ida_nalt
 
-    categories: dict[str, list[dict]] = {
+    categories: Dict[str, List[dict]] = {
         "crypto": [],
         "network": [],
         "file_io": [],
@@ -332,7 +333,7 @@ def _build_imports_by_category() -> dict[str, list[dict]]:
     for i in range(nimps):
         module_name = ida_nalt.get_import_module_name(i) or "<unnamed>"
 
-        collected: list[tuple[int, str]] = []
+        collected: List[Tuple[int, str]] = []
 
         def imp_cb(ea: int, symbol_name: str | None, ordinal: int) -> bool:
             name = symbol_name if symbol_name else f"#{ordinal}"
@@ -352,12 +353,12 @@ def _build_imports_by_category() -> dict[str, list[dict]]:
     return categories
 
 
-def _build_call_graph_summary(func_eas: list[int]) -> dict:
+def _build_call_graph_summary(func_eas: List[int]) -> dict:
     import idaapi
     import idautils
 
     total_edges = 0
-    root_functions: list[str] = []
+    root_functions: List[str] = []
     leaf_count = 0
 
     for ea in func_eas:

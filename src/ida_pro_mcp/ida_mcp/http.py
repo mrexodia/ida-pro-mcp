@@ -1,3 +1,4 @@
+from __future__ import annotations
 import html
 import json
 import logging
@@ -79,15 +80,15 @@ DEFAULT_CORS_POLICY = "local"
 
 def get_cors_policy(port: int) -> str:
     """Retrieve the current CORS policy from configuration."""
-    match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
-        case "unrestricted":
-            return "*"
-        case "local":
-            return "127.0.0.1 localhost"
-        case "direct":
-            return f"http://127.0.0.1:{port} http://localhost:{port}"
-        case _:
-            return "*"
+    policy = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
+    if policy == "unrestricted":
+        return "*"
+    elif policy == "local":
+        return "127.0.0.1 localhost"
+    elif policy == "direct":
+        return f"http://127.0.0.1:{port} http://localhost:{port}"
+    else:
+        return "*"
 
 
 ORIGINAL_TOOLS = handle_enabled_tools(MCP_SERVER.tools, "enabled_tools")
@@ -99,13 +100,13 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         self.update_cors_policy()
 
     def update_cors_policy(self):
-        match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
-            case "unrestricted":
-                self.mcp_server.cors_allowed_origins = "*"
-            case "local":
-                self.mcp_server.cors_allowed_origins = self.mcp_server.cors_localhost
-            case "direct":
-                self.mcp_server.cors_allowed_origins = None
+        policy = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
+        if policy == "unrestricted":
+            self.mcp_server.cors_allowed_origins = "*"
+        elif policy == "local":
+            self.mcp_server.cors_allowed_origins = self.mcp_server.cors_localhost
+        elif policy == "direct":
+            self.mcp_server.cors_allowed_origins = None
 
     def do_POST(self):
         """Handles POST requests."""

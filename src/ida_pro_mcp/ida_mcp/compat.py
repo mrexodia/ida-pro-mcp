@@ -27,7 +27,7 @@ import ida_typeinf
 # ============================================================================
 
 
-def _parse_kernel_version(v: str) -> tuple[int, int, int]:
+def _parse_kernel_version(v: str) -> Tuple[int, int, int]:
     # Parse formats like "9.2", "9.2.0", "9.2sp1"
     nums = [int(x) for x in re.findall(r"\d+", v)]
     major = nums[0] if len(nums) > 0 else 0
@@ -36,7 +36,7 @@ def _parse_kernel_version(v: str) -> tuple[int, int, int]:
     return (major, minor, patch)
 
 
-def _check_required_apis(version: tuple[int, int, int]) -> None:
+def _check_required_apis(version: Tuple[int, int, int]) -> None:
     """
     Check that required Python APIs are available.
 
@@ -81,7 +81,7 @@ if TYPE_CHECKING:
     import ida_ida
     import ida_hexrays
 
-    IDA_VERSION: tuple[int, int, int] = cast(tuple[int, int, int], (9, 2, 0))
+    IDA_VERSION: Tuple[int, int, int] = cast(Tuple[int, int, int], (9, 2, 0))
 else:
     IDA_VERSION = _parse_kernel_version(idaapi.get_kernel_version())
 
@@ -251,7 +251,7 @@ def raw_bin_search(
 
 def make_bytes_searcher(
     pattern: str,
-) -> tuple[Callable[[int, int], int] | None, str | None]:
+) -> Tuple[Callable[[int, int], int] | None, str | None]:
     tokens = pattern.strip().split()
     if not tokens:
         return None, "Empty pattern"
@@ -321,7 +321,7 @@ def guess_tinfo(tif: ida_typeinf.tinfo_t, ea: int) -> bool:
 
 def tinfo_get_udm(
     tif: ida_typeinf.tinfo_t, name: str
-) -> tuple[int, ida_typeinf.udm_t | None]:
+) -> Tuple[int, ida_typeinf.udm_t | None]:
     """
     Get a UDM (user-defined member) from a tinfo_t by name.
 

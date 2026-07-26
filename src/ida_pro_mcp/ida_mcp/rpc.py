@@ -1,3 +1,4 @@
+from __future__ import annotations
 import json
 import os
 from typing import Any, Optional
@@ -9,8 +10,8 @@ from .zeromcp import (
     get_current_request_external_base_url,
 )
 
-MCP_UNSAFE: set[str] = set()
-MCP_EXTENSIONS: dict[str, set[str]] = {}  # group -> set of function names
+MCP_UNSAFE: Set[str] = set()
+MCP_EXTENSIONS: Dict[str, Set[str]] = {}  # group -> set of function names
 MCP_SERVER = McpServer("ida-pro-mcp", extensions=MCP_EXTENSIONS)
 
 # ============================================================================
@@ -19,7 +20,7 @@ MCP_SERVER = McpServer("ida-pro-mcp", extensions=MCP_EXTENSIONS)
 
 OUTPUT_LIMIT_MAX_CHARS = 50000
 OUTPUT_CACHE_MAX_SIZE = 100
-_output_cache: dict[str, Any] = {}
+_output_cache: Dict[str, Any] = {}
 _download_base_url: str = os.environ.get("IDA_MCP_URL", "http://127.0.0.1:13337")
 
 

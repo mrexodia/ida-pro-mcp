@@ -7,7 +7,10 @@ This module integrates sigmaker.py functionality to provide:
 - Multiple output formats: IDA, x64dbg, mask, bitmask
 """
 
-from typing import Annotated, NotRequired, TypedDict
+from __future__ import annotations
+from typing import TypedDict
+from typing_extensions import Annotated
+from typing_extensions import NotRequired
 
 import idaapi
 import ida_funcs
@@ -99,7 +102,7 @@ class MakeSigForFunctionResult(TypedDict):
 class XrefSigResult(TypedDict):
     query: str
     addr: str | None
-    signatures: list[dict] | None
+    signatures: List[dict] | None
     total_xrefs: NotRequired[int]
     error: NotRequired[str]
 
@@ -113,7 +116,7 @@ class XrefSigResult(TypedDict):
 @idasync
 def make_signature(
     addrs: Annotated[
-        list[str] | str,
+        List[str] | str,
         "Address(es) or name(s) to create unique signatures for "
         "(e.g. '0x401000', 'main', or ['0x401000', 'sub_402000'])",
     ],
@@ -129,7 +132,7 @@ def make_signature(
         int,
         "Maximum signature length in bytes before giving up (default: 1000)",
     ] = 1000,
-) -> list[MakeSigResult]:
+) -> List[MakeSigResult]:
     """Create unique byte signatures for addresses. Generates the shortest
     unique signature starting at each address by walking instructions and
     wildcarding operands. Useful for finding stable patterns that survive
@@ -140,7 +143,7 @@ def make_signature(
     maker = sm.SignatureMaker()
     addrs_list = normalize_list_input(addrs)
 
-    results: list[MakeSigResult] = []
+    results: List[MakeSigResult] = []
     for addr_str in addrs_list:
         try:
             ea = _resolve_addr(addr_str)
@@ -170,7 +173,7 @@ def make_signature(
 @idasync
 def make_signature_for_function(
     addrs: Annotated[
-        list[str] | str,
+        List[str] | str,
         "Function address(es) or name(s) to create signatures for "
         "(e.g. 'main', '0x401000', or ['main', 'sub_402000'])",
     ],
@@ -186,7 +189,7 @@ def make_signature_for_function(
         int,
         "Maximum signature length in bytes before giving up (default: 1000)",
     ] = 1000,
-) -> list[MakeSigForFunctionResult]:
+) -> List[MakeSigForFunctionResult]:
     """Create unique byte signatures for function entry points. Resolves each
     name/address to a function, then generates the shortest unique signature
     starting at the function start."""
@@ -196,7 +199,7 @@ def make_signature_for_function(
     maker = sm.SignatureMaker()
     addrs_list = normalize_list_input(addrs)
 
-    results: list[MakeSigForFunctionResult] = []
+    results: List[MakeSigForFunctionResult] = []
     for addr_str in addrs_list:
         ea = None
         try:
@@ -285,7 +288,7 @@ def make_signature_for_range(
 @idasync
 def find_xref_signatures(
     addrs: Annotated[
-        list[str] | str,
+        List[str] | str,
         "Address(es) or name(s) to find XREF signatures for "
         "(e.g. a data address referenced by code)",
     ],
@@ -301,7 +304,7 @@ def find_xref_signatures(
         int,
         "Maximum signature length in bytes (default: 250)",
     ] = 250,
-) -> list[XrefSigResult]:
+) -> List[XrefSigResult]:
     """Find signatures for code locations that reference an address. For each
     input address, finds all code cross-references TO it, generates a unique
     signature at each xref site, and returns the shortest ones. Ideal for
@@ -315,7 +318,7 @@ def find_xref_signatures(
     finder = sm.XrefFinder()
     addrs_list = normalize_list_input(addrs)
 
-    results: list[XrefSigResult] = []
+    results: List[XrefSigResult] = []
     for addr_str in addrs_list:
         ea = None
         try:

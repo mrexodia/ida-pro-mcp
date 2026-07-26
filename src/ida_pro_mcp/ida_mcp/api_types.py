@@ -1,4 +1,6 @@
-from typing import Annotated, Any, TypedDict
+from __future__ import annotations
+from typing import Any, TypedDict
+from typing_extensions import Annotated
 
 import idc
 import ida_typeinf
@@ -57,7 +59,7 @@ class EnumUpsertResult(TypedDict, total=False):
     enum_id: str
     created: bool
     bitfield: bool
-    members: list[EnumMemberUpsertResult]
+    members: List[EnumMemberUpsertResult]
     summary: EnumUpsertSummaryResult
     error: str
 
@@ -73,7 +75,7 @@ class StructMemberValueResult(TypedDict):
 class ReadStructResult(TypedDict, total=False):
     addr: str | None
     struct: str | None
-    members: list[StructMemberValueResult] | None
+    members: List[StructMemberValueResult] | None
     error: str
 
 
@@ -99,16 +101,16 @@ class TypeCatalogRow(TypedDict, total=False):
     kind: str
     declaration: str
     member_count: int
-    members: list[TypeCatalogMemberResult]
+    members: List[TypeCatalogMemberResult]
     members_truncated: bool
     related_count: int
-    related_types: list[str]
+    related_types: List[str]
     related_truncated: bool
 
 
 class TypeQueryResult(TypedDict):
     kind: str
-    data: list[TypeCatalogRow]
+    data: List[TypeCatalogRow]
     next_offset: int | None
     total: int
 
@@ -122,13 +124,13 @@ class TypeInspectResult(TypedDict, total=False):
     is_ptr: bool
     is_enum: bool
     is_udt: bool
-    members: list[TypeCatalogMemberResult] | None
+    members: List[TypeCatalogMemberResult] | None
     member_count: int
     error: str
 
 
 class SetTypeResult(TypedDict, total=False):
-    edit: dict[str, Any]
+    edit: Dict[str, Any]
     kind: str
     ok: bool
     error: str
@@ -139,7 +141,7 @@ class TypeApplyBatchResult(TypedDict):
     applied: int
     failed: int
     stopped: bool
-    results: list[SetTypeResult]
+    results: List[SetTypeResult]
 
 
 class InferTypeResult(TypedDict, total=False):
@@ -158,8 +160,8 @@ class InferTypeResult(TypedDict, total=False):
 @tool
 @idasync
 def declare_type(
-    decls: Annotated[list[str] | str, "C type declarations"],
-) -> list[DeclareTypeResult]:
+    decls: Annotated[List[str] | str, "C type declarations"],
+) -> List[DeclareTypeResult]:
     """Declare C type definitions in local type library."""
     decls = normalize_list_input(decls)
     results = []
@@ -186,10 +188,10 @@ def declare_type(
 @idasync
 def enum_upsert(
     queries: Annotated[
-        list[EnumUpsert] | EnumUpsert,
+        List[EnumUpsert] | EnumUpsert,
         "Create enums if missing and upsert enum members without destructive replacement",
     ],
-) -> list[EnumUpsertResult]:
+) -> List[EnumUpsertResult]:
     """Create or extend local enums in an idempotent way."""
     queries = normalize_dict_list(queries)
     results = []
@@ -336,8 +338,8 @@ def _parse_enum_value(value: int | str | None) -> int:
 @tool
 @idasync
 def read_struct(
-    queries: list[StructRead] | StructRead,
-) -> list[ReadStructResult]:
+    queries: List[StructRead] | StructRead,
+) -> List[ReadStructResult]:
     """Read struct fields from memory at address; auto-detect type when possible."""
 
     queries = normalize_dict_list(queries)
@@ -475,7 +477,7 @@ def search_structs(
     filter: Annotated[
         str, "Case-insensitive substring to search for in structure names"
     ],
-) -> list[SearchStructResult]:
+) -> List[SearchStructResult]:
     """Search local structs/unions by name pattern."""
     results = []
     limit = compat.get_ordinal_limit()
@@ -562,15 +564,15 @@ def _type_matches_kind(kind: str, tif: ida_typeinf.tinfo_t) -> bool:
 @idasync
 def type_query(
     queries: Annotated[
-        list[TypeQuery] | TypeQuery,
+        List[TypeQuery] | TypeQuery,
         "Type catalog query with filtering, pagination, and optional relationships",
     ],
-) -> list[TypeQueryResult]:
+) -> List[TypeQueryResult]:
     """Query local types with structured filters/projection-friendly output."""
     queries = normalize_dict_list(queries)
 
     # Build one local catalog and page/filter it per query.
-    catalog: list[dict] = []
+    catalog: List[dict] = []
     limit = ida_typeinf.get_ordinal_limit()
     for ordinal in range(1, limit):
         tif = ida_typeinf.tinfo_t()
@@ -589,7 +591,7 @@ def type_query(
             }
         )
 
-    results: list[dict] = []
+    results: List[dict] = []
     for query in queries:
         filter_pattern = str(query.get("filter", "") or "")
         kind = str(query.get("kind", "any") or "any").lower()
@@ -610,7 +612,7 @@ def type_query(
         if max_members > 4096:
             max_members = 4096
 
-        filtered: list[dict] = []
+        filtered: List[dict] = []
         for row in catalog:
             tif = row.get("_tif")
             if not isinstance(tif, ida_typeinf.tinfo_t):
@@ -629,7 +631,7 @@ def type_query(
         else:
             filtered.sort(key=lambda r: str(r.get("name", "")).lower(), reverse=descending)
 
-        output_rows: list[dict] = []
+        output_rows: List[dict] = []
         for row in filtered:
             tif = row["_tif"]
             out = {
@@ -667,7 +669,7 @@ def type_query(
                 out["members_truncated"] = members_truncated
 
             if include_relationships:
-                related: set[str] = set()
+                related: Set[str] = set()
                 if tif.is_udt():
                     udt = ida_typeinf.udt_type_data_t()
                     if tif.get_udt_details(udt):
@@ -709,10 +711,10 @@ def type_query(
 @idasync
 def type_inspect(
     queries: Annotated[
-        list[TypeInspectQuery] | TypeInspectQuery,
+        List[TypeInspectQuery] | TypeInspectQuery,
         "Inspect named types and optionally include member layout",
     ],
-) -> list[TypeInspectResult]:
+) -> List[TypeInspectResult]:
     """Inspect named types (size/kind/declaration/members)."""
     queries = normalize_dict_list(queries)
     results = []
@@ -902,7 +904,7 @@ def _infer_type_edit_kind(edit: dict) -> str:
     return "global"
 
 
-def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
+def _apply_type_edit(edit: Dict[str, Any]) -> SetTypeResult:
     try:
         kind = _infer_type_edit_kind(edit)
         type_text = _resolve_type_text(edit)
@@ -1026,7 +1028,7 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
 
 @tool
 @idasync
-def set_type(edits: list[TypeEdit] | TypeEdit) -> list[SetTypeResult]:
+def set_type(edits: List[TypeEdit] | TypeEdit) -> List[SetTypeResult]:
     """Apply types (function/global/local/stack)"""
     normalized_edits = normalize_dict_list(edits, _parse_addr_type_shorthand)
     return [_apply_type_edit(edit) for edit in normalized_edits]
@@ -1046,7 +1048,7 @@ def type_apply_batch(
     )
     stop_on_error = bool(batch.get("stop_on_error", False))
 
-    results: list[dict] = []
+    results: List[dict] = []
     for edit in normalized_edits:
         result = _apply_type_edit(edit)
         results.append(result)
@@ -1067,8 +1069,8 @@ def type_apply_batch(
 @tool
 @idasync
 def infer_types(
-    addrs: Annotated[list[str] | str, "Addresses to infer types for"],
-) -> list[InferTypeResult]:
+    addrs: Annotated[List[str] | str, "Addresses to infer types for"],
+) -> List[InferTypeResult]:
     """Infer and apply likely types at target addresses."""
     addrs = normalize_list_input(addrs)
     results = []

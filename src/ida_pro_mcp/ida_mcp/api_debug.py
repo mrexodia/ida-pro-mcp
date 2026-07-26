@@ -8,8 +8,11 @@ This module provides comprehensive debugging functionality including:
 - Call stack inspection
 """
 
+from __future__ import annotations
 import os
-from typing import Annotated, NotRequired, TypedDict
+from typing import TypedDict
+from typing_extensions import Annotated
+from typing_extensions import NotRequired
 
 import idc
 import ida_dbg
@@ -211,7 +214,7 @@ def _get_registers_general_for_thread(
 
 
 def _get_registers_specific_for_thread(
-    dbg: "ida_idd.debugger_t", tid: int, register_names: list[str]
+    dbg: "ida_idd.debugger_t", tid: int, register_names: List[str]
 ) -> ThreadRegisters:
     """Helper to get specific registers for a given thread."""
     all_registers = _get_registers_for_thread(dbg, tid)
@@ -260,8 +263,8 @@ def _set_breakpoint_language(bpt: ida_dbg.bpt_t, language: str) -> None:
         ) from exc
 
 
-def list_breakpoints() -> list[Breakpoint]:
-    breakpoints: list[Breakpoint] = []
+def list_breakpoints() -> List[Breakpoint]:
+    breakpoints: List[Breakpoint] = []
     for i in range(ida_dbg.get_bpt_qty()):
         bpt = ida_dbg.bpt_t()
         if ida_dbg.getn_bpt(i, bpt):
@@ -539,7 +542,7 @@ def dbg_step_over() -> DebugControlResult:
 @unsafe
 @tool
 @idasync
-def dbg_bps() -> list[Breakpoint]:
+def dbg_bps() -> List[Breakpoint]:
     """List breakpoints with address, enabled status, condition, and language."""
     return list_breakpoints()
 
@@ -549,8 +552,8 @@ def dbg_bps() -> list[Breakpoint]:
 @tool
 @idasync
 def dbg_add_bp(
-    addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"],
-) -> list[BreakpointResult]:
+    addrs: Annotated[List[str] | str, "Address(es) to add breakpoints at"],
+) -> List[BreakpointResult]:
     """Add breakpoints at one or more addresses."""
     addrs = normalize_list_input(addrs)
     results = []
@@ -579,8 +582,8 @@ def dbg_add_bp(
 @tool
 @idasync
 def dbg_delete_bp(
-    addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"],
-) -> list[BreakpointResult]:
+    addrs: Annotated[List[str] | str, "Address(es) to delete breakpoints from"],
+) -> List[BreakpointResult]:
     """Delete breakpoints at one or more addresses."""
     addrs = normalize_list_input(addrs)
     results = []
@@ -603,8 +606,8 @@ def dbg_delete_bp(
 @tool
 @idasync
 def dbg_toggle_bp(
-    items: list[BreakpointOp] | BreakpointOp,
-) -> list[BreakpointResult]:
+    items: List[BreakpointOp] | BreakpointOp,
+) -> List[BreakpointResult]:
     """Enable or disable existing breakpoints in batch."""
 
     items = normalize_dict_list(items)
@@ -636,8 +639,8 @@ def dbg_toggle_bp(
 @tool
 @idasync
 def dbg_set_bp_condition(
-    items: list[BreakpointConditionOp] | BreakpointConditionOp,
-) -> list[BreakpointResult]:
+    items: List[BreakpointConditionOp] | BreakpointConditionOp,
+) -> List[BreakpointResult]:
     """Set or clear breakpoint conditions in batch."""
 
     items = normalize_dict_list(items)
@@ -738,9 +741,9 @@ def dbg_set_bp_condition(
 @unsafe
 @tool
 @idasync
-def dbg_regs_all() -> list[ThreadRegisters]:
+def dbg_regs_all() -> List[ThreadRegisters]:
     """Return full register sets for all debugger threads."""
-    result: list[ThreadRegisters] = []
+    result: List[ThreadRegisters] = []
     dbg = dbg_ensure_suspended()
     for thread_index in range(ida_dbg.get_thread_qty()):
         tid = ida_dbg.getn_thread(thread_index)
@@ -753,8 +756,8 @@ def dbg_regs_all() -> list[ThreadRegisters]:
 @tool
 @idasync
 def dbg_regs_remote(
-    tids: Annotated[list[int] | int, "Thread ID(s) to get registers for"],
-) -> list[ThreadRegistersResult]:
+    tids: Annotated[List[int] | int, "Thread ID(s) to get registers for"],
+) -> List[ThreadRegistersResult]:
     """Return full register sets for specified thread IDs."""
     if isinstance(tids, int):
         tids = [tids]
@@ -794,8 +797,8 @@ def dbg_regs() -> ThreadRegisters:
 @tool
 @idasync
 def dbg_gpregs_remote(
-    tids: Annotated[list[int] | int, "Thread ID(s) to get GP registers for"],
-) -> list[ThreadRegistersResult]:
+    tids: Annotated[List[int] | int, "Thread ID(s) to get GP registers for"],
+) -> List[ThreadRegistersResult]:
     """Get GP registers for threads"""
     if isinstance(tids, int):
         tids = [tids]
@@ -875,7 +878,7 @@ def dbg_regs_named(
 @unsafe
 @tool
 @idasync
-def dbg_stacktrace() -> list[StackFrameInfo]:
+def dbg_stacktrace() -> List[StackFrameInfo]:
     """Return current call stack with module and symbol context."""
     callstack = []
     try:
@@ -928,8 +931,8 @@ def dbg_stacktrace() -> list[StackFrameInfo]:
 @tool
 @idasync
 def dbg_read(
-    regions: list[MemoryRead] | MemoryRead,
-) -> list[DebugMemoryReadResult]:
+    regions: List[MemoryRead] | MemoryRead,
+) -> List[DebugMemoryReadResult]:
     """Read debuggee memory from one or more regions."""
 
     regions = normalize_dict_list(regions)
@@ -974,8 +977,8 @@ def dbg_read(
 @tool
 @idasync
 def dbg_write(
-    regions: list[MemoryPatch] | MemoryPatch,
-) -> list[DebugMemoryWriteResult]:
+    regions: List[MemoryPatch] | MemoryPatch,
+) -> List[DebugMemoryWriteResult]:
     """Write bytes to debuggee memory regions."""
 
     regions = normalize_dict_list(regions)

@@ -69,6 +69,7 @@ import pathlib
 import re
 import string
 import typing
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 import idaapi
 import idc
@@ -194,7 +195,7 @@ class IDAVersionInfo:
         return NotImplemented
 
     @staticmethod
-    @functools.cache
+    @functools.lru_cache(maxsize=None)
     def ida_version():
         version_str: str = idaapi.get_kernel_version()
         sdk_version: int = idaapi.IDA_SDK_VERSION
@@ -209,7 +210,7 @@ def is_address_marked_as_code(ea: int) -> bool:
     return idaapi.is_code(idaapi.get_flags(ea))
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass()
 class InMemoryBuffer:
     class LoadMode(enum.Enum):
         SEGMENTS = "segments"
@@ -305,7 +306,7 @@ class SigMakerConfig:
     max_xref_signature_length: int = 250
 
 
-@dataclasses.dataclass(slots=True, frozen=True, repr=False)
+@dataclasses.dataclass(frozen=True, repr=False)
 class Match:
     address: int
 
@@ -344,7 +345,7 @@ class SignatureByte(typing.NamedTuple):
     is_wildcard: bool
 
 
-class Signature(list[SignatureByte]):
+class Signature(List[SignatureByte]):
     def add_byte_to_signature(self, address: int, is_wildcard: bool) -> None:
         byte_value = idaapi.get_byte(address)
         self.append(SignatureByte(byte_value, is_wildcard))
@@ -380,7 +381,7 @@ class SignatureFormatter(typing.Protocol):
     def format(self, signature: "Signature") -> str: ...
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True)
 class IdaFormatter:
     wildcard_byte: str = "?"
 
@@ -394,12 +395,12 @@ class IdaFormatter:
         return " ".join(parts)
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True)
 class X64DbgFormatter(IdaFormatter):
     wildcard_byte: str = "??"
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True)
 class MaskedBytesFormatter:
     wildcard_byte: str = "\\x00"
     mask: str = "x"
@@ -412,7 +413,7 @@ class MaskedBytesFormatter:
         wildcard_byte: str,
         mask_char: str,
         wildcard_mask_char: str,
-    ) -> tuple[list[str], list[str]]:
+    ) -> Tuple[List[str], List[str]]:
         pattern_parts = []
         mask_parts = []
         for byte in signature:
@@ -435,7 +436,7 @@ class MaskedBytesFormatter:
         return "".join(pattern_parts) + " " + "".join(mask_parts)
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True)
 class ByteArrayBitmaskFormatter:
     wildcard_byte: str = "0x00"
     mask: str = "1"
@@ -462,9 +463,9 @@ FORMATTER_MAP: typing.Dict[SignatureType, SignatureFormatter] = {
 }
 
 
-@dataclasses.dataclass(slots=True, frozen=True)
+@dataclasses.dataclass(frozen=True)
 class WildcardPolicy:
-    allowed_types: frozenset[int]
+    allowed_types: FrozenSet[int]
     _ctx = WILDCARD_POLICY_CTX
 
     class RarelyWildcardable(enum.IntEnum):
@@ -509,7 +510,7 @@ class WildcardPolicy:
         CRB = idaapi.o_idpspec4
         DCR = idaapi.o_idpspec5
 
-    @dataclasses.dataclass(slots=True)
+    @dataclasses.dataclass()
     class _Use:
         policy: "WildcardPolicy"
         policy_class: type["WildcardPolicy"]
@@ -593,7 +594,7 @@ class WildcardPolicy:
         return cls._Use(policy, cls)
 
 
-@dataclasses.dataclass(slots=True, frozen=True)
+@dataclasses.dataclass(frozen=True)
 class GeneratedSignature:
     """Result container for signature generation operations."""
 
@@ -617,9 +618,9 @@ class GeneratedSignature:
         )
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass()
 class XrefGeneratedSignature:
-    signatures: list[GeneratedSignature]
+    signatures: List[GeneratedSignature]
 
 
 class SigText:
@@ -644,16 +645,16 @@ class SigText:
         return len(s) > 0 and all(c in SigText._HEX_SET for c in s)
 
     @staticmethod
-    def _split_hex_pairs(s: str) -> list[str]:
+    def _split_hex_pairs(s: str) -> List[str]:
         return [s[i : i + 2].upper() for i in range(0, len(s), 2)]
 
     @staticmethod
-    def normalize(sig_str: str) -> tuple[str, list[tuple[int, bool]]]:
+    def normalize(sig_str: str) -> Tuple[str, List[Tuple[int, bool]]]:
         if not sig_str:
             return "", []
         s = sig_str.translate(SigText._TRANS)
         raw = [t for t in s.split() if t]
-        toks: list[str] = []
+        toks: List[str] = []
         for t in raw:
             t = t.strip()
             if t.startswith(("0x", "0X")):
@@ -662,7 +663,7 @@ class SigText:
                 continue
             toks.append(t)
 
-        out: list[str] = []
+        out: List[str] = []
         i = 0
         while i < len(toks):
             t = toks[i]
@@ -712,7 +713,7 @@ class SigText:
 
             raise ValueError(f"invalid signature token: {t!r}")
 
-        pattern: list[tuple[int, bool]] = []
+        pattern: List[Tuple[int, bool]] = []
         for tok in out:
             hi, lo = tok[0], tok[1]
             wild = (hi == "?") or (lo == "?")
@@ -801,7 +802,7 @@ class InstructionProcessor:
             )
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass()
 class InstructionWalker:
     start_ea: int
     end_ea: int = idaapi.BADADDR
@@ -820,7 +821,7 @@ class InstructionWalker:
         self.cursor = self.start_ea
         return self
 
-    def __next__(self) -> tuple[int, idaapi.insn_t, int]:
+    def __next__(self) -> Tuple[int, idaapi.insn_t, int]:
         if self.end_ea != idaapi.BADADDR and self.cursor >= self.end_ea:
             raise StopIteration
 
@@ -854,7 +855,7 @@ class UniqueSignatureGenerator:
         # to idaapi.bin_search, which never materializes a buffer (is_unique
         # bails at the second match). The seed is built at most once per
         # generate().
-        offsets: typing.Optional[list[int]] = None  # SIMD list candidates
+        offsets: typing.Optional[List[int]] = None  # SIMD list candidates
         buf: typing.Optional["InMemoryBuffer"] = None
 
         for cur_ea, ins, ins_len in InstructionWalker(ea):
@@ -906,7 +907,7 @@ class UniqueSignatureGenerator:
 # ---------------------------------------------------------------------------
 
 
-@dataclasses.dataclass(slots=True, frozen=True)
+@dataclasses.dataclass(frozen=True)
 class _DecodedInstruction:
     """Pre-decoded instruction data; produced once per function and reused
     across anchor growth loops in MinimalFunctionSignatureGenerator.
@@ -926,11 +927,11 @@ class _DecodedInstruction:
 
 def _refine_offsets(
     data_mv: memoryview,
-    offsets: list[int],
+    offsets: List[int],
     j: int,
     value: int,
     mask: int,
-) -> list[int]:
+) -> List[int]:
     """Keep offsets c where (data_mv[c + j] & mask) == (value & mask).
 
     j is the pattern-relative index of the byte being checked; c is a match
@@ -968,7 +969,7 @@ def _refine_offsets_into(
     return w
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
+@dataclasses.dataclass(frozen=True)
 class _ByteIndex:
     """A 2-byte bucket position index over the segment buffer.
 
@@ -1007,13 +1008,13 @@ class _ByteIndex:
 
 def _select_seed_run(
     sig: "Signature", index: "_ByteIndex"
-) -> typing.Optional[tuple[int, int, int]]:
+) -> typing.Optional[Tuple[int, int, int]]:
     """Pick the unmasked run (2-byte or single byte) with the smallest index
     bucket (Dynamic Seed Selection), returning (offset, width, key).
 
     Returns None only when sig has no exact byte at all.
     """
-    best: typing.Optional[tuple[int, int, int, int]] = None  # (size, offset, width, key)
+    best: typing.Optional[Tuple[int, int, int, int]] = None  # (size, offset, width, key)
     m = len(sig)
     for j in range(m - 1):
         a = sig[j]
@@ -1040,7 +1041,7 @@ def _seed_via_index(
     sig: "Signature",
     index: typing.Optional["_ByteIndex"],
     buf: "InMemoryBuffer",
-) -> typing.Optional[tuple["array.array", int]]:
+) -> typing.Optional[Tuple["array.array", int]]:
     """Seed the candidate set from the byte index instead of scanning.
 
     Picks the most selective unmasked run via Dynamic Seed Selection, maps its
@@ -1082,7 +1083,7 @@ def _decode_function_for_anchors(
     pfn: "idaapi.func_t",
     processor: "InstructionProcessor",
     cfg: "SigMakerConfig",
-) -> list[_DecodedInstruction]:
+) -> List[_DecodedInstruction]:
     """Decode a function's instructions once and capture per-instruction data
     for use across all anchor growth loops.
 
@@ -1098,7 +1099,7 @@ def _decode_function_for_anchors(
     if not func_bytes:
         return []
 
-    decoded: list[_DecodedInstruction] = []
+    decoded: List[_DecodedInstruction] = []
     for ea, ins, ins_len in InstructionWalker(pfn.start_ea, pfn.end_ea):
         offset = ea - pfn.start_ea
         if offset < 0 or offset + ins_len > len(func_bytes):
@@ -1160,7 +1161,7 @@ class MinimalFunctionSignatureGenerator:
         if no start point produces a unique signature within the length budget
         (or all candidates are degenerate, < MIN_USEFUL_SIG_BYTES bytes).
         """
-        candidates: list[GeneratedSignature] = []
+        candidates: List[GeneratedSignature] = []
 
         decoded = _decode_function_for_anchors(pfn, self.processor, cfg)
         if not decoded:
@@ -1205,7 +1206,7 @@ class MinimalFunctionSignatureGenerator:
 
     def _grow_unique_from_decoded(
         self,
-        decoded: list[_DecodedInstruction],
+        decoded: List[_DecodedInstruction],
         anchor_idx: int,
         max_len: int,
         cfg: SigMakerConfig,
@@ -1322,7 +1323,7 @@ class RangeSignatureGenerator:
         return sig
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass()
 class SignatureMaker:
     _operand_processor: OperandProcessor = dataclasses.field(
         default_factory=OperandProcessor
@@ -1397,7 +1398,7 @@ class XrefFinder:
         return sum(1 for _ in cls.iter_code_xrefs_to(ea))
 
     def find_xrefs(self, ea: int, cfg: SigMakerConfig) -> XrefGeneratedSignature:
-        xref_signatures: list[GeneratedSignature] = []
+        xref_signatures: List[GeneratedSignature] = []
 
         total = self.count_code_xrefs_to(ea)
         if total == 0:
@@ -1425,9 +1426,9 @@ class XrefFinder:
         return XrefGeneratedSignature(xref_signatures)
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass()
 class SearchResults:
-    matches: list[Match]
+    matches: List[Match]
     signature_str: str
 
 
@@ -1444,7 +1445,7 @@ class SignatureParser:
         mask = cls._extract_mask(input_str)
         parsed = ""
         if mask:
-            bytestr: list[str] = []
+            bytestr: List[str] = []
             if (bytestr := cls._ESCAPED_HEX.findall(input_str)) and len(bytestr) == len(
                 mask
             ):
@@ -1476,7 +1477,7 @@ class SignatureParser:
 
     @staticmethod
     def _masked_bytes_to_ida(
-        byte_tokens: list[str], mask: str, *, slice_from: int
+        byte_tokens: List[str], mask: str, *, slice_from: int
     ) -> str:
         sig = Signature(
             [
@@ -1496,7 +1497,7 @@ class SignatureParser:
         s = re.sub(r"\s+", " ", s)
 
         tokens = [t.strip() for t in s.split() if t.strip()]
-        out: list[str] = []
+        out: List[str] = []
         for t in tokens:
             if t == "?" or t == "??":
                 out.append("?")
@@ -1511,7 +1512,7 @@ class SignatureParser:
         return (" ".join(out) + " ") if out else ""
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass()
 class SignatureSearcher:
     input_signature: str = ""
 
@@ -1531,14 +1532,14 @@ class SignatureSearcher:
         ida_signature: str,
         skip_more_than_one: bool = False,
         buf: typing.Optional["InMemoryBuffer"] = None,
-    ) -> list[Match]:
+    ) -> List[Match]:
         simd_signature, _ = SigText.normalize(ida_signature)
         if buf is None:
             buf = InMemoryBuffer.load(mode=InMemoryBuffer.LoadMode.SEGMENTS)
         data_mv = buf.data()
 
         sig = _SimdSignature(simd_signature)
-        results: list[Match] = []
+        results: List[Match] = []
         base = idaapi.inf_get_min_ea()
         if (k := sig.size_bytes) == 0:
             return [Match(base)]
@@ -1569,7 +1570,7 @@ class SignatureSearcher:
     def find_all_offsets(
         ida_signature: str,
         buf: typing.Optional["InMemoryBuffer"] = None,
-    ) -> tuple[list[int], "InMemoryBuffer"]:
+    ) -> Tuple[List[int], "InMemoryBuffer"]:
         """Return (offsets, buf): every match as a 0-based offset into
         buf.data(), plus the buffer used. The offsets seed an in-memory
         refinement; reusing the returned buf keeps subsequent refinement on
@@ -1580,7 +1581,7 @@ class SignatureSearcher:
             buf = InMemoryBuffer.load(mode=InMemoryBuffer.LoadMode.SEGMENTS)
         data_mv = buf.data()
         sig = _SimdSignature(simd_signature)
-        offsets: list[int] = []
+        offsets: List[int] = []
         k = sig.size_bytes
         if k == 0:
             return [0], buf
@@ -1605,14 +1606,14 @@ class SignatureSearcher:
         ida_signature: str,
         buf: typing.Optional["InMemoryBuffer"] = None,
         skip_more_than_one: bool = False,
-    ) -> list[Match]:
+    ) -> List[Match]:
         if SIMD_SPEEDUP_AVAILABLE:
             return SignatureSearcher._find_all_simd(
                 ida_signature, skip_more_than_one=skip_more_than_one, buf=buf
             )
         binary = idaapi.compiled_binpat_vec_t()
         idaapi.parse_binpat_str(binary, idaapi.inf_get_min_ea(), ida_signature, 16)
-        out: list[Match] = []
+        out: List[Match] = []
         ea = idaapi.inf_get_min_ea()
         max_ea = idaapi.inf_get_max_ea()
         _bin_search = getattr(idaapi, "bin_search", None) or getattr(

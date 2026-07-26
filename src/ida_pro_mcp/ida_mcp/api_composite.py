@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Annotated, Any, TypedDict
+from typing import Any, Dict, List, TypedDict
+from typing_extensions import Annotated
 
 from .rpc import tool, unsafe
 from .sync import idasync, tool_timeout, IDAError
@@ -46,12 +47,12 @@ class AnalyzeFunctionResult(TypedDict, total=False):
     decompile_error: str | None
     decompile_truncated: int
     assembly: str | None
-    strings: list[str]
-    constants: list[dict[str, Any]]
-    callees: list[str]
-    callers: list[str]
-    xrefs: dict[str, Any]
-    comments: dict[str, Any]
+    strings: List[str]
+    constants: List[Dict[str, Any]]
+    callees: List[str]
+    callers: List[str]
+    xrefs: Dict[str, Any]
+    comments: Dict[str, Any]
     basic_blocks: BasicBlockSummary
     error: str | None
 
@@ -61,8 +62,8 @@ class ComponentFunctionSummary(TypedDict, total=False):
     name: str
     prototype: str | None
     size: int
-    callees: list[str]
-    strings: list[str]
+    callees: List[str]
+    strings: List[str]
     basic_blocks: int
     complexity: int
     error: str
@@ -75,23 +76,23 @@ ComponentGraphEdge = TypedDict(
 
 
 class InternalCallGraph(TypedDict):
-    nodes: list[str]
-    edges: list[ComponentGraphEdge]
+    nodes: List[str]
+    edges: List[ComponentGraphEdge]
 
 
 class SharedGlobalInfo(TypedDict):
     addr: str
     name: str
-    accessed_by: list[str]
+    accessed_by: List[str]
 
 
 class AnalyzeComponentResult(TypedDict, total=False):
-    functions: list[ComponentFunctionSummary]
+    functions: List[ComponentFunctionSummary]
     internal_call_graph: InternalCallGraph
-    shared_globals: list[SharedGlobalInfo]
-    interface_functions: list[str]
-    internal_only: list[str]
-    string_usage: dict[str, list[str]]
+    shared_globals: List[SharedGlobalInfo]
+    interface_functions: List[str]
+    internal_only: List[str]
+    string_usage: Dict[str, List[str]]
     error: str
 
 
@@ -122,8 +123,8 @@ class TraceDataFlowResult(TypedDict, total=False):
     start: str
     direction: str
     depth_reached: int
-    nodes: list[TraceDataFlowNode]
-    edges: list[TraceDataFlowEdge]
+    nodes: List[TraceDataFlowNode]
+    edges: List[TraceDataFlowEdge]
     error: str
 
 
@@ -163,7 +164,7 @@ def _basic_block_info(ea: int) -> BasicBlockSummary:
     return {"count": nodes, "cyclomatic_complexity": edges - nodes + 2}
 
 
-def _filter_constants(raw: list[dict], limit: int = _TOP_CONSTANTS) -> list[dict]:
+def _filter_constants(raw: List[dict], limit: int = _TOP_CONSTANTS) -> List[dict]:
     """Drop boring constants, return top N by absolute value."""
     out = []
     for c in raw:
@@ -177,7 +178,7 @@ def _filter_constants(raw: list[dict], limit: int = _TOP_CONSTANTS) -> list[dict
     return out[:limit]
 
 
-def _cap_decompile(code: str | None) -> tuple[str | None, int | None]:
+def _cap_decompile(code: str | None) -> Tuple[str | None, int | None]:
     """Cap decompiled output at _DECOMPILE_LINE_CAP lines.
     Returns (possibly_truncated_code, total_lines_or_None)."""
     if code is None:
@@ -190,10 +191,10 @@ def _cap_decompile(code: str | None) -> tuple[str | None, int | None]:
     return truncated, total
 
 
-def _compact_strings(raw: list[dict], limit: int = _TOP_STRINGS) -> list[str]:
+def _compact_strings(raw: List[dict], limit: int = _TOP_STRINGS) -> List[str]:
     """Return just the string values, deduplicated, capped at limit."""
-    seen: set[str] = set()
-    out: list[str] = []
+    seen: Set[str] = set()
+    out: List[str] = []
     for s in raw:
         val = s.get("value") or s.get("string", "")
         if val and val not in seen:
@@ -204,7 +205,7 @@ def _compact_strings(raw: list[dict], limit: int = _TOP_STRINGS) -> list[str]:
     return out
 
 
-def _compact_callees(raw: list[dict]) -> list[str]:
+def _compact_callees(raw: List[dict]) -> List[str]:
     """Return just callee names/addresses as strings."""
     return [c.get("name") or c.get("addr", "?") for c in raw]
 
@@ -298,7 +299,7 @@ def analyze_function(
 @idasync
 @tool_timeout(180.0)
 def analyze_component(
-    addrs: Annotated[list[str] | str, "Function addresses (comma-separated or list)"],
+    addrs: Annotated[List[str] | str, "Function addresses (comma-separated or list)"],
 ) -> AnalyzeComponentResult:
     """Analyze related functions as a group: per-function summaries, internal call graph, shared data."""
 
@@ -309,7 +310,7 @@ def analyze_component(
     if not raw:
         return {"error": "Empty address list"}
 
-    ea_map: dict[int, str] = {}
+    ea_map: Dict[int, str] = {}
     for a in raw:
         try:
             ea_map[_resolve_addr(a)] = a
@@ -319,7 +320,7 @@ def analyze_component(
     ea_set = set(ea_map.keys())
 
     # --- Per-function COMPACT summary (no decompile, no disasm) ---
-    functions: list[dict] = []
+    functions: List[dict] = []
     for ea in ea_set:
         func = idaapi.get_func(ea)
         if func is None:
@@ -343,7 +344,7 @@ def analyze_component(
 
     # --- Internal call graph ---
     nodes = [hex(ea) for ea in ea_set]
-    edges: list[dict] = []
+    edges: List[dict] = []
     for ea in ea_set:
         for callee in (get_callees(hex(ea)) or []):
             callee_ea = callee.get("addr")
@@ -360,9 +361,9 @@ def analyze_component(
                 })
 
     # --- Shared globals ---
-    func_globals: dict[int, set[int]] = {}
+    func_globals: Dict[int, Set[int]] = {}
     for ea in ea_set:
-        globals_accessed: set[int] = set()
+        globals_accessed: Set[int] = set()
         func = idaapi.get_func(ea)
         if func is None:
             func_globals[ea] = globals_accessed
@@ -376,7 +377,7 @@ def analyze_component(
                     globals_accessed.add(xref.to)
         func_globals[ea] = globals_accessed
 
-    global_refcount: dict[int, list[str]] = defaultdict(list)
+    global_refcount: Dict[int, List[str]] = defaultdict(list)
     for ea, gset in func_globals.items():
         fname = idaapi.get_func_name(ea) or hex(ea)
         for g in gset:
@@ -392,8 +393,8 @@ def analyze_component(
             })
 
     # --- Interface vs internal ---
-    interface_functions: list[str] = []
-    internal_only: list[str] = []
+    interface_functions: List[str] = []
+    internal_only: List[str] = []
     for ea in ea_set:
         callers = get_callers(hex(ea))
         has_external = False
@@ -414,7 +415,7 @@ def analyze_component(
             internal_only.append(hex(ea))
 
     # --- String usage across functions ---
-    string_funcs: dict[str, set[str]] = defaultdict(set)
+    string_funcs: Dict[str, Set[str]] = defaultdict(set)
     for ea in ea_set:
         fname = idaapi.get_func_name(ea) or hex(ea)
         for s in (extract_function_strings(ea) or []):
@@ -585,13 +586,13 @@ def trace_data_flow(
     if max_depth > 20:
         max_depth = 20
 
-    visited: set[int] = set()
-    nodes: list[dict] = []
-    edges: list[dict] = []
+    visited: Set[int] = set()
+    nodes: List[dict] = []
+    edges: List[dict] = []
     depth_reached = 0
 
     # BFS queue: (ea, depth)
-    queue: deque[tuple[int, int]] = deque()
+    queue: deque[Tuple[int, int]] = deque()
     queue.append((start_ea, 0))
     visited.add(start_ea)
 

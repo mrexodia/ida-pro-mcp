@@ -4,13 +4,14 @@ Format: one tool name per line; ``#`` starts a comment; blank lines are ignored.
 Passed to ``idalib-mcp --profile PATH`` or exported from ``/config.html``.
 """
 
+from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
 
-def parse_profile(text: str) -> set[str]:
+def parse_profile(text: str) -> Set[str]:
     """Parse profile text into a set of tool names."""
-    names: set[str] = set()
+    names: Set[str] = set()
     for line in text.splitlines():
         name = line.split("#", 1)[0].strip()
         if name:
@@ -18,7 +19,7 @@ def parse_profile(text: str) -> set[str]:
     return names
 
 
-def load_profile(path: str | Path) -> set[str]:
+def load_profile(path: str | Path) -> Set[str]:
     """Read a profile file and return its whitelisted tool names."""
     return parse_profile(Path(path).read_text(encoding="utf-8"))
 
@@ -35,10 +36,10 @@ def dump_profile(names: Iterable[str], *, header: str | None = None) -> str:
 
 def apply_profile(
     tools: dict,
-    whitelist: set[str],
+    whitelist: Set[str],
     *,
     protected: Iterable[str] = (),
-) -> tuple[list[str], list[str]]:
+) -> Tuple[List[str], List[str]]:
     """Filter ``tools`` in place to ``whitelist`` plus ``protected`` names.
 
     Returns ``(kept, unknown)``: tools from the whitelist that survived, and

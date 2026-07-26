@@ -1,3 +1,4 @@
+from __future__ import annotations
 import json
 import inspect
 import logging
@@ -5,17 +6,21 @@ import os
 import threading
 import time
 import traceback
-from typing import Any, Callable, get_type_hints, get_origin, get_args, Union, TypedDict, TypeAlias, NotRequired, is_typeddict
-from types import UnionType
+from typing import Any, Callable, Dict, get_type_hints, get_origin, get_args, List, Union, TypedDict
+from typing_extensions import NotRequired, TypeAlias, is_typeddict
+try:
+    from types import UnionType  # Python 3.10+
+except ImportError:
+    UnionType = ()  # Python 3.8/3.9
 
-JsonRpcId: TypeAlias = str | int | float | None
+JsonRpcId: TypeAlias = Union[str, int, float, None]
 
 # Thread-local storage for current request context (ID + cancel event)
 _current_request = threading.local()
 
 # Global pending requests for cancellation
 _pending_requests_lock = threading.Lock()
-_pending_requests: dict[int | str, threading.Event] = {}
+_pending_requests: Dict[int | str, threading.Event] = {}
 
 
 def get_current_request_id() -> JsonRpcId:
@@ -74,7 +79,7 @@ _LOG_SKIP_METHODS = {
     for m in os.getenv("IDA_MCP_LOG_SKIP_METHODS", "tools/call").split(",")
     if m.strip()
 }
-JsonRpcParams: TypeAlias = dict[str, Any] | list[Any] | None
+JsonRpcParams: TypeAlias = Union[Dict[str, Any], List[Any], None]
 
 class JsonRpcRequest(TypedDict):
     jsonrpc: str
@@ -106,8 +111,8 @@ class RequestCancelledError(Exception):
 
 class JsonRpcRegistry:
     def __init__(self):
-        self.methods: dict[str, Callable] = {}
-        self._cache: dict[Callable, tuple[inspect.Signature, dict, list[str]]] = {}
+        self.methods: Dict[str, Callable] = {}
+        self._cache: Dict[Callable, Tuple[inspect.Signature, dict, List[str]]] = {}
         self.redact_exceptions = False
 
     def method(self, func: Callable, name: str | None = None) -> Callable:
@@ -329,7 +334,7 @@ class JsonRpcRegistry:
                     validated_params[param_name] = value
                     continue
 
-                # Handle generic types (list[X], dict[K,V])
+                # Handle generic types (List[X], Dict[K,V])
                 if origin is not None:
                     if not isinstance(value, origin):
                         raise JsonRpcException(

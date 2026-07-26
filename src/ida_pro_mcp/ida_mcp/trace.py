@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Tool-call tracing.
 
 Always-on. The trace lives in the IDB under netnode `$ ida_mcp.trace` as
@@ -40,7 +41,7 @@ _DEFAULT_BATCH_BYTES = 64 * 1024
 
 
 _state_lock = threading.Lock()
-_state: dict[str, Any] = {
+_state: Dict[str, Any] = {
     "idb_backend": None,
     "atexit_registered": False,
     "idb_hook": None,
@@ -77,19 +78,19 @@ def _netnode_flush_segment(payload: bytes, record_count: int) -> None:
 
 
 @idasync
-def _netnode_iter_blobs() -> list[bytes]:
+def _netnode_iter_blobs() -> List[bytes]:
     """Return every segment's compressed blob in segment-id order."""
     import ida_netnode
     node = ida_netnode.netnode(IDB_NETNODE_NAME, 0, False)
     if node == ida_netnode.BADNODE:
         return []
-    pairs: list[tuple[int, int]] = []
+    pairs: List[Tuple[int, int]] = []
     i = node.altfirst(_TAG_INDEX)
     while i != ida_netnode.BADNODE:
         pairs.append((i, node.altval(i, _TAG_INDEX)))
         i = node.altnext(i, _TAG_INDEX)
     pairs.sort()
-    blobs: list[bytes] = []
+    blobs: List[bytes] = []
     for _, start in pairs:
         blob = node.getblob(start, _TAG_DATA)
         if isinstance(blob, tuple):
@@ -107,7 +108,7 @@ class NetnodeBackend:
         self.batch_bytes = max(1024, batch_bytes)
         self._lock = threading.Lock()
         self._flush_lock = threading.Lock()
-        self._buffer: list[bytes] = []
+        self._buffer: List[bytes] = []
         self._buffered_bytes = 0
         self._closed = False
 
@@ -295,7 +296,7 @@ def install_tracer() -> None:
 
     def traced(name, arguments=None, _meta=None):
         start = time.monotonic()
-        record: dict[str, Any] = {
+        record: Dict[str, Any] = {
             "ts": _now_iso(),
             "tool": name,
             "arguments": arguments or {},

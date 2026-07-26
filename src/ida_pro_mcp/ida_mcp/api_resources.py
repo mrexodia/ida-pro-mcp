@@ -1,10 +1,11 @@
+from __future__ import annotations
 """MCP Resources - browsable IDB state
 
 Resources represent browsable state (read-only data) following MCP's philosophy.
 Use tools for actions that modify state or perform expensive computations.
 """
 
-from typing import Annotated
+from typing_extensions import Annotated
 
 import ida_nalt
 import ida_segment
@@ -69,7 +70,7 @@ def idb_metadata_resource() -> Metadata:
 
 @resource("ida://idb/segments")
 @idasync
-def idb_segments_resource() -> list[Segment]:
+def idb_segments_resource() -> List[Segment]:
     """Get all memory segments with permissions"""
     segments = []
     for seg_ea in idautils.Segments():
@@ -97,7 +98,7 @@ def idb_segments_resource() -> list[Segment]:
 
 @resource("ida://idb/entrypoints")
 @idasync
-def idb_entrypoints_resource() -> list[dict]:
+def idb_entrypoints_resource() -> List[dict]:
     """Get entry points (main, TLS callbacks, etc.)"""
     entrypoints = []
     entry_count = compat.get_entry_qty()
@@ -154,7 +155,7 @@ def selection_resource() -> dict:
 
 @resource("ida://types")
 @idasync
-def types_resource() -> list[dict]:
+def types_resource() -> List[dict]:
     """Get all local types"""
     types = []
     for ordinal in range(1, compat.get_ordinal_limit(None)):
@@ -167,7 +168,7 @@ def types_resource() -> list[dict]:
 
 @resource("ida://structs")
 @idasync
-def structs_resource() -> list[dict]:
+def structs_resource() -> List[dict]:
     """Get all structures/unions"""
     structs = []
     limit = compat.get_ordinal_limit()
@@ -278,7 +279,7 @@ def export_name_resource(name: Annotated[str, "Export name"]) -> dict:
 
 @resource("ida://xrefs/from/{addr}")
 @idasync
-def xrefs_from_resource(addr: Annotated[str, "Source address"]) -> list[dict]:
+def xrefs_from_resource(addr: Annotated[str, "Source address"]) -> List[dict]:
     """Get cross-references from address"""
     ea = parse_address(addr)
     xrefs = []

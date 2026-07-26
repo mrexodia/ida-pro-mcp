@@ -1,4 +1,7 @@
-from typing import Annotated, Any, NotRequired, TypedDict
+from __future__ import annotations
+from typing import Any, TypedDict
+from typing_extensions import Annotated
+from typing_extensions import NotRequired
 
 import idaapi
 import idautils
@@ -78,11 +81,11 @@ class RenameSummaryResult(TypedDict, total=False):
 
 
 class RenameResult(TypedDict, total=False):
-    func: list[RenameItemResult]
-    data: list[RenameItemResult]
-    global_alias: list[RenameItemResult]
-    local: list[RenameItemResult]
-    stack: list[RenameItemResult]
+    func: List[RenameItemResult]
+    data: List[RenameItemResult]
+    global_alias: List[RenameItemResult]
+    local: List[RenameItemResult]
+    stack: List[RenameItemResult]
     summary: RenameSummaryResult
 
 
@@ -161,7 +164,7 @@ def add_bookmark(
 
 @tool
 @idasync
-def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
+def set_comments(items: List[CommentOp] | CommentOp) -> List[CommentResult]:
     """Set comments at addresses (both disassembly and decompiler views)"""
     if isinstance(items, dict):
         items = [items]
@@ -242,8 +245,8 @@ def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
 @tool
 @idasync
 def append_comments(
-    items: list[CommentAppendOp] | CommentAppendOp,
-) -> list[AppendCommentResult]:
+    items: List[CommentAppendOp] | CommentAppendOp,
+) -> List[AppendCommentResult]:
     """Append comments at addresses, deduping exact text by default."""
     if isinstance(items, dict):
         items = [items]
@@ -307,7 +310,7 @@ def append_comments(
     return results
 
 
-def _append_comment_text(current: str, new_text: str, *, dedupe: bool) -> tuple[str, bool]:
+def _append_comment_text(current: str, new_text: str, *, dedupe: bool) -> Tuple[str, bool]:
     normalized_new = new_text.strip()
     if dedupe and normalized_new:
         existing_entries = [line.strip() for line in current.splitlines()]
@@ -323,7 +326,7 @@ def _append_comment_text(current: str, new_text: str, *, dedupe: bool) -> tuple[
 
 @tool
 @idasync
-def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[PatchAsmResult]:
+def patch_asm(items: List[AsmPatchOp] | AsmPatchOp) -> List[PatchAsmResult]:
     """Patch assembly instructions at addresses"""
     if isinstance(items, dict):
         items = [items]
@@ -369,7 +372,7 @@ def rename_at_ea(
     *,
     allow_overwrite: bool = False,
     dry_run: bool = False,
-) -> tuple[bool, str | None]:
+) -> Tuple[bool, str | None]:
     """Rename at address with detailed error reporting."""
     conflict_ea = idaapi.get_name_ea(idaapi.BADADDR, new_name)
     if (
@@ -436,7 +439,7 @@ def rename(
             pass
         return False
 
-    def _set_name_checked(ea: int, new_name: str) -> tuple[bool, str | None]:
+    def _set_name_checked(ea: int, new_name: str) -> Tuple[bool, str | None]:
         return rename_at_ea(
             ea,
             new_name,
@@ -444,7 +447,7 @@ def rename(
             dry_run=dry_run,
         )
 
-    def _place_func_in_vibe_dir(ea: int) -> tuple[bool, str | None]:
+    def _place_func_in_vibe_dir(ea: int) -> Tuple[bool, str | None]:
         if dry_run:
             return True, None
 
@@ -475,8 +478,8 @@ def rename(
 
         return True, None
 
-    def _rename_funcs(items: list[FunctionRename]) -> tuple[list[dict], bool]:
-        results: list[dict] = []
+    def _rename_funcs(items: List[FunctionRename]) -> Tuple[List[dict], bool]:
+        results: List[dict] = []
         halted = False
         for item in items:
             try:
@@ -542,8 +545,8 @@ def rename(
                     break
         return results, halted
 
-    def _rename_globals(items: list[GlobalRename]) -> tuple[list[dict], bool]:
-        results: list[dict] = []
+    def _rename_globals(items: List[GlobalRename]) -> Tuple[List[dict], bool]:
+        results: List[dict] = []
         halted = False
         for item in items:
             try:
@@ -611,8 +614,8 @@ def rename(
                     break
         return results, halted
 
-    def _rename_locals(items: list[LocalRename]) -> tuple[list[dict], bool]:
-        results: list[dict] = []
+    def _rename_locals(items: List[LocalRename]) -> Tuple[List[dict], bool]:
+        results: List[dict] = []
         halted = False
         for item in items:
             try:
@@ -696,8 +699,8 @@ def rename(
                     break
         return results, halted
 
-    def _rename_stack(items: list[StackRename]) -> tuple[list[dict], bool]:
-        results: list[dict] = []
+    def _rename_stack(items: List[StackRename]) -> Tuple[List[dict], bool]:
+        results: List[dict] = []
         halted = False
         for item in items:
             try:
@@ -904,7 +907,7 @@ def rename(
 
 @tool
 @idasync
-def define_func(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
+def define_func(items: List[DefineOp] | DefineOp) -> List[DefineResult]:
     """Define functions; IDA infers bounds unless end is provided."""
     if isinstance(items, dict):
         items = [items]
@@ -956,7 +959,7 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
 
 @tool
 @idasync
-def define_code(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
+def define_code(items: List[DefineOp] | DefineOp) -> List[DefineResult]:
     """Convert bytes to code instruction(s) at address(es)."""
     if isinstance(items, dict):
         items = [items]
@@ -988,7 +991,7 @@ def define_code(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
 
 @tool
 @idasync
-def undefine(items: list[UndefineOp] | UndefineOp) -> list[DefineResult]:
+def undefine(items: List[UndefineOp] | UndefineOp) -> List[DefineResult]:
     """Undefine item(s) at address(es), converting back to raw bytes."""
     if isinstance(items, dict):
         items = [items]
@@ -1055,7 +1058,7 @@ class ForceRecompileResult(TypedDict, total=False):
 @idasync
 def force_recompile(
     items: Annotated[
-        list[ForceRecompileOp] | ForceRecompileOp,
+        List[ForceRecompileOp] | ForceRecompileOp,
         "List of {addr: function-entry-EA} ops, or a single op. Omit / pass empty list to recompile every function.",
     ] = None,
 ) -> dict:
@@ -1065,7 +1068,7 @@ def force_recompile(
     `make_data` so the next `decompile` call regenerates fresh pseudocode
     instead of returning a cached, stale view.
     """
-    targets: list[int] = []
+    targets: List[int] = []
     invalidate_all = False
 
     if items is None:
@@ -1090,7 +1093,7 @@ def force_recompile(
             except Exception:
                 pass
 
-    results: list[ForceRecompileResult] = []
+    results: List[ForceRecompileResult] = []
     for ea in targets:
         try:
             ida_hexrays.mark_cfunc_dirty(ea)
@@ -1143,10 +1146,10 @@ _OP_FORMAT_FLAGS = {
 @idasync
 def set_op_type(
     items: Annotated[
-        list[SetOpTypeOp] | SetOpTypeOp,
+        List[SetOpTypeOp] | SetOpTypeOp,
         "Operand-typing ops. Equivalent to GUI 'Y' (struct offset) or 'O' (offset) operations.",
     ],
-) -> list[SetOpTypeResult]:
+) -> List[SetOpTypeResult]:
     """Set the type of an instruction operand. GUI 'Y' / 'O' / '#' equivalent.
 
     Tags an operand at a specific instruction with a desired interpretation.
@@ -1162,7 +1165,7 @@ def set_op_type(
     if isinstance(items, dict):
         items = [items]
 
-    results: list[SetOpTypeResult] = []
+    results: List[SetOpTypeResult] = []
     for item in items:
         addr_str = item.get("addr", "")
         op_n = int(item.get("op_n", 0))
@@ -1242,10 +1245,10 @@ class MakeDataResult(TypedDict, total=False):
 @idasync
 def make_data(
     items: Annotated[
-        list[MakeDataOp] | MakeDataOp,
+        List[MakeDataOp] | MakeDataOp,
         "Data-creation ops. Each {addr, type, name?} replaces existing data items at addr with a fresh symbol of the given type.",
     ],
-) -> list[MakeDataResult]:
+) -> List[MakeDataResult]:
     """Create a typed data symbol at an address, replacing any prior items.
 
     Use this to harden a symbol boundary that the decompiler is currently
@@ -1260,7 +1263,7 @@ def make_data(
     if isinstance(items, dict):
         items = [items]
 
-    results: list[MakeDataResult] = []
+    results: List[MakeDataResult] = []
     for item in items:
         addr_str = item.get("addr", "")
         type_decl = str(item.get("type", "")).strip()

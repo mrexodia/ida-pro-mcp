@@ -1,3 +1,4 @@
+from __future__ import annotations
 import fnmatch
 import json
 import os
@@ -6,17 +7,16 @@ import struct
 import sys
 import tempfile
 from typing import (
-    Annotated,
     Any,
     Callable,
     Generic,
     Literal,
-    NotRequired,
     Optional,
     TypedDict,
     TypeVar,
     overload,
 )
+from typing_extensions import Annotated, NotRequired
 
 import ida_bytes
 import ida_funcs
@@ -141,16 +141,16 @@ class RenameBatch(TypedDict, total=False):
     """
 
     func: Annotated[
-        list[FunctionRename] | FunctionRename, "Function rename operations"
+        List[FunctionRename] | FunctionRename, "Function rename operations"
     ]
     data: Annotated[
-        list[GlobalRename] | GlobalRename, "Global/data variable rename operations"
+        List[GlobalRename] | GlobalRename, "Global/data variable rename operations"
     ]
     local: Annotated[
-        list[LocalRename] | LocalRename, "Local variable rename operations"
+        List[LocalRename] | LocalRename, "Local variable rename operations"
     ]
     stack: Annotated[
-        list[StackRename] | StackRename, "Stack variable rename operations"
+        List[StackRename] | StackRename, "Stack variable rename operations"
     ]
     stop_on_error: Annotated[bool, "Stop on first failure"]
     dry_run: Annotated[bool, "Validate only, no changes"]
@@ -214,7 +214,7 @@ class EntityQuery(TypedDict):
     count: NotRequired[Annotated[int, "Max results (0=all)"]]
     sort_by: NotRequired[Annotated[str, "Sort: addr|name|size|length"]]
     descending: NotRequired[Annotated[bool, "Descending"]]
-    fields: NotRequired[Annotated[list[str], "Projection field list"]]
+    fields: NotRequired[Annotated[List[str], "Projection field list"]]
 
 
 class FuncProfileQuery(TypedDict, total=False):
@@ -371,14 +371,14 @@ class EnumUpsert(TypedDict, total=False):
     """Enum create/update operation"""
 
     name: Annotated[str, "Enum type name"]
-    members: Annotated[list[EnumMemberUpsert] | EnumMemberUpsert, "Members to upsert"]
+    members: Annotated[List[EnumMemberUpsert] | EnumMemberUpsert, "Members to upsert"]
     bitfield: Annotated[bool, "Bitfield enum"]
 
 
 class TypeApplyBatch(TypedDict):
     """Batch type application configuration"""
 
-    edits: Annotated[list[TypeEdit] | TypeEdit, "Type edits to apply"]
+    edits: Annotated[List[TypeEdit] | TypeEdit, "Type edits to apply"]
     stop_on_error: NotRequired[Annotated[bool, "Stop on first failure"]]
 
 
@@ -481,8 +481,8 @@ class DisassemblyLine(TypedDict):
     addr: str
     label: NotRequired[str]
     instruction: str
-    comments: NotRequired[list[str]]
-    refs: NotRequired[list[Ref]]
+    comments: NotRequired[List[str]]
+    refs: NotRequired[List[Ref]]
 
 
 class Argument(TypedDict):
@@ -502,9 +502,9 @@ class DisassemblyFunction(TypedDict):
     start_ea: str
     segment: NotRequired[str]
     return_type: NotRequired[str]
-    arguments: NotRequired[list[Argument]]
-    stack_frame: NotRequired[list[StackFrameVariable]]
-    lines: list[DisassemblyLine]
+    arguments: NotRequired[List[Argument]]
+    stack_frame: NotRequired[List[StackFrameVariable]]
+    lines: List[DisassemblyLine]
 
 
 class Xref(TypedDict):
@@ -523,7 +523,7 @@ class StructureMember(TypedDict):
 class StructureDefinition(TypedDict):
     name: str
     size: str
-    members: list[StructureMember]
+    members: List[StructureMember]
 
 
 class RegisterValue(TypedDict):
@@ -533,7 +533,7 @@ class RegisterValue(TypedDict):
 
 class ThreadRegisters(TypedDict):
     thread_id: int
-    registers: list[RegisterValue]
+    registers: List[RegisterValue]
 
 
 class Breakpoint(TypedDict):
@@ -548,26 +548,26 @@ class FunctionAnalysis(TypedDict):
     name: Optional[str]
     code: Optional[str]
     asm: Optional[str]
-    xto: list[Xref]
-    xfrom: list[Xref]
-    callees: list[dict]
-    callers: list[Function]
-    strings: list[String]
-    constants: list[dict]
-    blocks: list[dict]
+    xto: List[Xref]
+    xfrom: List[Xref]
+    callees: List[dict]
+    callers: List[Function]
+    strings: List[String]
+    constants: List[dict]
+    blocks: List[dict]
     error: Optional[str]
     prompt: Optional[str]
 
 
 class PatternMatch(TypedDict):
     pattern: str
-    matches: list[str]
+    matches: List[str]
     count: int
 
 
 class CodePattern(TypedDict):
     mnemonic: str
-    operands: NotRequired[list[str]]
+    operands: NotRequired[List[str]]
 
 
 class BasicBlock(TypedDict):
@@ -575,15 +575,15 @@ class BasicBlock(TypedDict):
     end: str
     size: int
     type: int
-    successors: list[str]
-    predecessors: list[str]
+    successors: List[str]
+    predecessors: List[str]
 
 
 T = TypeVar("T")
 
 
 class Page(TypedDict, Generic[T]):
-    data: list[T]
+    data: List[T]
     next_offset: Optional[int]
 
 
@@ -671,21 +671,21 @@ def normalize_list_input(value: list | str) -> list:
 
 
 def normalize_dict_list(
-    value: list[dict] | dict | str | list[str] | Any,
+    value: List[dict] | dict | str | List[str] | Any,
     string_parser: Optional[Callable[[str], dict]] = None,
-) -> list[dict]:
-    """Normalize input to list[dict] with optional string parsing
+) -> List[dict]:
+    """Normalize input to List[dict] with optional string parsing
 
     Args:
-        value: Input value (dict, list[dict], str, list[str], or any)
+        value: Input value (dict, List[dict], str, List[str], or any)
         string_parser: Optional function to convert string → dict
                       If None, strings → empty dict
 
     Flow:
         dict → [dict]
-        str → split by ',' → list[str] → map(string_parser) → list[dict]
-        list[str] → map(string_parser) → list[dict]
-        list[dict] → list[dict]
+        str → split by ',' → List[str] → map(string_parser) → List[dict]
+        List[str] → map(string_parser) → List[dict]
+        List[dict] → List[dict]
         Any → [{}]
     """
     if isinstance(value, dict):
@@ -693,11 +693,11 @@ def normalize_dict_list(
     elif isinstance(value, list):
         if not value:
             return [{}]
-        # Check if list[str] or list[dict]
+        # Check if List[str] or List[dict]
         if all(isinstance(item, dict) for item in value):
             return value
         elif all(isinstance(item, str) for item in value):
-            # list[str] → map with parser
+            # List[str] → map with parser
             if string_parser:
                 return [string_parser(s.strip()) for s in value if s.strip()]
             return [{}]
@@ -910,7 +910,7 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
     raise IDAError(f"Unable to retrieve {type_name} type info object")
 
 
-def paginate(data: list[T], offset: int, count: int) -> Page[T]:
+def paginate(data: List[T], offset: int, count: int) -> Page[T]:
     if count == 0:
         count = len(data)
     next_offset = offset + count
@@ -922,7 +922,7 @@ def paginate(data: list[T], offset: int, count: int) -> Page[T]:
     }
 
 
-def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
+def pattern_filter(data: List[T], pattern: str, key: str) -> List[T]:
     if not pattern:
         return data
 
@@ -1023,7 +1023,7 @@ def hexrays_local_var_exists(func_ea: int, var_name: str) -> bool:
     return False
 
 
-def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, list[str]]:
+def parse_decls_ctypes(decls: str, hti_flags: int) -> Tuple[int, List[str]]:
     if sys.platform == "win32":
         import ctypes
 
@@ -1040,7 +1040,7 @@ def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, list[str]]:
         ]
         ida_dll.parse_decls.restype = ctypes.c_int
 
-        messages: list[str] = []
+        messages: List[str] = []
 
         @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p)
         def magic_printer(fmt: bytes, arg1: bytes):
@@ -1061,7 +1061,7 @@ def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, list[str]]:
 
 def get_stack_frame_variables_internal(
     fn_addr: int, raise_error: bool
-) -> list[StackFrameVariable]:
+) -> List[StackFrameVariable]:
     from .sync import ida_major
 
     if ida_major < 9:
@@ -1077,7 +1077,7 @@ def get_stack_frame_variables_internal(
     if not tif.get_type_by_tid(func.frame) or not tif.is_udt():
         return []
 
-    members: list[StackFrameVariable] = []
+    members: List[StackFrameVariable] = []
     udt = ida_typeinf.udt_type_data_t()
     tif.get_udt_details(udt)
     for udm in udt:
@@ -1140,7 +1140,7 @@ def decompile_checked(addr: int):
 
 def decompile_function_safe(
     ea: int, include_addresses: bool = True
-) -> tuple[str | None, str | None]:
+) -> Tuple[str | None, str | None]:
     """Safely decompile a function. Returns (code, error); exactly one is non-None."""
     import ida_lines
     import ida_kernwin
@@ -1237,7 +1237,7 @@ def get_all_comments(ea: int) -> dict:
     return comments
 
 
-def get_callees(addr: str) -> list[dict]:
+def get_callees(addr: str) -> List[dict]:
     """Get callees for a single function address"""
     try:
         func_start = parse_address(addr)
@@ -1245,7 +1245,7 @@ def get_callees(addr: str) -> list[dict]:
         if not func:
             return []
         func_end = idc.find_func_end(func_start)
-        callees: list[dict[str, str]] = []
+        callees: List[Dict[str, str]] = []
         current_ea = func_start
         while current_ea < func_end:
             insn = idaapi.insn_t()
@@ -1277,7 +1277,7 @@ def get_callees(addr: str) -> list[dict]:
         return []
 
 
-def get_callers(addr: str, limit: int = 50) -> list[Function]:
+def get_callers(addr: str, limit: int = 50) -> List[Function]:
     """Get callers for a single function address"""
     try:
         callers = {}
@@ -1305,7 +1305,7 @@ def get_callers(addr: str, limit: int = 50) -> list[Function]:
         return []
 
 
-def get_xrefs_from_internal(ea: int) -> list[Xref]:
+def get_xrefs_from_internal(ea: int) -> List[Xref]:
     """Get all xrefs from an address"""
     xrefs = []
     for xref in idautils.XrefsFrom(ea, 0):
@@ -1319,7 +1319,7 @@ def get_xrefs_from_internal(ea: int) -> list[Xref]:
     return xrefs
 
 
-def extract_function_strings(ea: int) -> list[String]:
+def extract_function_strings(ea: int) -> List[String]:
     """Extract string references from a function"""
     func = idaapi.get_func(ea)
     if not func:
@@ -1348,7 +1348,7 @@ def extract_function_strings(ea: int) -> list[String]:
     return strings
 
 
-def extract_function_constants(ea: int) -> list[dict]:
+def extract_function_constants(ea: int) -> List[dict]:
     """Extract immediate constants from a function"""
     func = idaapi.get_func(ea)
     if not func:

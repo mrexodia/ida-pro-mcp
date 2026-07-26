@@ -15,23 +15,29 @@ Usage from command line:
     ida-mcp-test tests/crackme03.elf --pattern "*meta*"
 """
 
+from __future__ import annotations
 import fnmatch
 import time
 import traceback
 from dataclasses import dataclass, field
-from types import UnionType
+try:
+    from types import UnionType  # Python 3.10+
+except ImportError:
+    UnionType = ()  # Python 3.8/3.9
 from typing import (
-    Annotated,
     Any,
     Callable,
     Literal,
-    NotRequired,
     Optional,
-    Required,
     Union,
     get_args,
     get_origin,
     get_type_hints,
+)
+from typing_extensions import (
+    Annotated,
+    NotRequired,
+    Required,
     is_typeddict,
 )
 
@@ -52,7 +58,7 @@ class TestInfo:
 
 
 # Global test registry: name -> TestInfo
-TESTS: dict[str, TestInfo] = {}
+TESTS: Dict[str, TestInfo] = {}
 
 
 class SkipTest(Exception):
@@ -140,7 +146,7 @@ class TestResults:
     failed: int = 0
     skipped: int = 0
     total_time: float = 0.0
-    results: list[TestResult] = field(default_factory=list)
+    results: List[TestResult] = field(default_factory=list)
 
     def add(self, result: TestResult) -> None:
         """Add a test result and update counts."""
@@ -184,7 +190,7 @@ class ListOfShape:
 
 @dataclass(frozen=True)
 class OneOfShape:
-    schemas: tuple[Any, ...]
+    schemas: Tuple[Any, ...]
 
 
 def optional(schema: Any) -> OptionalShape:
@@ -513,7 +519,7 @@ def get_any_string() -> Optional[str]:
     return None
 
 
-def get_first_segment() -> Optional[tuple[str, str]]:
+def get_first_segment() -> Optional[Tuple[str, str]]:
     """Returns (start_addr, end_addr) of first segment, or None.
 
     Must be called from within IDA context.
@@ -594,7 +600,7 @@ def run_tests(
     current_binary = get_current_binary_name()
 
     # Group tests by category
-    tests_by_category: dict[str, list[tuple[str, TestInfo]]] = {}
+    tests_by_category: Dict[str, List[Tuple[str, TestInfo]]] = {}
     for name, info in sorted(TESTS.items()):
         # Filter by pattern
         if not fnmatch.fnmatch(name, pattern):
