@@ -1,5 +1,7 @@
 # IDA Pro MCP
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fmrexodia%2Fida-pro-mcp.svg)](https://mcptoplist.com/server/glama%2Fmrexodia%2Fida-pro-mcp)
+
 Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
 
 https://github.com/user-attachments/assets/6ebeaa92-a9db-43fa-b756-eececce2aca0
