@@ -52,6 +52,7 @@ IDB_OPEN_MODES = {
 IDB_MANAGEMENT_TOOLS = {
     "idb_open",
     "idb_list",
+    "idb_close",
 }
 WORKER_TCP_HEALTH_TIMEOUT_SEC = 0.5
 WORKER_RPC_HEALTH_TIMEOUT_SEC = 2.0
@@ -135,6 +136,17 @@ class IdalibOpenResult(TypedDict, total=False):
 class IdalibListResult(TypedDict, total=False):
     sessions: list[IdalibSessionListInfo]
     count: int
+    error: str
+
+
+class IdalibCloseResult(TypedDict, total=False):
+    success: bool
+    session_id: str
+    backend: str
+    owned: bool
+    saved: bool | None
+    save_error: str
+    message: str
     error: str
 
 
@@ -936,6 +948,42 @@ class IdalibSupervisor:
             session.last_accessed = datetime.now()
             return session
 
+    def close_session(self, database: str, *, save: bool = True) -> IdalibCloseResult:
+        """Save (optionally), unregister, and terminate a session's owned worker.
+
+        Adopted GUI/worker instances (``owned`` is False) are detached rather
+        than killed: they keep running so another supervisor can adopt them.
+        """
+        session = self.peek_session(database)
+        saved: bool | None = None
+        save_error: str | None = None
+        if save and self._session_is_reachable(session):
+            try:
+                result = self.call_worker_tool(session, "idb_save")
+                if isinstance(result, dict):
+                    saved = bool(result.get("ok"))
+                    if result.get("error"):
+                        save_error = str(result["error"])
+            except Exception as e:
+                save_error = str(e)
+
+        with self._lock:
+            if self.sessions.get(database) is session:
+                self._unregister_session_locked(database)
+        self._terminate_worker(session)
+
+        info: IdalibCloseResult = {
+            "success": True,
+            "session_id": database,
+            "backend": session.backend,
+            "owned": session.owned,
+            "saved": saved,
+            "message": f"Session closed: {session.filename} ({database})",
+        }
+        if save_error is not None:
+            info["save_error"] = save_error
+        return info
+
     def list_sessions(self) -> list[IdalibSessionListInfo]:
         with self._lock:
             adopted = [
@@ -1114,6 +1162,23 @@ def idb_list() -> IdalibListResult:
         return {"sessions": sessions, "count": len(sessions)}
     except Exception as e:
         return {"error": f"Failed to list sessions: {e}"}
+
+
+@mcp.tool
+def idb_close(
+    database: Annotated[str, "Session ID returned by idb_open (see idb_list)."],
+    save: Annotated[bool, "Save the database before closing"] = True,
+) -> IdalibCloseResult:
+    """
+    Close a session: optionally save it, unregister it from the supervisor, and
+    terminate its owned worker (freeing a worker slot). Adopted GUI/worker instances
+    are detached, not killed.
+    """
+    sup = _require_supervisor()
+    try:
+        return sup.close_session(database, save=save)
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @mcp.resource("ida://databases")

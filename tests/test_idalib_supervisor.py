@@ -849,6 +849,158 @@ def test_list_sessions_reports_is_active_from_health_probe(tmp_path):
     assert listed == {"first": True, "second": False}
 
 
+def test_close_session_saves_and_terminates_owned_worker(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+
+    result = sup.close_session("sample", save=True)
+
+    assert result["success"] is True
+    assert result["saved"] is True
+    assert result["owned"] is True
+    assert ("idb_save", None) in sup.tool_calls
+    assert "sample" not in sup.sessions
+    assert sup.path_to_session == {}
+    assert session.process.returncode == 0
+
+
+def test_close_session_without_save_skips_idb_save(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+
+    result = sup.close_session("sample", save=False)
+
+    assert result["saved"] is None
+    assert all(name != "idb_save" for name, _ in sup.tool_calls)
+    assert "sample" not in sup.sessions
+    assert session.process.returncode == 0
+
+
+def test_close_session_unknown_session_raises():
+    sup = _FakeSupervisor()
+    try:
+        sup.close_session("nope")
+    except RuntimeError as e:
+        assert "not found" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError for unknown session")
+
+
+def test_close_session_requires_database():
+    sup = _FakeSupervisor()
+    try:
+        sup.close_session("")
+    except RuntimeError as e:
+        assert "database is required" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError for empty database")
+
+
+def test_close_session_detaches_adopted_worker_without_killing(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    adopted = supmod.WorkerSession(
+        session_id="adopted",
+        input_path=str(sample.resolve()),
+        filename="sample.bin",
+        process=_FakeProcess(),
+        owned=False,
+    )
+    with sup._lock:
+        sup._register_session_locked(adopted, str(sample.resolve()))
+
+    result = sup.close_session("adopted", save=False)
+
+    assert result["owned"] is False
+    assert "adopted" not in sup.sessions
+    assert sup.path_to_session == {}
+    assert adopted.process.returncode is None
+
+
+def test_close_session_reports_save_failure_but_still_closes(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+
+    class _SaveFailsSupervisor(_FakeSupervisor):
+        def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
+            if name == "idb_save":
+                self.tool_calls.append((name, arguments))
+                return {"ok": False, "path": None, "error": "disk full"}
+            return super().call_worker_tool(worker, name, arguments)
+
+    sup = _SaveFailsSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+
+    result = sup.close_session("sample", save=True)
+
+    assert result["saved"] is False
+    assert result["save_error"] == "disk full"
+    assert "sample" not in sup.sessions
+    assert session.process.returncode == 0
+
+
+def test_close_session_frees_worker_slot(tmp_path):
+    first = tmp_path / "first.bin"
+    second = tmp_path / "second.bin"
+    first.write_bytes(b"1")
+    second.write_bytes(b"2")
+    restore = _patch_discovery(instances=[], probe=False)
+    try:
+        sup = _FakeSupervisor()
+        sup.max_workers = 1
+        sup.open_session(str(first), session_id="first")
+
+        # A second open is blocked while the single slot is occupied.
+        try:
+            sup.open_session(str(second), session_id="second")
+        except RuntimeError as e:
+            assert "Maximum idalib worker count reached" in str(e)
+        else:
+            raise AssertionError("expected the worker limit to be reached")
+
+        sup.close_session("first", save=False)
+
+        reopened = sup.open_session(str(second), session_id="second")
+        assert reopened.session_id == "second"
+    finally:
+        restore()
+
+
+def test_close_session_skips_save_when_unreachable(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+    sup._session_is_reachable = lambda candidate: False
+
+    result = sup.close_session("sample", save=True)
+
+    assert result["saved"] is None
+    assert all(name != "idb_save" for name, _ in sup.tool_calls)
+    assert "sample" not in sup.sessions
+    assert session.process.returncode == 0
+
+
+def test_idb_close_tool_returns_error_for_unknown_session():
+    old_supervisor = supmod.supervisor
+    supmod.supervisor = _FakeSupervisor()
+    try:
+        result = supmod.idb_close("nope")
+        assert "not found" in result["error"]
+    finally:
+        supmod.supervisor = old_supervisor
+
+
+def test_idb_close_is_a_management_tool_symbol():
+    assert "idb_close" in supmod.IDB_MANAGEMENT_TOOLS
+    assert callable(supmod.idb_close)
+
+
 def test_supervisor_uses_idb_prefixed_management_tools_only():
     """No legacy names should leak into IDB_MANAGEMENT_TOOLS or module symbols."""
     legacy = {
@@ -856,14 +1008,13 @@ def test_supervisor_uses_idb_prefixed_management_tools_only():
         "idalib_close",
         "idalib_list",
         "idalib_save",
-        "idb_close",
         "idalib_switch",
         "idalib_unbind",
         "idalib_current",
         "idalib_warmup",
         "idalib_health",
     }
-    assert supmod.IDB_MANAGEMENT_TOOLS == {"idb_open", "idb_list"}
+    assert supmod.IDB_MANAGEMENT_TOOLS == {"idb_open", "idb_list", "idb_close"}
     for name in legacy:
         assert not hasattr(supmod, name), f"{name} should have been deleted"
     for typename in ("IdalibWarmupResult", "IdalibHealthResult"):
