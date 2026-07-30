@@ -971,6 +971,11 @@ class IdalibSupervisor:
             if self.sessions.get(database) is session:
                 self._unregister_session_locked(database)
         self._terminate_worker(session)
+        if saved and session.owned:
+            # The worker is SIGTERM'd without a clean close_database(), so the
+            # working files it unpacked stay behind; the save above already
+            # rewrote the packed database.
+            self._cleanup_partial_database(session.input_path)
 
         info: IdalibCloseResult = {
             "success": True,

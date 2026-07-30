@@ -30,6 +30,7 @@ from ..api_core import (
     server_warmup,
     find_regex,
     search_text,
+    idb_save,
 )
 
 
@@ -553,3 +554,25 @@ def test_search_text_regex_mode():
         skip_test("no call/jmp in binary")
     for h in result["hits"]:
         assert h["matches"]
+
+
+@test()
+def test_idb_save_keeps_working_files():
+    """Repeated saves must not delete the open database's working files (#498)."""
+    import os
+    import ida_loader
+
+    idb = ida_loader.get_path(ida_loader.PATH_TYPE_IDB)
+    base = os.path.splitext(idb)[0] if idb.lower().endswith((".i64", ".idb")) else idb
+    parts = [base + ext for ext in (".id0", ".id1", ".id2", ".nam", ".til")]
+    before = [p for p in parts if os.path.exists(p)]
+    if not before:
+        skip_test("no loose working files for this database")
+
+    for _ in range(2):
+        result = idb_save()
+        assert result["ok"], result.get("error")
+        missing = [p for p in before if not os.path.exists(p)]
+        assert not missing, f"save removed working files: {missing}"
+
+    assert_non_empty(list_funcs({"offset": 0, "count": 5})[0]["data"])
