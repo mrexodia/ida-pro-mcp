@@ -45,6 +45,8 @@ from .utils import (
     InsnPattern,
     FuncProfileQuery,
     AnalyzeBatchQuery,
+    im_get_node,
+    im_get_tag,
 )
 from . import compat
 
@@ -616,13 +618,16 @@ def _limit_items(items: list, limit: int) -> tuple[list, bool]:
 def _disasm_lines_limited(func: ida_funcs.func_t, max_insns: int) -> tuple[list[str], bool]:
     lines: list[str] = []
     truncated = False
+    im_node = im_get_node()
     for item_ea in idautils.FuncItems(func.start_ea):
         if len(lines) >= max_insns:
             truncated = True
             break
         line = ida_lines.generate_disasm_line(item_ea, 0)
         instruction = ida_lines.tag_remove(line) if line else ""
-        lines.append(f"{item_ea:x}  {compact_whitespace(instruction)}")
+        tag = im_get_tag(item_ea, im_node)
+        suffix = f"  [SKIP:{tag}]" if tag else ""
+        lines.append(f"{item_ea:x}  {compact_whitespace(instruction)}{suffix}")
     return lines, truncated
 
 
@@ -795,7 +800,17 @@ def disasm(
         bool, "Compute total instruction count (default: false)"
     ] = False,
 ) -> DisasmResult:
-    """Disassemble function with offset/max_instructions pagination and optional total count."""
+    """Disassemble function with offset/max_instructions pagination and optional total count.
+
+    Each instruction line may include an 'ignore_micro' field ("prolog", "epilog",
+    or "switch") indicating the decompiler will skip/NOP this instruction.
+    If decompiled output looks wrong, an incorrectly marked instruction may be
+    the cause. Use set_ignore_micro(im_type='none') to clear the mark and
+    re-decompile.
+
+    If a comment contains '[ida-mcp: restore ignore_micro to <type>]', it means
+    the instruction was previously modified. To undo, call set_ignore_micro with
+    im_type set to the <type> value shown after 'to' in that comment."""
 
     # Enforce max limit
     if max_instructions <= 0 or max_instructions > 50000:
@@ -833,6 +848,8 @@ def disasm(
         total_count = 0
         more = False
 
+        _im_node = im_get_node()
+
         def _maybe_add(ea: int) -> bool:
             nonlocal seen, total_count, more
             if include_total:
@@ -856,6 +873,9 @@ def disasm(
                 refs = _collect_line_refs(ea)
                 if refs:
                     entry["refs"] = refs
+                tag = im_get_tag(ea, _im_node)
+                if tag:
+                    entry["ignore_micro"] = tag
                 lines.append(entry)
                 seen += 1
                 return True
@@ -2225,12 +2245,17 @@ def insn_query(
             )
 
             rows = []
+            _im_node = im_get_node()
             for addr_s in addresses:
                 ea = int(addr_s, 16)
                 row = {"addr": addr_s}
                 if include_disasm:
                     line = ida_lines.generate_disasm_line(ea, 0)
-                    row["disasm"] = compact_whitespace(ida_lines.tag_remove(line)) if line else ""
+                    disasm_text = compact_whitespace(ida_lines.tag_remove(line)) if line else ""
+                    tag = im_get_tag(ea, _im_node)
+                    if tag:
+                        disasm_text += f"  [SKIP:{tag}]"
+                    row["disasm"] = disasm_text
                 if include_fn:
                     row["fn"] = get_function(ea, raise_error=False)
                 rows.append(row)
