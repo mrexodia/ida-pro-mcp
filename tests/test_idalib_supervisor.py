@@ -590,6 +590,70 @@ def test_open_session_defaults_idle_ttl_sec_to_baseline(tmp_path):
     assert args["idle_ttl_sec"] == 600
 
 
+@pytest.mark.parametrize(
+    ("extra_args", "environment", "expected_timeout"),
+    [
+        ([], {}, 600),
+        (["--idle-timeout", "0"], {}, 0),
+        ([], {"IDA_MCP_IDLE_TIMEOUT": "1800"}, 1800),
+        (["--idle-timeout", "0"], {"IDA_MCP_IDLE_TIMEOUT": "1800"}, 0),
+        (["--idle-timeout", "0"], {"IDA_MCP_IDLE_TIMEOUT": "garbage"}, 0),
+    ],
+)
+def test_main_forwards_initial_worker_idle_timeout(
+    tmp_path, monkeypatch, extra_args, environment, expected_timeout
+):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    opened = []
+
+    class _MainSupervisor:
+        def __init__(self, _mcp, **_kwargs):
+            pass
+
+        def open_session(self, input_path, **kwargs):
+            opened.append((input_path, kwargs))
+
+        def shutdown(self):
+            pass
+
+    monkeypatch.setattr(supmod, "supervisor", None)
+    monkeypatch.setattr(supmod, "IdalibSupervisor", _MainSupervisor)
+    test_mcp = supmod.McpServer("test")
+    monkeypatch.setattr(supmod, "mcp", test_mcp)
+    monkeypatch.setattr(test_mcp, "serve", lambda **_kwargs: None)
+    monkeypatch.setattr(supmod.signal, "signal", lambda *_args: None)
+    monkeypatch.delenv("IDA_MCP_IDLE_TIMEOUT", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(sys, "argv", ["idalib-mcp", *extra_args, str(sample)])
+
+    supmod.main()
+
+    assert opened == [(str(sample), {"idle_ttl_sec": expected_timeout})]
+
+
+def test_main_rejects_negative_initial_worker_idle_timeout(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["idalib-mcp", "--idle-timeout", "-1"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        supmod.main()
+
+    assert exc_info.value.code == 2
+    assert "--idle-timeout must be 0 or greater" in capsys.readouterr().err
+
+
+def test_main_help_ignores_invalid_idle_timeout_environment(monkeypatch, capsys):
+    monkeypatch.setenv("IDA_MCP_IDLE_TIMEOUT", "garbage")
+    monkeypatch.setattr(sys, "argv", ["idalib-mcp", "--help"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        supmod.main()
+
+    assert exc_info.value.code == 0
+    assert "--idle-timeout SECONDS" in capsys.readouterr().out
+
+
 def test_open_session_skips_warmup_when_flags_disabled(tmp_path):
     sample = tmp_path / "sample.bin"
     sample.write_bytes(b"x")

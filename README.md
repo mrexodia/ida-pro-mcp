@@ -201,14 +201,14 @@ Database workers are persistent: each one runs as a detached process that
 outlives the supervisor that spawned it. When a new supervisor (over stdio
 or HTTP) calls `idb_open` for a binary that is already open under a worker
 on this host, the supervisor adopts that worker transparently — there is
-no separate "shared" mode to enable. Workers self-exit when no request has
-hit them for an idle interval.
+no separate "shared" mode to enable. Workers self-exit after an idle interval
+with no request in flight.
 
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
 ## Headless idalib Session Model
 
-`idalib-mcp` is a supervisor that keeps each open database in its own idalib worker process. Workers register themselves in a host-local discovery directory and outlive the supervisor that spawned them; any subsequent supervisor that wants the same path adopts the running worker. A worker self-exits when no request has hit it for its idle TTL (default 1 hour). Call `idb_close` to release a worker eagerly (freeing a slot toward `--max-workers`), adopted GUI/worker instances are detached rather than killed.
+`idalib-mcp` is a supervisor that keeps each open database in its own idalib worker process. Workers register themselves in a host-local discovery directory and outlive the supervisor that spawned them; any subsequent supervisor that wants the same path adopts the running worker. A worker self-exits after its idle TTL (default 10 minutes) if no request is in flight. The idle interval starts when the most recent request completes. Call `idb_close` to release a worker eagerly (freeing a slot toward `--max-workers`), adopted GUI/worker instances are detached rather than killed.
 
 `idb_open` picks the backend via its `mode` parameter:
 
@@ -247,6 +247,8 @@ Worker controls:
 
 - `--max-workers N`: maximum simultaneous database workers (`0` = unlimited, default `4`).
 - `IDA_MCP_MAX_WORKERS`: environment default for `--max-workers`.
+- `--idle-timeout SECONDS`: idle timeout for a new worker opened from the positional `input_path` (`0` = disabled, default `600`). An existing worker keeps its current timeout.
+- `IDA_MCP_IDLE_TIMEOUT`: environment default for `--idle-timeout`.
 
 
 ## MCP Resources

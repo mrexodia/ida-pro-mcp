@@ -21,12 +21,11 @@ def test_check_fires_after_idle_ttl():
     assert reason is not None and "no requests" in reason
 
 
-def test_touch_resets_idle_ttl():
-    lc = WorkerLifecycle(idle_ttl_sec=0.10, poll_interval_sec=0.05)
-    time.sleep(0.06)
-    lc.touch()
-    time.sleep(0.06)
-    assert lc.check_shutdown_reason() is None
+def test_active_request_does_not_time_out():
+    lc = WorkerLifecycle(idle_ttl_sec=0.05)
+    with lc.track_request():
+        time.sleep(0.10)
+        assert lc.check_shutdown_reason() is None
     time.sleep(0.10)
     assert lc.check_shutdown_reason() is not None
 
@@ -48,20 +47,6 @@ def test_watchdog_fires_callback_and_exits():
         lc.stop()
 
 
-def test_watchdog_does_not_fire_while_touched():
-    fired: list[str] = []
-    lc = WorkerLifecycle(idle_ttl_sec=0.10, poll_interval_sec=0.02)
-    lc.start(on_shutdown=lambda reason: fired.append(reason))
-    try:
-        deadline = time.monotonic() + 0.30
-        while time.monotonic() < deadline:
-            lc.touch()
-            time.sleep(0.03)
-        assert fired == []
-    finally:
-        lc.stop()
-
-
 def test_snapshot_exposes_idle_ttl():
     lc = WorkerLifecycle(idle_ttl_sec=42.0)
     snap = lc.snapshot()
@@ -75,10 +60,16 @@ def test_set_idle_ttl_uses_request_when_above_min():
     assert lc.idle_ttl_sec == 1800.0
 
 
-def test_set_idle_ttl_clamps_to_min():
+def test_set_idle_ttl_zero_disables_timeout():
     lc = WorkerLifecycle(idle_ttl_sec=1000.0)
-    lc.set_idle_ttl(0)
-    assert lc.idle_ttl_sec == WorkerLifecycle.MIN_IDLE_TTL_SEC
+    lc.set_idle_ttl(0, load_time_sec=120.0)
+    assert lc.idle_ttl_sec == 0
+    lc._last_request_at = time.monotonic() - 1000
+    assert lc.check_shutdown_reason() is None
+
+
+def test_set_idle_ttl_clamps_nonzero_values_below_min():
+    lc = WorkerLifecycle(idle_ttl_sec=1000.0)
     lc.set_idle_ttl(-50.0)
     assert lc.idle_ttl_sec == WorkerLifecycle.MIN_IDLE_TTL_SEC
     lc.set_idle_ttl(3.0)
@@ -93,7 +84,7 @@ def test_set_idle_ttl_adds_load_time():
 
 def test_set_idle_ttl_clamps_user_then_adds_load_time():
     lc = WorkerLifecycle(idle_ttl_sec=10.0)
-    lc.set_idle_ttl(0.0, load_time_sec=120.0)
+    lc.set_idle_ttl(3.0, load_time_sec=120.0)
     assert lc.idle_ttl_sec == WorkerLifecycle.MIN_IDLE_TTL_SEC + 120.0
 
 

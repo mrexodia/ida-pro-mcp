@@ -101,7 +101,7 @@ def idb_open(
     init_hexrays: Annotated[bool, "Initialize Hex-Rays decompiler after open"] = True,
     idle_ttl_sec: Annotated[
         int,
-        "Minimum idle TTL in seconds before the headless worker self-exits.",
+        "Minimum idle TTL in seconds before the headless worker self-exits (0 disables the timeout).",
     ] = 600,
     preferred_session_id: Annotated[
         str,
@@ -157,16 +157,14 @@ def idb_list() -> IdalibListResult:
 
 
 def _install_dispatch_hook() -> None:
-    """Wrap the registry dispatcher so every request bumps the watchdog timer."""
+    """Suppress idle expiry during requests and restart the timer on completion."""
     original = MCP_SERVER.registry.dispatch
 
-    def touching_dispatch(request):
-        try:
+    def tracking_dispatch(request):
+        with _LIFECYCLE.track_request():
             return original(request)
-        finally:
-            _LIFECYCLE.touch()
 
-    MCP_SERVER.registry.dispatch = touching_dispatch
+    MCP_SERVER.registry.dispatch = tracking_dispatch
 
 
 def main():
