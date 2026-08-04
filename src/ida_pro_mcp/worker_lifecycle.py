@@ -1,9 +1,10 @@
 """Worker self-shutdown bookkeeping.
 
-A spawned idalib worker exits cleanly when no JSON-RPC request has hit its
-dispatcher for `idle_ttl_sec` seconds. There is no per-supervisor refcount;
-every callable client keeps the worker alive simply by issuing requests
-through `idb_open`, `idb_list`, or any forwarded tool.
+A spawned idalib worker exits cleanly after `idle_ttl_sec` seconds with no
+JSON-RPC request in flight. Active requests suppress expiry, and the idle
+interval starts when the most recent request completes. There is no
+per-supervisor refcount; every callable client keeps the worker alive simply
+by issuing requests through `idb_open`, `idb_list`, or any forwarded tool.
 
 This module has no IDA dependencies on purpose so it can be unit-tested
 outside of IDA.
@@ -12,6 +13,8 @@ outside of IDA.
 import logging
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,7 @@ class WorkerLifecycle:
         )
         self._lock = threading.Lock()
         self._last_request_at = time.monotonic()
+        self._active_requests = 0
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._on_shutdown: Callable[[str], None] | None = None
@@ -58,12 +62,22 @@ class WorkerLifecycle:
         if thread is not None:
             thread.join(timeout=5.0)
 
-    def touch(self) -> None:
+    @contextmanager
+    def track_request(self) -> Iterator[None]:
         with self._lock:
-            self._last_request_at = time.monotonic()
+            self._active_requests += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._active_requests -= 1
+                self._last_request_at = time.monotonic()
 
     def set_idle_ttl(self, user_ttl_sec: float, load_time_sec: float = 0.0) -> None:
         with self._lock:
+            if user_ttl_sec == 0:
+                self.idle_ttl_sec = 0
+                return
             self.idle_ttl_sec = (
                 max(self.MIN_IDLE_TTL_SEC, user_ttl_sec) + max(0.0, load_time_sec)
             )
@@ -80,6 +94,9 @@ class WorkerLifecycle:
         with self._lock:
             last_req = self._last_request_at
             ttl = self.idle_ttl_sec
+            active_requests = self._active_requests
+        if active_requests or ttl == 0:
+            return None
         now = time.monotonic()
         if (now - last_req) > ttl:
             return f"no requests for {now - last_req:.1f}s"
