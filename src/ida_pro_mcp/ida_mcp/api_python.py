@@ -117,16 +117,15 @@ def py_eval(
     code: Annotated[str, "Python code"],
     new_locals: Annotated[
         bool,
-        "True (default): start with a fresh locals namespace. False: reuse the locals namespace from previous py_eval calls, so variables assigned earlier remain visible (Jupyter-like persistence).",
-    ] = True,
+        "False (default): reuse the locals namespace from previous py_eval calls, so variables assigned earlier remain visible (Jupyter-like persistence). True: reset and start with a fresh locals namespace.",
+    ] = False,
 ) -> PythonExecResult:
     """Execute Python in IDA context and return result/stdout/stderr.
 
-    Locals persistence: by default each call starts with a fresh locals
-    namespace. Pass new_locals=False to keep and reuse the locals dict across
-    calls (Jupyter-style persistent session): variables, imports, and
-    definitions from previous calls stay visible. Passing new_locals=True
-    again resets the stored namespace.
+    Locals persistence (Jupyter-style): the locals namespace persists across
+    calls by default, so variables, imports, and definitions from previous
+    calls stay visible. Pass new_locals=True to reset the stored namespace
+    and start fresh.
 
     Note: the globals namespace (IDA modules and helpers) is always rebuilt
     per call; only locals persist. Jupyter-style last-expression return:
