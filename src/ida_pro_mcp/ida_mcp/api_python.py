@@ -102,6 +102,9 @@ class PythonExecResult(TypedDict):
     stderr: str
 
 
+_persisted_locals: dict = {}
+
+
 # ============================================================================
 # Python Evaluation
 # ============================================================================
@@ -112,8 +115,22 @@ class PythonExecResult(TypedDict):
 @unsafe
 def py_eval(
     code: Annotated[str, "Python code"],
+    new_locals: Annotated[
+        bool,
+        "False (default): reuse the locals namespace from previous py_eval calls, so variables assigned earlier remain visible (Jupyter-like persistence). True: reset and start with a fresh locals namespace.",
+    ] = False,
 ) -> PythonExecResult:
-    """Execute Python in IDA context and return result/stdout/stderr."""
+    """Execute Python in IDA context and return result/stdout/stderr.
+
+    Locals persistence (Jupyter-style): the locals namespace persists across
+    calls by default, so variables, imports, and definitions from previous
+    calls stay visible. Pass new_locals=True to reset the stored namespace
+    and start fresh.
+
+    Note: the globals namespace (IDA modules and helpers) is always rebuilt
+    per call; only locals persist. Jupyter-style last-expression return:
+    if the code ends with an expression, its value is returned in "result".
+    """
     # Capture stdout/stderr
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
@@ -125,9 +142,12 @@ def py_eval(
         sys.stderr = stderr_capture
 
         exec_globals = _make_exec_globals()
+        if new_locals:
+            _persisted_locals.clear()
+        exec_globals.update(_persisted_locals)
 
         result_value = None
-        exec_locals = {}
+        exec_locals = _persisted_locals
 
         # Parse code with AST to properly handle execution
         try:
