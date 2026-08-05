@@ -6,16 +6,33 @@ while HTTP/SSE configs still embed the RPC address.
 
 import os
 import sys
+import tempfile
+import tomllib
+from unittest.mock import patch
 
 from ..framework import test
 
 try:
-    from ida_pro_mcp.installer import generate_mcp_config, SERVER_SCRIPT, IDA_HOST, IDA_PORT
+    from ida_pro_mcp.installer import (
+        IDA_HOST,
+        IDA_PORT,
+        SERVER_SCRIPT,
+        generate_mcp_config,
+        install_mcp_servers,
+    )
+    from ida_pro_mcp.installer_data import get_project_configs
 except ImportError:
     _parent = os.path.join(os.path.dirname(__file__), "..", "..")
     sys.path.insert(0, _parent)
     try:
-        from installer import generate_mcp_config, SERVER_SCRIPT, IDA_HOST, IDA_PORT
+        from installer import (
+            IDA_HOST,
+            IDA_PORT,
+            SERVER_SCRIPT,
+            generate_mcp_config,
+            install_mcp_servers,
+        )
+        from installer_data import get_project_configs
     finally:
         sys.path.remove(_parent)
 
@@ -72,3 +89,40 @@ def test_claude_http_config_has_type_field():
     config = generate_mcp_config(client_name="Claude", transport="streamable-http")
     assert config.get("type") == "http"
     assert "url" in config
+
+
+@test()
+def test_codex_project_config_path():
+    """Codex project installs target .codex/config.toml in the repo."""
+    project_configs = get_project_configs("/tmp/example-project")
+    assert project_configs["Codex"] == (
+        "/tmp/example-project/.codex",
+        "config.toml",
+    )
+
+
+@test()
+def test_codex_project_install_writes_toml_mcp_servers():
+    """Project-scope Codex install writes a TOML mcp_servers entry."""
+    with tempfile.TemporaryDirectory() as tempdir:
+        config_dir = os.path.join(tempdir, ".codex")
+        config_path = os.path.join(config_dir, "config.toml")
+        with patch(
+            "ida_pro_mcp.installer.get_project_configs",
+            return_value={"Codex": (config_dir, "config.toml")},
+        ):
+            install_mcp_servers(
+                transport="streamable-http",
+                only=["Codex"],
+                project=True,
+                quiet=True,
+            )
+
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+
+        assert "mcp_servers" in config
+        assert "ida-pro-mcp" in config["mcp_servers"]
+        codex_config = config["mcp_servers"]["ida-pro-mcp"]
+        assert codex_config["url"].endswith("/mcp")
+        assert codex_config["default_tools_approval_mode"] == "approve"
