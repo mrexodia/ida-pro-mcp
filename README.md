@@ -45,6 +45,8 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 uv run "C:\Program Files\IDA Professional 9.3\idalib\python\py-activate-idalib.py"
 # macos
 uv run "/Applications/IDA Professional 9.3.app/Contents/MacOS/idalib/python/py-activate-idalib.py"
+# linux
+uv run "/path/to/idapro-9.3/idalib/python/py-activate-idalib.py"
 ```
 
 ## Installation (Claude Code)
