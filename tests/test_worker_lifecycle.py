@@ -101,3 +101,19 @@ def test_set_idle_ttl_ignores_negative_load_time():
     lc = WorkerLifecycle(idle_ttl_sec=10.0)
     lc.set_idle_ttl(600.0, load_time_sec=-5.0)
     assert lc.idle_ttl_sec == 600.0
+
+
+def test_zero_idle_ttl_never_self_exits():
+    lc = WorkerLifecycle(idle_ttl_sec=0.0, poll_interval_sec=0.05)
+    time.sleep(0.10)
+    assert lc.check_shutdown_reason() is None
+
+
+def test_busy_probe_keeps_worker_alive_past_ttl():
+    lc = WorkerLifecycle(idle_ttl_sec=0.05, poll_interval_sec=0.05)
+    busy = [True]
+    lc.set_busy_probe(lambda: busy[0])
+    time.sleep(0.10)
+    assert lc.check_shutdown_reason() is None
+    busy[0] = False
+    assert lc.check_shutdown_reason() is not None

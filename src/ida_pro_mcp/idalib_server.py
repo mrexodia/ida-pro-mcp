@@ -17,6 +17,7 @@ from ida_pro_mcp.ida_mcp.api_core import (
 )
 from ida_pro_mcp.ida_mcp.discovery import register_instance, unregister_instance
 from ida_pro_mcp.ida_mcp.http import IdaMcpHttpRequestHandler
+from ida_pro_mcp.ida_mcp.mainthread import get_pump
 from ida_pro_mcp.ida_mcp.profile import apply_profile, load_profile
 from ida_pro_mcp.ida_mcp.rpc import set_download_base_url, tool
 from ida_pro_mcp.idalib_session_manager import get_session_manager
@@ -60,6 +61,7 @@ IDB_MANAGEMENT_TOOLS = {
 
 
 _LIFECYCLE = WorkerLifecycle()
+_PUMP = get_pump()
 _REGISTERED_PORT: int | None = None
 _BOUND_HOST: str = ""
 _BOUND_PORT: int = 0
@@ -109,6 +111,20 @@ def idb_open(
     ] = "",
 ) -> IdalibOpenResult:
     """Open a binary, activate it, and warm up subsystems in one call."""
+
+    if _PUMP.active and not _PUMP.on_main_thread():
+        # open_database and everything after it must run on the IDA thread.
+        return _PUMP.submit(
+            lambda: idb_open(
+                input_path,
+                run_auto_analysis,
+                build_caches,
+                init_hexrays,
+                idle_ttl_sec,
+                preferred_session_id,
+            ),
+            label="idb_open",
+        )
 
     try:
         manager = get_session_manager()
@@ -239,22 +255,22 @@ def main():
         logger.info("Worker lifecycle requesting shutdown: %s", reason)
         # MCP_SERVER.stop() must be called from outside the serve_forever
         # thread; our watchdog thread qualifies.
+        _PUMP.stop()
         try:
             MCP_SERVER.stop()
         except Exception:
             logger.exception("MCP_SERVER.stop() failed during lifecycle shutdown")
 
+    _LIFECYCLE.set_busy_probe(lambda: _PUMP.busy_status() is not None)
     _LIFECYCLE.start(on_shutdown=_on_lifecycle_exit)
     _install_dispatch_hook()
 
     def cleanup_and_exit(signum, frame):
         logger.info("Signal %s received; shutting down", signum)
-        # MCP_SERVER.stop() blocks until serve_forever() returns, but this
-        # handler runs on the main thread — the same thread that is parked
-        # inside serve_forever() underneath this frame. Calling stop() here
-        # deadlocks the process forever (and, having flipped _running to
-        # False, turns every later stop() — watchdog TTL, repeat signals —
-        # into a no-op). Stop from a helper thread instead.
+        # The main thread runs the pump, not serve_forever, so stopping the
+        # server from a helper thread is both safe and required.
+        _PUMP.stop()
+
         def _stop():
             try:
                 MCP_SERVER.stop()
@@ -301,16 +317,25 @@ def main():
         set_download_base_url(f"http://{args.host}:{args.port}")
 
     try:
+        # HTTP on background threads keeps ping/health/cancel answerable while
+        # a tool occupies IDA. Arm first: requests may arrive before run().
+        _PUMP.arm()
         MCP_SERVER.serve(
             host=args.host,
             port=args.port,
-            background=False,
+            background=True,
+            threaded=True,
             request_handler=IdaMcpHttpRequestHandler,
         )
+        _PUMP.run()
     finally:
-        # Reached when MCP_SERVER.serve returns: either signal handler called
-        # .stop(), watchdog called .stop(), or the loop errored out.
+        # Reached once the pump stops: signal handler, watchdog, or an error.
         logger.info("Server loop exited; cleaning up")
+        _PUMP.stop()
+        try:
+            MCP_SERVER.stop()
+        except Exception:
+            logger.exception("MCP_SERVER.stop() failed during cleanup")
         _LIFECYCLE.stop()
         _deregister_from_discovery()
         try:

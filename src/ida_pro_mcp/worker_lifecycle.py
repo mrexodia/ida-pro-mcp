@@ -41,6 +41,15 @@ class WorkerLifecycle:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._on_shutdown: Callable[[str], None] | None = None
+        self._busy_probe: Callable[[], bool] | None = None
+
+    def set_busy_probe(self, probe: Callable[[], bool]) -> None:
+        """Register a callback reporting whether a call is currently running.
+
+        Requests touch the timer on arrival, so a call longer than the TTL
+        would otherwise look idle and be shut down mid-work.
+        """
+        self._busy_probe = probe
 
     def start(self, on_shutdown: Callable[[str], None]) -> None:
         if self._thread is not None:
@@ -80,6 +89,10 @@ class WorkerLifecycle:
         with self._lock:
             last_req = self._last_request_at
             ttl = self.idle_ttl_sec
+        if ttl <= 0:
+            return None  # long-lived worker: never self-exit
+        if self._busy_probe is not None and self._busy_probe():
+            return None  # mid tool call: not idle, however long it takes
         now = time.monotonic()
         if (now - last_req) > ttl:
             return f"no requests for {now - last_req:.1f}s"
