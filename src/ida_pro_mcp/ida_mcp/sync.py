@@ -8,6 +8,7 @@ import time
 import idaapi
 import ida_kernwin
 import idc
+from .mainthread import PumpBusyError, get_pump
 from .rpc import McpToolError
 from .zeromcp.jsonrpc import get_current_cancel_event, RequestCancelledError
 
@@ -40,6 +41,9 @@ class CancelledError(RequestCancelledError):
 logger = logging.getLogger(__name__)
 _TOOL_TIMEOUT_ENV = "IDA_MCP_TOOL_TIMEOUT_SEC"
 _DEFAULT_TOOL_TIMEOUT_SEC = 60.0
+# Waiters allow a bit more than the tool's own timeout, so a tool that times
+# out reports its own error rather than a generic busy one.
+_PUMP_WAIT_SLACK_SEC = 30.0
 
 
 # Thread-local: while a synchronized tool body is running, holds the monotonic
@@ -167,16 +171,22 @@ def _normalize_timeout(value: object) -> float | None:
 
 
 def sync_wrapper(
-    ff, timeout_override: float | None = None, keep_batch: bool = False
+    ff,
+    timeout_override: float | None = None,
+    keep_batch: bool = False,
+    cancel_event: "threading.Event | None" = None,
 ):
     """Wrapper to enable timeout and cancellation during IDA synchronization.
 
     Note: Batch mode is now handled in _sync_wrapper to ensure it's always
     applied consistently for all synchronized operations. Pass keep_batch=True
     to opt out of the post-call batch restore (see _sync_wrapper docstring).
+
+    `cancel_event` is passed explicitly when the body runs on the main-thread
+    pump rather than the requesting thread, where the thread-local is absent.
     """
-    # Capture cancel event from thread-local before execute_sync
-    cancel_event = get_current_cancel_event()
+    if cancel_event is None:
+        cancel_event = get_current_cancel_event()
 
     timeout = timeout_override
     if timeout is None:
@@ -261,7 +271,27 @@ def idasync(f):
             getattr(f, "__ida_mcp_timeout_sec__", None)
         )
         keep_batch = bool(getattr(f, "__ida_mcp_keep_batch__", False))
-        return sync_wrapper(ff, timeout_override, keep_batch=keep_batch)
+
+        pump = get_pump()
+        if not pump.active or pump.on_main_thread():
+            return sync_wrapper(ff, timeout_override, keep_batch=keep_batch)
+
+        # Headless: IDA only runs on the pump thread, so hand the whole
+        # synchronized body over and wait for it there.
+        cancel_event = get_current_cancel_event()
+        timeout = timeout_override
+        if timeout is None:
+            timeout = _get_tool_timeout_seconds()
+        try:
+            return pump.submit(
+                lambda: sync_wrapper(
+                    ff, timeout_override, keep_batch=keep_batch, cancel_event=cancel_event
+                ),
+                label=f.__name__,
+                timeout=(timeout + _PUMP_WAIT_SLACK_SEC) if timeout > 0 else None,
+            )
+        except PumpBusyError as e:
+            raise IDAError(str(e)) from None
 
     return wrapper
 

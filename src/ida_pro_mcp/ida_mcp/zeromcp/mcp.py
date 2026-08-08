@@ -600,14 +600,22 @@ class McpServer:
     def prompt(self, func: Callable) -> Callable:
         return self.prompts.method(func)
 
-    def serve(self, host: str, port: int, *, background = True, request_handler = McpHttpRequestHandler):
+    def serve(self, host: str, port: int, *, background = True, threaded = True, request_handler = McpHttpRequestHandler):
+        """Serve HTTP.
+
+        `background` controls whether serve_forever() blocks the caller;
+        `threaded` controls request concurrency. They are independent: a
+        caller can keep its own thread free (background=True) while still
+        serving requests concurrently, or park on serve_forever with a
+        single-threaded server.
+        """
         if self._running:
             logger.info("[MCP] Server is already running")
             return
 
         # Create server with deferred binding
         assert issubclass(request_handler, McpHttpRequestHandler)
-        self._http_server = (ThreadingHTTPServer if background else HTTPServer)(
+        self._http_server = (ThreadingHTTPServer if threaded else HTTPServer)(
             (host, port),
             request_handler,
             bind_and_activate=False

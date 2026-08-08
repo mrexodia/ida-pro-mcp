@@ -20,6 +20,7 @@ import ida_nalt
 import ida_typeinf
 import idc
 
+from .mainthread import get_pump
 from .rpc import tool
 from .sync import idasync, get_tool_deadline
 from .utils import (
@@ -45,7 +46,7 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
-class ServerHealthResult(TypedDict):
+class ServerHealthResult(TypedDict, total=False):
     status: str
     uptime_sec: float
     idb_path: str | None
@@ -56,6 +57,9 @@ class ServerHealthResult(TypedDict):
     hexrays_ready: bool
     strings_cache_ready: bool
     strings_cache_size: int
+    busy_tool: str
+    busy_sec: float
+    queued_calls: int
 
 
 class ServerWarmupStep(TypedDict, total=False):
@@ -382,11 +386,26 @@ def _build_health_payload() -> dict:
     }
 
 
-@tool
 @idasync
+def _server_health_full() -> ServerHealthResult:
+    return _build_health_payload()
+
+
+@tool
 def server_health() -> ServerHealthResult:
     """Health/ready probe for MCP server and current IDB state."""
-    return _build_health_payload()
+    # Every field below needs the IDA main thread. Report the busy state
+    # rather than queueing behind the very call we are meant to observe.
+    busy = get_pump().busy_status()
+    if busy is not None:
+        return {
+            "status": "busy",
+            "uptime_sec": round(time.time() - _server_started_at, 3),
+            "busy_tool": busy["tool"],
+            "busy_sec": busy["elapsed_sec"],
+            "queued_calls": busy["queued"],
+        }
+    return _server_health_full()
 
 
 @idasync

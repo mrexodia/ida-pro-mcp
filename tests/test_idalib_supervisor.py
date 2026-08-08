@@ -99,7 +99,7 @@ class _FakeSupervisor(supmod.IdalibSupervisor):
     def _session_is_reachable(self, session):
         return session.is_alive()
 
-    def _probe_session_health(self, session):
+    def _probe_session_health(self, session, *, tcp_timeout=None, rpc_timeout=None):
         reachable = self._session_is_reachable(session)
         return {
             "backend": session.backend,
@@ -107,6 +107,7 @@ class _FakeSupervisor(supmod.IdalibSupervisor):
             "tcp_connect": reachable if session.backend == "worker" else None,
             "rpc_ping": reachable if session.backend == "worker" else None,
             "reachable": reachable,
+            "state": "ok" if reachable else "dead",
             "failed_probe": None if reachable else "tcp_connect",
             "error": None if reachable else "unreachable",
         }
@@ -833,6 +834,159 @@ def test_probe_session_health_reports_rpc_ping_failure(monkeypatch):
     assert "rpc timeout" in health["error"]
 
 
+def _silent_worker_supervisor(monkeypatch, *, process):
+    """Supervisor whose worker accepts TCP but never answers ping."""
+    sup = supmod.IdalibSupervisor(supmod.McpServer("test"))
+    worker = supmod.WorkerSession(
+        session_id="worker",
+        input_path="sample.bin",
+        filename="sample.bin",
+        host="127.0.0.1",
+        port=12345,
+        process=process,
+    )
+
+    class _FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        supmod.socket, "create_connection", lambda *_a, **_k: _FakeSocket()
+    )
+    sup._worker_rpc = lambda *_a, **_k: (_ for _ in ()).throw(TimeoutError("busy"))
+    monkeypatch.setattr(supmod, "WORKER_HEALTH_RETRIES", 1)
+    return sup, worker
+
+
+def test_probe_reports_live_but_silent_worker_as_busy(monkeypatch):
+    sup, worker = _silent_worker_supervisor(monkeypatch, process=_FakeProcess())
+
+    health = sup._probe_session_health(worker)
+
+    assert health["state"] == "busy"
+    assert health["reachable"] is False
+
+
+def test_probe_reports_exited_worker_as_dead(monkeypatch):
+    sup, worker = _silent_worker_supervisor(monkeypatch, process=_DeadProcess())
+
+    health = sup._probe_session_health(worker)
+
+    assert health["state"] == "dead"
+    assert health["failed_probe"] == "process"
+
+
+def test_resolve_session_keeps_busy_worker(monkeypatch):
+    process = _FakeProcess()
+    sup, worker = _silent_worker_supervisor(monkeypatch, process=process)
+    with sup._lock:
+        sup._register_session_locked(worker, worker.input_path)
+
+    resolved = sup.resolve_session("worker")
+
+    assert resolved is worker
+    assert "worker" in sup.sessions
+    assert process.returncode is None
+    assert worker.unresponsive_since is not None
+
+
+def test_resolve_session_does_not_retry_probe_on_busy_worker(monkeypatch):
+    """Busy calls are forwarded, so extra probing is pure added latency."""
+    sup, worker = _silent_worker_supervisor(monkeypatch, process=_FakeProcess())
+    with sup._lock:
+        sup._register_session_locked(worker, worker.input_path)
+    monkeypatch.setattr(supmod, "WORKER_HEALTH_RETRIES", 5)
+    probes = []
+    original = sup._probe_session_health
+    sup._probe_session_health = lambda *a, **kw: (
+        probes.append(kw), original(*a, **kw)
+    )[1]
+
+    sup.resolve_session("worker")
+
+    assert len(probes) == 1
+    assert probes[0]["rpc_timeout"] == supmod.WORKER_QUICK_RPC_TIMEOUT_SEC
+
+
+def test_resolve_session_reaps_worker_wedged_past_grace(monkeypatch):
+    process = _FakeProcess()
+    sup, worker = _silent_worker_supervisor(monkeypatch, process=process)
+    with sup._lock:
+        sup._register_session_locked(worker, worker.input_path)
+    monkeypatch.setattr(supmod, "WORKER_WEDGED_GRACE_SEC", 60.0)
+    worker.unresponsive_since = supmod.time.monotonic() - 120.0
+
+    try:
+        sup.resolve_session("worker")
+    except RuntimeError as e:
+        assert "not reachable" in str(e)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+    assert "worker" not in sup.sessions
+    assert process.returncode == 0
+
+
+def test_zero_wedged_grace_never_reaps_live_worker(monkeypatch):
+    process = _FakeProcess()
+    sup, worker = _silent_worker_supervisor(monkeypatch, process=process)
+    with sup._lock:
+        sup._register_session_locked(worker, worker.input_path)
+    monkeypatch.setattr(supmod, "WORKER_WEDGED_GRACE_SEC", 0.0)
+    worker.unresponsive_since = supmod.time.monotonic() - 10_000.0
+
+    assert sup.resolve_session("worker") is worker
+    assert process.returncode is None
+
+
+def test_list_sessions_marks_busy_worker_active(monkeypatch):
+    sup, worker = _silent_worker_supervisor(monkeypatch, process=_FakeProcess())
+    with sup._lock:
+        sup._register_session_locked(worker, worker.input_path)
+    monkeypatch.setattr(supmod._discovery, "discover_instances", lambda: [])
+
+    entry = sup.list_sessions()[0]
+
+    assert entry["is_active"] is True
+    assert entry["busy"] is True
+
+
+def test_handle_tools_call_reports_busy_on_worker_timeout(monkeypatch, tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    sup.open_session(str(sample), session_id="sample")
+
+    def timeout_rpc(*_a, **_k):
+        raise supmod.socket.timeout("timed out")
+
+    sup._worker_rpc = timeout_rpc
+    old_supervisor = supmod.supervisor
+    supmod.supervisor = sup
+    try:
+        result = supmod._handle_tools_call(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "decompile",
+                    "arguments": {"addr": "0x1000", "database": "sample"},
+                },
+            }
+        )
+    finally:
+        supmod.supervisor = old_supervisor
+
+    assert result is not None
+    assert result["result"]["isError"] is True
+    assert "still busy" in result["result"]["content"][0]["text"]
+    assert "sample" in sup.sessions
+
+
 def test_list_sessions_reports_is_active_from_health_probe(tmp_path):
     first = tmp_path / "first.bin"
     second = tmp_path / "second.bin"
@@ -1269,3 +1423,86 @@ def test_closed_gui_session_does_not_reappear_if_closed_during_headless_fallback
         assert sup.spawned[-1].process.returncode == 0
     finally:
         restore()
+
+
+def test_probe_reports_busy_adopted_worker_as_busy(monkeypatch):
+    """No Popen handle, but a completed TCP handshake proves it is alive."""
+    sup, worker = _silent_worker_supervisor(monkeypatch, process=None)
+    worker.owned = False
+
+    health = sup._probe_session_health(worker)
+
+    assert health["tcp_connect"] is True
+    assert health["state"] == "busy"
+
+
+def test_probe_reports_adopted_worker_with_no_listener_as_dead(monkeypatch):
+    sup, worker = _silent_worker_supervisor(monkeypatch, process=None)
+    worker.owned = False
+    monkeypatch.setattr(
+        supmod.socket,
+        "create_connection",
+        lambda *_a, **_k: (_ for _ in ()).throw(ConnectionRefusedError("refused")),
+    )
+
+    health = sup._probe_session_health(worker)
+
+    assert health["tcp_connect"] is False
+    assert health["state"] == "dead"
+
+
+def test_resolve_session_keeps_busy_adopted_worker(monkeypatch):
+    sup, worker = _silent_worker_supervisor(monkeypatch, process=None)
+    worker.owned = False
+    with sup._lock:
+        sup._register_session_locked(worker, worker.input_path)
+
+    assert sup.resolve_session("worker") is worker
+    assert "worker" in sup.sessions
+
+
+def test_open_session_returns_winner_when_concurrent_open_fails(tmp_path):
+    """The loser of a same-path race must get the winner, not a locked-DB error."""
+    binary = tmp_path / "sample.bin"
+    binary.write_bytes(b"\x00")
+    resolved = str(binary.resolve())
+
+    winner = supmod.WorkerSession(
+        session_id="winner",
+        input_path=resolved,
+        filename=binary.name,
+        host="127.0.0.1",
+        port=12345,
+        process=_FakeProcess(),
+    )
+
+    class _LosingSupervisor(_FakeSupervisor):
+        def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
+            if name == "idb_open":
+                # The winner registers while this open is in flight.
+                with self._lock:
+                    self._register_session_locked(winner, resolved)
+                raise RuntimeError(f"Failed to open database: {resolved}")
+            return super().call_worker_tool(worker, name, arguments, timeout=timeout)
+
+    sup = _LosingSupervisor()
+    cleaned: list = []
+    sup._cleanup_partial_database = lambda *a, **k: cleaned.append(a)
+
+    assert sup.open_session(resolved) is winner
+    assert cleaned == [], "must not delete working files owned by the winner"
+
+
+def test_open_session_still_raises_when_no_concurrent_winner(tmp_path):
+    binary = tmp_path / "sample.bin"
+    binary.write_bytes(b"\x00")
+
+    class _FailingOpen(_FakeSupervisor):
+        def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
+            if name == "idb_open":
+                raise RuntimeError("Failed to open database")
+            return super().call_worker_tool(worker, name, arguments, timeout=timeout)
+
+    sup = _FailingOpen()
+    with pytest.raises(RuntimeError, match="Failed to open database"):
+        sup.open_session(str(binary.resolve()))
