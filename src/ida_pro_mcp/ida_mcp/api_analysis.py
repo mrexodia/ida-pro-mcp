@@ -2429,13 +2429,15 @@ def callgraph(
                 for item_ea in idautils.FuncItems(f.start_ea):
                     if truncated:
                         break
-                    for xref in idautils.CodeRefsFrom(item_ea, 0):
+                    for xref in idautils.XrefsFrom(item_ea, 0):
+                        if not xref.iscode or xref.type not in (ida_xref.fl_CN, ida_xref.fl_CF):
+                            continue
                         if truncated:
                             break
                         if edges_added >= max_edges_per_func:
                             per_func_capped = True
                             break
-                        callee_func = idaapi.get_func(xref)
+                        callee_func = idaapi.get_func(xref.to)
                         if callee_func:
                             if len(edges) >= max_edges:
                                 hit_limit("edges")
