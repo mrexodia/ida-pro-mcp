@@ -40,7 +40,7 @@ class DeclareTypeResult(TypedDict, total=False):
 
 class EnumMemberUpsertResult(TypedDict, total=False):
     name: str
-    value: int
+    value: int | str # str when outside the JS safe-integer range (see rpc.sanitize_bigints)
     created: bool
     skipped: bool
     error: str

@@ -33,7 +33,7 @@ class BytesReadResult(TypedDict):
 class IntReadResult(TypedDict):
     addr: str
     ty: str
-    value: int | None
+    value: int | str | None # str when outside the JS safe-integer range (see rpc.sanitize_bigints)
     error: NotRequired[str]
 
 

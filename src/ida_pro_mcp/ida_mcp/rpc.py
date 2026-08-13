@@ -22,6 +22,21 @@ OUTPUT_CACHE_MAX_SIZE = 100
 _output_cache: dict[str, Any] = {}
 _download_base_url: str = os.environ.get("IDA_MCP_URL", "http://127.0.0.1:13337")
 
+# Wider values become BigInt in Node MCP clients, which crash re-serializing
+# them, so they go out as strings and return types must declare `int | str`.
+JS_MAX_SAFE_INT = 2**53 - 1
+
+
+def sanitize_bigints(value: Any) -> Any:
+    """Recursively stringify integers outside the JS safe-integer range."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if -JS_MAX_SAFE_INT <= value <= JS_MAX_SAFE_INT else str(value)
+    if isinstance(value, dict):
+        return {k: sanitize_bigints(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [sanitize_bigints(item) for item in value]
+    return value
+
 
 def set_download_base_url(url: str) -> None:
     global _download_base_url
@@ -91,8 +106,8 @@ def _cache_output(output_id: str, data: Any) -> None:
     _output_cache[output_id] = data
 
 
-def _install_tools_call_patch() -> None:
-    original = MCP_SERVER.registry.methods["tools/call"]
+def install_tools_call_middleware(server: McpServer) -> None:
+    original = server.registry.methods["tools/call"]
 
     def patched(
         name: str, arguments: Optional[dict] = None, _meta: Optional[dict] = None
@@ -105,6 +120,15 @@ def _install_tools_call_patch() -> None:
         structured = response.get("structuredContent")
         if structured is None:
             return response
+
+        sanitized = sanitize_bigints(structured)
+        if sanitized != structured:
+            structured = sanitized
+            response["structuredContent"] = structured
+            response["content"] = [{
+                "type": "text",
+                "text": json.dumps(structured, separators=(",", ":")),
+            }]
 
         serialized = json.dumps(structured)
         if len(serialized) <= OUTPUT_LIMIT_MAX_CHARS:
@@ -131,11 +155,11 @@ def _install_tools_call_patch() -> None:
             "_meta": {"ida_mcp": download_meta},
         }
 
-    MCP_SERVER.registry.methods["tools/call"] = patched
+    server.registry.methods["tools/call"] = patched
 
 
 # Install the output limiting patch
-_install_tools_call_patch()
+install_tools_call_middleware(MCP_SERVER)
 
 
 # ============================================================================
