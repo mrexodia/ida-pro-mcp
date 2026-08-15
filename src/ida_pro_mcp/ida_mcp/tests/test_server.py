@@ -108,6 +108,59 @@ def test_streamable_http_initialize_returns_session_id():
 
 
 @test()
+def test_streamable_http_reuses_pooled_connection():
+    """A pooled client must be able to send a second request on the same socket.
+
+    Clients that pool connections send initialize and then
+    notifications/initialized over one socket. Under HTTP/1.0 the server closes
+    after the first response and the second write fails with a reset.
+    """
+    test_mcp = server.McpServer("keepalive-test")
+    test_mcp.serve("127.0.0.1", 0, request_handler=server.McpHttpRequestHandler)
+    port = test_mcp._http_server.server_address[1]
+    conn = server.http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        payload = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1.0"},
+                },
+            }
+        )
+        conn.request("POST", "/mcp", payload, {"Content-Type": "application/json"})
+        response = conn.getresponse()
+        response.read()
+        session_id = response.getheader("Mcp-Session-Id")
+        assert response.version == 11, f"Expected HTTP/1.1, got {response.version}"
+        assert not response.will_close, "Server closed a keep-alive connection"
+
+        # http.client silently reconnects when the socket is gone, so compare
+        # the socket object to prove the original connection was reused.
+        pooled_sock = conn.sock
+        notification = json.dumps(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        )
+        conn.request(
+            "POST",
+            "/mcp",
+            notification,
+            {"Content-Type": "application/json", "Mcp-Session-Id": session_id},
+        )
+        second = conn.getresponse()
+        second.read()
+        assert second.status == 202
+        assert conn.sock is pooled_sock, "Connection was re-established, not reused"
+    finally:
+        conn.close()
+        test_mcp.stop()
+
+
+@test()
 def test_server_proxy_to_ida_forwards_session_and_extensions():
     """Proxy requests should preserve MCP session and enabled extensions."""
     with _saved_target():

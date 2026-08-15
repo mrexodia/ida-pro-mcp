@@ -234,6 +234,11 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
     server_version = "zeromcp/1.3.0"
     error_message_format = "%(code)d - %(message)s"
     error_content_type = "text/plain"
+    # Clients that pool connections reuse the socket for the request that
+    # follows initialize. Under HTTP/1.0 the server closes it first and the
+    # client sees a connection reset. Every response below is self-delimiting,
+    # except the SSE stream which opts out of keep-alive explicitly.
+    protocol_version = "HTTP/1.1"
 
     def __init__(self, request, client_address, server):
         self.mcp_server: "McpServer" = getattr(server, "mcp_server")
@@ -263,11 +268,13 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                 self.send_header("Access-Control-Allow-Private-Network", "true")
 
     def send_error(self, code, message=None, explain=None):
+        body = f"{message}\n".encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
         self.send_cors_headers()
         self.end_headers()
-        self.wfile.write(f"{message}\n".encode("utf-8"))
+        self.wfile.write(body)
 
     def handle(self):
         """Override to add error handling for connection errors"""
@@ -329,6 +336,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         if not self._check_api_request():
             return
         self.send_response(200)
+        self.send_header("Content-Length", "0")
         self.send_cors_headers(preflight=True)
         self.end_headers()
 
@@ -386,7 +394,9 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            # The SSE body has no Content-Length, so it stays close-delimited
+            # even though the rest of the server speaks HTTP/1.1.
+            self.send_header("Connection", "close")
             self.send_cors_headers()
             self.end_headers()
 

@@ -444,4 +444,5 @@ input[type="submit"]:hover {
         # Redirect back to the config page
         self.send_response(302)
         self.send_header("Location", "/config.html")
+        self.send_header("Content-Length", "0")
         self.end_headers()
