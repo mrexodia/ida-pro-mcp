@@ -23,6 +23,7 @@ from ..api_composite import (
     diff_before_after,
     trace_data_flow,
 )
+from .. import compat
 
 
 # ============================================================================
@@ -138,7 +139,7 @@ def test_analyze_function_by_name():
     import idaapi
 
     # Get a named function
-    for ea in idautils.Functions():
+    for ea in compat.function_eas():
         name = idaapi.get_func_name(ea)
         if name and not name.startswith("sub_"):
             result = analyze_function(name)
@@ -179,7 +180,7 @@ def test_analyze_component_returns_required_keys():
     """analyze_component returns all expected keys for valid functions."""
     import idautils
 
-    addrs = [hex(ea) for ea in list(idautils.Functions())[:3]]
+    addrs = [hex(ea) for ea in list(compat.function_eas())[:3]]
     if len(addrs) < 2:
         skip_test("binary has fewer than 2 functions")
 
@@ -203,7 +204,7 @@ def test_analyze_component_functions_structure():
     """analyze_component functions list has expected per-function info."""
     import idautils
 
-    addrs = [hex(ea) for ea in list(idautils.Functions())[:2]]
+    addrs = [hex(ea) for ea in list(compat.function_eas())[:2]]
     if len(addrs) < 2:
         skip_test("binary has fewer than 2 functions")
 
@@ -225,7 +226,7 @@ def test_analyze_component_call_graph_structure():
     """analyze_component internal_call_graph has nodes and edges."""
     import idautils
 
-    addrs = [hex(ea) for ea in list(idautils.Functions())[:3]]
+    addrs = [hex(ea) for ea in list(compat.function_eas())[:3]]
     if len(addrs) < 2:
         skip_test("binary has fewer than 2 functions")
 
@@ -272,7 +273,7 @@ def test_analyze_component_comma_separated():
     """analyze_component accepts comma-separated addresses."""
     import idautils
 
-    addrs = [hex(ea) for ea in list(idautils.Functions())[:2]]
+    addrs = [hex(ea) for ea in list(compat.function_eas())[:2]]
     if len(addrs) < 2:
         skip_test("binary has fewer than 2 functions")
 

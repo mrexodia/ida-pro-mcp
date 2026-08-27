@@ -7,6 +7,7 @@ from typing import Annotated, Any, TypedDict
 
 from .rpc import tool, unsafe
 from .sync import idasync, tool_timeout, IDAError
+from . import compat
 from .utils import (
     parse_address,
     get_function,
@@ -146,13 +147,11 @@ def _resolve_addr(addr: str) -> int:
 
 def _basic_block_info(ea: int) -> BasicBlockSummary:
     """Return block count and cyclomatic complexity for the function at *ea*."""
-    import idaapi
-
-    func = idaapi.get_func(ea)
+    func = compat.get_func_info(ea)
     if func is None:
         return {"count": 0, "cyclomatic_complexity": 0}
 
-    fc = idaapi.FlowChart(func)
+    fc = compat.function_flow_blocks(func.start_ea)
     nodes = 0
     edges = 0
     for block in fc:
@@ -222,7 +221,7 @@ def _analyze_function_internal(
     result: dict = {"addr": hex(ea), "error": None}
 
     try:
-        func = idaapi.get_func(ea)
+        func = compat.get_func_info(ea)
         if func is None:
             result["error"] = f"No function at {hex(ea)}"
             return result
@@ -321,7 +320,7 @@ def analyze_component(
     # --- Per-function COMPACT summary (no decompile, no disasm) ---
     functions: list[dict] = []
     for ea in ea_set:
-        func = idaapi.get_func(ea)
+        func = compat.get_func_info(ea)
         if func is None:
             functions.append({"addr": hex(ea), "error": "No function"})
             continue
@@ -363,7 +362,7 @@ def analyze_component(
     func_globals: dict[int, set[int]] = {}
     for ea in ea_set:
         globals_accessed: set[int] = set()
-        func = idaapi.get_func(ea)
+        func = compat.get_func_info(ea)
         if func is None:
             func_globals[ea] = globals_accessed
             continue
@@ -371,8 +370,7 @@ def analyze_component(
             for xref in idautils.XrefsFrom(head, 0):
                 if xref.iscode:
                     continue
-                ref_func = idaapi.get_func(xref.to)
-                if ref_func is None and idaapi.is_loaded(xref.to):
+                if not compat.in_function(xref.to) and idaapi.is_loaded(xref.to):
                     globals_accessed.add(xref.to)
         func_globals[ea] = globals_accessed
 
@@ -475,7 +473,7 @@ def diff_before_after(
     except IDAError as exc:
         return {"error": str(exc)}
 
-    func = idaapi.get_func(ea)
+    func = compat.get_func_info(ea)
     if func is None:
         return {"error": f"No function at {hex(ea)}"}
 
@@ -603,14 +601,14 @@ def trace_data_flow(
             depth_reached = depth
 
         # Build node info.
-        func = idaapi.get_func(ea)
-        func_name = idaapi.get_func_name(ea) if func else None
+        in_func = compat.in_function(ea)
+        func_name = idaapi.get_func_name(ea) if in_func else None
         insn_text = idc.GetDisasm(ea) if idaapi.is_loaded(ea) else None
 
         # Determine if this address references a global/string.
         name_at = idaapi.get_name(ea)
         node_type = "code"
-        if func is None and idaapi.is_loaded(ea):
+        if not in_func and idaapi.is_loaded(ea):
             node_type = "data"
 
         nodes.append({

@@ -5,7 +5,6 @@ import ida_typeinf
 import ida_hexrays
 import ida_nalt
 import ida_bytes
-import ida_frame
 import idaapi
 
 from .rpc import tool
@@ -889,10 +888,10 @@ def _infer_type_edit_kind(edit: dict) -> str:
     if "addr" in edit and "name" in edit and _resolve_type_text(edit):
         # Heuristic: addr + frame name usually indicates stack variable updates.
         try:
-            fn = idaapi.get_func(parse_address(edit["addr"]))
+            fn = compat.get_func_info(parse_address(edit["addr"]))
             if fn:
                 frame_tif = ida_typeinf.tinfo_t()
-                if ida_frame.get_func_frame(frame_tif, fn):
+                if compat.get_func_frame(frame_tif, fn):
                     _, udm = tinfo_get_udm(frame_tif, str(edit["name"]))
                     if udm:
                         return "stack"
@@ -911,7 +910,7 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             addr_text = str(edit.get("addr", "")).strip()
             if not addr_text:
                 return {"edit": edit, "kind": kind, "error": "Function address is required"}
-            func = idaapi.get_func(parse_address(addr_text))
+            func = compat.get_func_info(parse_address(addr_text))
             if not func:
                 return {"edit": edit, "kind": kind, "error": "Function not found"}
 
@@ -959,7 +958,7 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             if not var_name:
                 return {"edit": edit, "kind": kind, "error": "Local variable name is required"}
 
-            func = idaapi.get_func(parse_address(addr_text))
+            func = compat.get_func_info(parse_address(addr_text))
             if not func:
                 return {"edit": edit, "kind": kind, "error": "Function not found"}
 
@@ -988,12 +987,12 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             if not stack_name:
                 return {"edit": edit, "kind": kind, "error": "Stack variable name is required"}
 
-            func = idaapi.get_func(parse_address(addr_text))
+            func = compat.get_func_info(parse_address(addr_text))
             if not func:
                 return {"edit": edit, "kind": kind, "error": "No function found"}
 
             frame_tif = ida_typeinf.tinfo_t()
-            if not ida_frame.get_func_frame(frame_tif, func):
+            if not compat.get_func_frame(frame_tif, func):
                 return {"edit": edit, "kind": kind, "error": "No frame available"}
 
             idx, udm = tinfo_get_udm(frame_tif, stack_name)
@@ -1010,7 +1009,7 @@ def _apply_type_edit(edit: dict[str, Any]) -> SetTypeResult:
             offset = udm.offset // 8
 
             tif = _parse_type_tinfo(type_text)
-            ok = ida_frame.set_frame_member_type(func, offset, tif)
+            ok = compat.set_frame_member_type(func, offset, tif)
             result = {"edit": edit, "kind": kind, "ok": ok}
             if not ok:
                 result["error"] = (

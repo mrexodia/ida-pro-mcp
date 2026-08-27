@@ -156,25 +156,24 @@ def _build_metadata() -> dict:
 def _build_segments() -> list[dict]:
     import idaapi
     import idautils
-    import ida_segment
 
     segments = []
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment_info(seg_ea)
         if not seg:
             continue
         perms = []
-        if seg.perm & idaapi.SEGPERM_READ:
+        if compat.get_segment_perm(seg) & idaapi.SEGPERM_READ:
             perms.append("r")
-        if seg.perm & idaapi.SEGPERM_WRITE:
+        if compat.get_segment_perm(seg) & idaapi.SEGPERM_WRITE:
             perms.append("w")
-        if seg.perm & idaapi.SEGPERM_EXEC:
+        if compat.get_segment_perm(seg) & idaapi.SEGPERM_EXEC:
             perms.append("x")
         segments.append({
-            "name": ida_segment.get_segm_name(seg),
+            "name": compat.get_segment_name(seg.start_ea) or "",
             "start": hex(seg.start_ea),
             "end": hex(seg.end_ea),
-            "size": hex(seg.size()),
+            "size": hex(compat.get_segment_size(seg)),
             "permissions": "".join(perms) or "---",
         })
     return segments
@@ -202,8 +201,9 @@ def _build_statistics(func_eas: list[int], string_count: int, segment_count: int
 
     for ea in func_eas:
         name = idc.get_name(ea, 0) or ""
-        func = idaapi.get_func(ea)
-        flags = func.flags if func else 0
+        # ea comes from function_eas(), i.e. it is always a function entry, so
+        # the chunk flags at ea are the function's flags.
+        flags = compat.func_flags_at(ea)
 
         if name.startswith("sub_"):
             unnamed += 1
@@ -257,7 +257,7 @@ def _classify_func(ea: int, func, name: str, callee_count: int) -> str:
     """Classify function as thunk/wrapper/leaf/dispatcher/complex."""
     import idaapi
 
-    flags = func.flags
+    flags = compat.get_func_flags(func)
     size = func.end_ea - func.start_ea
     if flags & idaapi.FUNC_THUNK or size <= 8:
         return "thunk"
@@ -278,17 +278,17 @@ def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[d
     candidates: list[tuple[int, int, str, int, int]] = []
 
     for ea in func_eas:
-        func = idaapi.get_func(ea)
+        func = compat.get_func_info(ea)
         if not func:
             continue
         name = idc.get_name(ea, 0) or ""
-        flags = func.flags
+        flags = compat.get_func_flags(func)
 
         if _is_library_func(ea, name, flags):
             continue
 
         xref_count = len(list(idautils.XrefsTo(ea, 0)))
-        size = func.size()
+        size = func.end_ea - func.start_ea
         candidates.append((xref_count, ea, name, size, flags))
 
     candidates.sort(key=lambda t: t[0], reverse=True)
@@ -297,9 +297,9 @@ def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[d
 
     result = []
     for xref_count, ea, name, size, _flags in top:
-        func = idaapi.get_func(ea)
+        func = compat.get_func_info(ea)
         callee_count = 0
-        for item_ea in idautils.FuncItems(ea):
+        for item_ea in compat.function_items(ea):
             for xref in idautils.XrefsFrom(item_ea, 0):
                 if xref.type in (idaapi.fl_CF, idaapi.fl_CN):
                     callee_count += 1
@@ -371,7 +371,7 @@ def _build_call_graph_summary(func_eas: list[int]) -> dict:
                 break
 
         # Check outgoing code refs (callees)
-        for item_ea in idautils.FuncItems(ea):
+        for item_ea in compat.function_items(ea):
             for xref in idautils.XrefsFrom(item_ea, 0):
                 if xref.type in (idaapi.fl_CF, idaapi.fl_CN):
                     total_edges += 1
@@ -405,12 +405,10 @@ def survey_binary(
     tool call when starting analysis. Do not call list_funcs, imports, or find_regex
     separately for triage — this returns all of that. Use detail_level='minimal'
     for binaries with >10k functions."""
-    import idautils
-
     minimal = detail_level == "minimal"
 
     # Collect all function addresses once, cap at _MAX_FUNC_ITER for large binaries.
-    all_func_eas = list(idautils.Functions())
+    all_func_eas = list(compat.function_eas())
     truncated = len(all_func_eas) > _MAX_FUNC_ITER
     if truncated:
         func_eas = all_func_eas[:_MAX_FUNC_ITER]

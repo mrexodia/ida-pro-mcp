@@ -16,6 +16,7 @@ import ida_ua
 import ida_name
 from .rpc import tool
 from .sync import idasync, tool_timeout, IDAError
+from . import compat
 from .utils import (
     parse_address,
     normalize_list_input,
@@ -26,6 +27,7 @@ from .utils import (
     pattern_filter,
     get_stack_frame_variables_internal,
     decompile_function_safe,
+    format_pseudocode,
     compact_whitespace,
     get_assembly_lines,
     get_all_xrefs,
@@ -46,7 +48,6 @@ from .utils import (
     FuncProfileQuery,
     AnalyzeBatchQuery,
 )
-from . import compat
 
 
 class DecompileResult(TypedDict):
@@ -54,6 +55,8 @@ class DecompileResult(TypedDict):
     code: str | None
     refs: NotRequired[list[Ref]]
     error: NotRequired[str]
+    snippet: NotRequired[bool]
+    ranges: NotRequired[list[str]]
 
 
 class ResultCursor(TypedDict, total=False):
@@ -497,7 +500,7 @@ def _resolve_function_start(query: object) -> tuple[int | None, str | None]:
     if ea == idaapi.BADADDR:
         return None, f"Failed to resolve function: {q}"
 
-    func = idaapi.get_func(ea)
+    func = compat.get_func_info(ea)
     if not func:
         return None, f"Not a function: {q}"
     return func.start_ea, None
@@ -532,8 +535,7 @@ def _resolve_ref_name(ea: int) -> str:
     name = ida_name.get_ea_name(ea)
     if name:
         return name
-    func = idaapi.get_func(ea)
-    if func and func.start_ea == ea:
+    if compat.func_start_ea(ea) == ea:
         return ida_funcs.get_func_name(ea) or ""
     return ""
 
@@ -613,10 +615,10 @@ def _limit_items(items: list, limit: int) -> tuple[list, bool]:
     return items[:limit], True
 
 
-def _disasm_lines_limited(func: ida_funcs.func_t, max_insns: int) -> tuple[list[str], bool]:
+def _disasm_lines_limited(func_ea: int, max_insns: int) -> tuple[list[str], bool]:
     lines: list[str] = []
     truncated = False
-    for item_ea in idautils.FuncItems(func.start_ea):
+    for item_ea in compat.function_items(func_ea):
         if len(lines) >= max_insns:
             truncated = True
             break
@@ -627,16 +629,17 @@ def _disasm_lines_limited(func: ida_funcs.func_t, max_insns: int) -> tuple[list[
 
 
 def _collect_basic_blocks_limited(
-    func: ida_funcs.func_t, max_blocks: int
+    func_ea: int, max_blocks: int
 ) -> tuple[list[BasicBlock], bool]:
     blocks: list[BasicBlock] = []
     truncated = False
-    for block in idaapi.FlowChart(func):
+    for block in compat.function_flow_blocks(func_ea):
         if len(blocks) >= max_blocks:
             truncated = True
             break
         blocks.append(
             BasicBlock(
+                id=block.id,
                 start=hex(block.start_ea),
                 end=hex(block.end_ea),
                 size=block.end_ea - block.start_ea,
@@ -648,14 +651,13 @@ def _collect_basic_blocks_limited(
     return blocks, truncated
 
 
-def _collect_callees_for_function(func: ida_funcs.func_t) -> list[dict]:
+def _collect_callees_for_function(func_ea: int) -> list[dict]:
     callees: dict[int, dict] = {}
-    for item_ea in idautils.FuncItems(func.start_ea):
+    for item_ea in compat.function_items(func_ea):
         for target in idautils.CodeRefsFrom(item_ea, 0):
-            callee = idaapi.get_func(target)
-            if not callee:
+            callee_start = compat.func_start_ea(target)
+            if callee_start == idaapi.BADADDR:
                 continue
-            callee_start = callee.start_ea
             if callee_start in callees:
                 continue
             callees[callee_start] = {
@@ -665,13 +667,12 @@ def _collect_callees_for_function(func: ida_funcs.func_t) -> list[dict]:
     return list(callees.values())
 
 
-def _collect_callers_for_function(func: ida_funcs.func_t) -> list[dict]:
+def _collect_callers_for_function(func_ea: int) -> list[dict]:
     callers: dict[int, dict] = {}
-    for caller_site in idautils.CodeRefsTo(func.start_ea, 0):
-        caller = idaapi.get_func(caller_site)
-        if not caller:
+    for caller_site in idautils.CodeRefsTo(func_ea, 0):
+        caller_start = compat.func_start_ea(caller_site)
+        if caller_start == idaapi.BADADDR:
             continue
-        caller_start = caller.start_ea
         if caller_start in callers:
             continue
 
@@ -693,7 +694,7 @@ def _profile_function(
     max_items: int,
     include_prototype: bool,
 ) -> FuncProfileItem:
-    func = idaapi.get_func(start_ea)
+    func = compat.get_func_info(start_ea)
     if not func:
         return {"addr": hex(start_ea), "error": "Function not found"}
 
@@ -701,10 +702,10 @@ def _profile_function(
     size_int = func.end_ea - func.start_ea
     has_type = ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), func.start_ea)
 
-    instruction_count = sum(1 for _ in idautils.FuncItems(func.start_ea))
-    basic_block_count = sum(1 for _ in idaapi.FlowChart(func))
-    callers = _collect_callers_for_function(func)
-    callees = _collect_callees_for_function(func)
+    instruction_count = sum(1 for _ in compat.function_items(func.start_ea))
+    basic_block_count = len(compat.function_flow_blocks(func.start_ea))
+    callers = _collect_callers_for_function(func.start_ea)
+    callees = _collect_callees_for_function(func.start_ea)
     strings = extract_function_strings(func.start_ea)
     constants = extract_function_constants(func.start_ea)
 
@@ -750,6 +751,59 @@ def _profile_function(
 # ============================================================================
 
 
+def _resolve_snippet_ranges(
+    func_ea: int, blocks: object, addr_range: object
+) -> tuple[list[tuple[int, int]], str | None]:
+    """Turn the ``blocks`` / ``addr_range`` arguments into validated EA ranges."""
+    if blocks not in (None, "") and addr_range not in (None, ""):
+        return [], "Pass either blocks or addr_range, not both"
+
+    if blocks not in (None, ""):
+        indices: list[int] = []
+        for item in normalize_list_input(blocks):
+            try:
+                indices.append(int(str(item).strip(), 0))
+            except (TypeError, ValueError):
+                return [], f"Invalid block index: {item!r}"
+        if not indices:
+            return [], "No block indices given"
+        chart = compat.function_flow_blocks(func_ea)
+        if not chart:
+            return [], f"No basic blocks at {hex(func_ea)}"
+        ranges: list[tuple[int, int]] = []
+        for idx in indices:
+            if idx < 0 or idx >= len(chart):
+                return [], (
+                    f"Block index {idx} out of range "
+                    f"(function has {len(chart)} blocks)"
+                )
+            block = chart[idx]
+            ranges.append((block.start_ea, block.end_ea))
+        return compat.normalize_code_ranges(ranges)
+
+    text = str(addr_range).strip()
+    # "START-END" or "START+SIZE"; hex or a resolvable name for START.
+    if "+" in text:
+        left, _, right = text.partition("+")
+        try:
+            start = parse_address(left.strip())
+            end = start + int(right.strip(), 0)
+        except Exception as exc:
+            return [], f"Invalid addr_range {text!r}: {exc}"
+    else:
+        sep = text.rfind("-")
+        if sep <= 0:
+            return [], (
+                f"Invalid addr_range {text!r}: expected 'START-END' or 'START+SIZE'"
+            )
+        try:
+            start = parse_address(text[:sep].strip())
+            end = parse_address(text[sep + 1 :].strip())
+        except Exception as exc:
+            return [], f"Invalid addr_range {text!r}: {exc}"
+    return compat.normalize_code_ranges([(start, end)])
+
+
 @tool
 @idasync
 @tool_timeout(90.0)
@@ -758,14 +812,57 @@ def decompile(
     include_addresses: Annotated[
         bool, "Append /*0xNNNN*/ markers per line (default: true). Set false to save tokens."
     ] = True,
+    blocks: Annotated[
+        list[int] | str | None,
+        "Decompile only these basic-block indices from basic_blocks (e.g. '0,1,2'). "
+        "Cheaper than the whole function on large functions.",
+    ] = None,
+    addr_range: Annotated[
+        str | None,
+        "Decompile only this address window: 'START-END' or 'START+SIZE' "
+        "(e.g. '0x401000-0x401100'). Alternative to blocks.",
+    ] = None,
 ) -> DecompileResult:
-    """Decompile function(s) at address(es); returns pseudocode and per-item errors."""
+    """Decompile a function, or only selected basic blocks / an address window.
+
+    With blocks or addr_range only that region is decompiled, which is much
+    smaller and faster than the whole function; code outside the region appears
+    as JUMPOUT(...). Ranges unreachable from the lowest requested address are
+    dropped by the decompiler, so check the returned "ranges" field.
+    """
     try:
         start = parse_address(addr)
+        want_snippet = blocks not in (None, "") or addr_range not in (None, "")
+
+        if want_snippet:
+            func_ea = compat.func_start_ea(start)
+            if func_ea == idaapi.BADADDR:
+                func_ea = start
+            ranges, range_err = _resolve_snippet_ranges(func_ea, blocks, addr_range)
+            if range_err:
+                return {"addr": addr, "code": None, "error": range_err}
+            cfunc, err = compat.decompile_ranges(ranges)
+            if cfunc is None:
+                return {"addr": addr, "code": None, "error": err or "Decompilation failed"}
+            submitted = compat.submitted_decomp_ranges(cfunc, ranges)
+            result: DecompileResult = {
+                "addr": addr,
+                "code": format_pseudocode(cfunc, include_addresses),
+                "snippet": True,
+                "ranges": [f"{s:#x}-{e:#x}" for s, e in submitted],
+            }
+            try:
+                refs = _collect_decompile_refs(cfunc)
+                if refs:
+                    result["refs"] = refs
+            except Exception:
+                pass
+            return result
+
         code, err = decompile_function_safe(start, include_addresses=include_addresses)
         if code is None:
             return {"addr": addr, "code": None, "error": err or "Decompilation failed"}
-        result: DecompileResult = {"addr": addr, "code": code}
+        result = {"addr": addr, "code": code}
         try:
             import ida_hexrays
 
@@ -805,10 +902,10 @@ def disasm(
 
     try:
         start = parse_address(addr)
-        func = idaapi.get_func(start)
+        func = compat.get_func_info(start)
 
         # Get segment info
-        seg = idaapi.getseg(start)
+        seg = compat.get_segment_info(start)
         if not seg:
             return {
                 "addr": addr,
@@ -817,7 +914,7 @@ def disasm(
                 "cursor": {"done": True},
             }
 
-        segment_name = idaapi.get_segm_name(seg) if seg else "UNKNOWN"
+        segment_name = compat.get_segment_name(start) or "UNKNOWN"
 
         if func:
             # Function exists: disassemble function items starting from requested address
@@ -864,7 +961,7 @@ def disasm(
             return include_total
 
         if func:
-            for ea in idautils.FuncItems(func.start_ea):
+            for ea in compat.function_items(func.start_ea):
                 if ea == idaapi.BADADDR:
                     continue
                 if ea < start:
@@ -975,7 +1072,7 @@ def func_profile(
                     }
                 )
                 continue
-            fn = idaapi.get_func(start_ea)
+            fn = compat.get_func_info(start_ea)
             if fn:
                 candidates.append(
                     {
@@ -987,8 +1084,8 @@ def func_profile(
                     }
                 )
         else:
-            for start_ea in idautils.Functions():
-                fn = idaapi.get_func(start_ea)
+            for start_ea in compat.function_eas():
+                fn = compat.get_func_info(start_ea)
                 if not fn:
                     continue
                 candidates.append(
@@ -1079,7 +1176,7 @@ def analyze_batch(
             continue
 
         try:
-            fn = idaapi.get_func(start_ea)
+            fn = compat.get_func_info(start_ea)
             if not fn:
                 raise RuntimeError(f"Function not found: {q}")
 
@@ -1141,7 +1238,9 @@ def analyze_batch(
                     analysis["decompile_error"] = err or "Decompilation failed"
 
             if include_disasm:
-                lines, disasm_truncated = _disasm_lines_limited(fn, max_disasm_insns)
+                lines, disasm_truncated = _disasm_lines_limited(
+                    fn.start_ea, max_disasm_insns
+                )
                 analysis["disasm"] = {
                     "lines": lines,
                     "instruction_count": len(lines),
@@ -1197,7 +1296,9 @@ def analyze_batch(
                 analysis["constants_truncated"] = constants_truncated
 
             if include_basic_blocks:
-                blocks, blocks_truncated = _collect_basic_blocks_limited(fn, max_blocks)
+                blocks, blocks_truncated = _collect_basic_blocks_limited(
+                    fn.start_ea, max_blocks
+                )
                 analysis["basic_block_count"] = len(blocks)
                 analysis["basic_blocks"] = blocks
                 analysis["basic_blocks_truncated"] = blocks_truncated
@@ -1527,7 +1628,7 @@ def callees(
     for fn_addr in addrs:
         try:
             func_start = parse_address(fn_addr)
-            func = idaapi.get_func(func_start)
+            func = compat.get_func_info(func_start)
             if not func:
                 results.append(
                     {"addr": fn_addr, "callees": None, "error": "No function found"}
@@ -1559,7 +1660,7 @@ def callees(
                     if target is not None and target not in callees_dict:
                         func_type = (
                             "internal"
-                            if idaapi.get_func(target) is not None
+                            if compat.in_function(target)
                             else "external"
                         )
                         func_name = ida_name.get_name(target)
@@ -1709,7 +1810,7 @@ def basic_blocks(
     for fn_addr in addrs:
         try:
             ea = parse_address(fn_addr)
-            func = idaapi.get_func(ea)
+            func = compat.get_func_info(ea)
             if not func:
                 results.append(
                     {
@@ -1721,12 +1822,13 @@ def basic_blocks(
                 )
                 continue
 
-            flowchart = idaapi.FlowChart(func)
+            flowchart = compat.function_flow_blocks(func.start_ea)
             all_blocks = []
 
             for block in flowchart:
                 all_blocks.append(
                     BasicBlock(
+                        id=block.id,
                         start=hex(block.start_ea),
                         end=hex(block.end_ea),
                         size=block.end_ea - block.start_ea,
@@ -1876,8 +1978,8 @@ def find(
 
                 seen_insn = set()
                 for seg_ea in idautils.Segments():
-                    seg = idaapi.getseg(seg_ea)
-                    if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
+                    seg = compat.get_segment_info(seg_ea)
+                    if not seg or not (compat.get_segment_perm(seg) & idaapi.SEGPERM_EXEC):
                         continue
                     for normalized, size, pattern_bytes in candidates:
                         ea = seg.start_ea
@@ -2018,14 +2120,14 @@ def _resolve_insn_scan_ranges(
 
     exec_segments = []
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
-        if seg and (seg.perm & idaapi.SEGPERM_EXEC):
+        seg = compat.get_segment_info(seg_ea)
+        if seg and (compat.get_segment_perm(seg) & idaapi.SEGPERM_EXEC):
             exec_segments.append(seg)
 
     if func_addr is not None:
         try:
             ea = parse_address(func_addr)
-            func = idaapi.get_func(ea)
+            func = compat.get_func_info(ea)
             if not func:
                 return [], f"Function not found at {func_addr}"
             return [(func.start_ea, func.end_ea)], None
@@ -2034,7 +2136,7 @@ def _resolve_insn_scan_ranges(
 
     if segment_name is not None:
         for seg in exec_segments:
-            if idaapi.get_segm_name(seg) == segment_name:
+            if compat.get_segment_name(seg.start_ea) == segment_name:
                 return [(seg.start_ea, seg.end_ea)], None
         return [], f"Executable segment not found: {segment_name}"
 
@@ -2051,8 +2153,8 @@ def _resolve_insn_scan_ranges(
             return [], "No executable segments found"
 
         if end_ea is None:
-            seg = idaapi.getseg(start_ea)
-            if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
+            seg = compat.get_segment_info(start_ea)
+            if not seg or not (compat.get_segment_perm(seg) & idaapi.SEGPERM_EXEC):
                 return [], "start address not in executable segment"
             end_ea = seg.end_ea
 
@@ -2294,7 +2396,7 @@ def export_funcs(
     for addr in addrs:
         try:
             ea = parse_address(addr)
-            func = idaapi.get_func(ea)
+            func = compat.get_func_info(ea)
             if not func:
                 results.append({"addr": addr, "error": "Function not found"})
                 continue
@@ -2378,7 +2480,7 @@ def callgraph(
     for root in roots:
         try:
             ea = parse_address(root)
-            func = idaapi.get_func(ea)
+            func = compat.get_func_info(ea)
             if not func:
                 results.append(
                     {
@@ -2413,7 +2515,7 @@ def callgraph(
                     return
                 visited.add(addr)
 
-                f = idaapi.get_func(addr)
+                f = compat.get_func_info(addr)
                 if not f:
                     return
 
@@ -2426,7 +2528,7 @@ def callgraph(
 
                 # Get callees
                 edges_added = 0
-                for item_ea in idautils.FuncItems(f.start_ea):
+                for item_ea in compat.function_items(f.start_ea):
                     if truncated:
                         break
                     for xref in idautils.CodeRefsFrom(item_ea, 0):
@@ -2435,20 +2537,20 @@ def callgraph(
                         if edges_added >= max_edges_per_func:
                             per_func_capped = True
                             break
-                        callee_func = idaapi.get_func(xref)
-                        if callee_func:
+                        callee_start = compat.func_start_ea(xref)
+                        if callee_start != idaapi.BADADDR:
                             if len(edges) >= max_edges:
                                 hit_limit("edges")
                                 break
                             edges.append(
                                 {
                                     "from": hex(addr),
-                                    "to": hex(callee_func.start_ea),
+                                    "to": hex(callee_start),
                                     "type": "call",
                                 }
                             )
                             edges_added += 1
-                            traverse(callee_func.start_ea, depth + 1)
+                            traverse(callee_start, depth + 1)
                     if edges_added >= max_edges_per_func:
                         break
 

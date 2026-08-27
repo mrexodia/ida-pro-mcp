@@ -13,7 +13,6 @@ import ida_hexrays
 import ida_kernwin
 import ida_lines
 import ida_search
-import ida_segment
 import idautils
 import ida_loader
 import ida_nalt
@@ -23,6 +22,7 @@ import idc
 from .mainthread import get_pump
 from .rpc import tool
 from .sync import idasync, get_tool_deadline
+from . import compat
 from .utils import (
     ConvertedNumber,
     EntityQuery,
@@ -242,13 +242,10 @@ def _collect_imports() -> list[Import]:
 
 
 def _segment_name_for_ea(ea: int) -> str | None:
-    seg = idaapi.getseg(ea)
-    if not seg:
-        return None
-    try:
-        return idaapi.get_segm_name(seg)
-    except Exception:
-        return None
+    # get_segment_name() is already an address lookup and returns None when ea
+    # is outside any segment, so a separate get_segment_info() probe would only
+    # duplicate the work.
+    return compat.get_segment_name(ea)
 
 
 def _primary_text_key(kind: str) -> str:
@@ -260,8 +257,8 @@ def _primary_text_key(kind: str) -> str:
 def _collect_entities(kind: str) -> list[dict]:
     if kind == "functions":
         rows: list[dict] = []
-        for ea in idautils.Functions():
-            fn = idaapi.get_func(ea)
+        for ea in compat.function_eas():
+            fn = compat.get_func_info(ea)
             if not fn:
                 continue
             size_int = fn.end_ea - fn.start_ea
@@ -281,7 +278,7 @@ def _collect_entities(kind: str) -> list[dict]:
     if kind == "globals":
         rows = []
         for ea, name in idautils.Names():
-            if idaapi.get_func(ea) or name is None:
+            if name is None or compat.in_function(ea):
                 continue
             rows.append(
                 {
@@ -325,7 +322,7 @@ def _collect_entities(kind: str) -> list[dict]:
         rows = []
         imports_by_ea = {int(imp["addr"], 16): imp for imp in _collect_imports()}
         for ea, name in idautils.Names():
-            is_function = bool(idaapi.get_func(ea))
+            is_function = compat.in_function(ea)
             is_import = ea in imports_by_ea
             rows.append(
                 {
@@ -469,7 +466,7 @@ def lookup_funcs(
     # Treat empty/"*" as "all functions" - but add limit
     if not queries or (len(queries) == 1 and queries[0] in ("*", "")):
         all_funcs = []
-        for addr in idautils.Functions():
+        for addr in compat.function_eas():
             all_funcs.append(get_function(addr))
             if len(all_funcs) >= 1000:
                 break
@@ -580,7 +577,7 @@ def list_funcs(
 ) -> list[Page[Function]]:
     """List functions with optional filtering and offset/count pagination."""
     queries = normalize_dict_list(queries)
-    all_functions = [get_function(addr) for addr in idautils.Functions()]
+    all_functions = [get_function(addr) for addr in compat.function_eas()]
 
     results = []
     for query in queries:
@@ -610,8 +607,8 @@ def func_query(
     queries = normalize_dict_list(queries)
 
     all_functions: list[dict] = []
-    for addr in idautils.Functions():
-        fn = idaapi.get_func(addr)
+    for addr in compat.function_eas():
+        fn = compat.get_func_info(addr)
         if not fn:
             continue
         size_int = fn.end_ea - fn.start_ea
@@ -692,7 +689,7 @@ def list_globals(
     queries = normalize_dict_list(queries)
     all_globals: list[Global] = []
     for addr, name in idautils.Names():
-        if not idaapi.get_func(addr) and name is not None:
+        if name is not None and not compat.in_function(addr):
             all_globals.append(Global(addr=hex(addr), name=name))
 
     results = []
@@ -985,10 +982,10 @@ def _exec_segments() -> list[tuple[int, int]]:
     """Return [(start, end)] for executable segments in address order."""
     ranges: list[tuple[int, int]] = []
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment_info(seg_ea)
         if not seg:
             continue
-        if not (seg.perm & idaapi.SEGPERM_EXEC):
+        if not (compat.get_segment_perm(seg) & idaapi.SEGPERM_EXEC):
             continue
         ranges.append((seg.start_ea, seg.end_ea))
     return ranges
@@ -997,7 +994,7 @@ def _exec_segments() -> list[tuple[int, int]]:
 def _all_segments() -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment_info(seg_ea)
         if seg:
             ranges.append((seg.start_ea, seg.end_ea))
     return ranges
@@ -1117,16 +1114,14 @@ def search_text(
                 if not lines:
                     continue
                 entry: SearchTextHit = {"addr": hex(head_ea), "matches": lines}
-                func = idaapi.get_func(head_ea)
-                if func is not None:
-                    fname = ida_funcs.get_func_name(func.start_ea)
+                func_ea = compat.func_start_ea(head_ea)
+                if func_ea != idaapi.BADADDR:
+                    fname = ida_funcs.get_func_name(func_ea)
                     if fname:
                         entry["function"] = fname
-                seg = idaapi.getseg(head_ea)
-                if seg is not None:
-                    sname = ida_segment.get_segm_name(seg)
-                    if sname:
-                        entry["segment"] = sname
+                sname = compat.get_segment_name(head_ea)
+                if sname:
+                    entry["segment"] = sname
                 hits.append(entry)
                 if len(hits) >= limit:
                     size = max(1, idaapi.get_item_size(head_ea))

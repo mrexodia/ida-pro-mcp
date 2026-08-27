@@ -33,6 +33,7 @@ from ..api_core import (
     idb_save,
     invalidate_strings_cache,
 )
+from .. import compat
 
 
 CRACKME_MAIN = "0x123e"
@@ -144,7 +145,7 @@ def test_lookup_funcs_interior_address():
         skip_test("binary has no functions")
 
     ea = int(fn_addr, 16)
-    func = idaapi.get_func(ea)
+    func = compat.get_func_info(ea)
     if not func:
         skip_test("IDA could not retrieve the function object")
 

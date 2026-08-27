@@ -24,6 +24,7 @@ from ..utils import (
     extract_function_constants,
     handle_large_output,
 )
+from .. import compat
 
 
 @test(binary="crackme03.elf")
@@ -79,7 +80,7 @@ def test_utils_get_function_and_prototype():
     assert fn["size"] == "0x104"
     assert get_function(0xDEADBEEF, raise_error=False) is None
 
-    proto = get_prototype(idaapi.get_func(0x123E))
+    proto = get_prototype(compat.get_func_info(0x123E))
     assert proto is not None
     assert "int __fastcall" in proto
 

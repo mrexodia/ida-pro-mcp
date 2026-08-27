@@ -448,9 +448,9 @@ def get_any_function() -> Optional[str]:
 
     Must be called from within IDA context.
     """
-    import idautils
+    from . import compat
 
-    for ea in idautils.Functions():
+    for ea in compat.function_eas():
         return hex(ea)
     return None
 
@@ -458,11 +458,12 @@ def get_any_function() -> Optional[str]:
 def get_named_function(name: str) -> Optional[str]:
     """Return the address of a named function, or None if it does not exist."""
     import idaapi
+    from . import compat
 
     ea = idaapi.get_name_ea(idaapi.BADADDR, name)
     if ea == idaapi.BADADDR:
         return None
-    func = idaapi.get_func(ea)
+    func = compat.get_func_info(ea)
     if not func:
         return None
     return hex(func.start_ea)
@@ -518,11 +519,11 @@ def get_first_segment() -> Optional[tuple[str, str]]:
 
     Must be called from within IDA context.
     """
-    import idaapi
     import idautils
+    from . import compat
 
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment_info(seg_ea)
         if seg:
             return (hex(seg.start_ea), hex(seg.end_ea))
     return None
@@ -535,10 +536,11 @@ def get_data_address() -> Optional[str]:
     """
     import idaapi
     import idautils
+    from . import compat
 
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
-        if seg and not (seg.perm & idaapi.SEGPERM_EXEC):
+        seg = compat.get_segment_info(seg_ea)
+        if seg and not (compat.get_segment_perm(seg) & idaapi.SEGPERM_EXEC):
             # Return first address in non-executable segment
             return hex(seg.start_ea)
     return None

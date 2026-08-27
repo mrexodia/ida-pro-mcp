@@ -10,10 +10,10 @@ This module integrates sigmaker.py functionality to provide:
 from typing import Annotated, NotRequired, TypedDict
 
 import idaapi
-import ida_funcs
 
 from .rpc import tool
 from .sync import idasync
+from . import compat
 from .utils import parse_address, normalize_list_input
 
 from . import _sigmaker as _sm
@@ -201,7 +201,7 @@ def make_signature_for_function(
         ea = None
         try:
             ea = _resolve_addr(addr_str)
-            func = ida_funcs.get_func(ea)
+            func = compat.get_func_info(ea)
             if not func:
                 results.append({
                     "query": addr_str,

@@ -32,6 +32,7 @@ from ..api_analysis import (
     export_funcs,
     callgraph,
 )
+from .. import compat
 
 
 CRACKME_CHECK_PW = "0x11a9"
@@ -77,7 +78,7 @@ def test_decompile_batch_addresses():
     """multiple valid function addresses can all be decompiled individually."""
     import idautils
 
-    addrs = [hex(ea) for ea in list(idautils.Functions())[:3]]
+    addrs = [hex(ea) for ea in list(compat.function_eas())[:3]]
     if len(addrs) < 2:
         skip_test("binary has fewer than two functions")
 
@@ -226,7 +227,7 @@ def test_disasm_interior_address_preserves_cursor():
     if not fn_addr:
         skip_test("binary has no functions")
 
-    func = idaapi.get_func(int(fn_addr, 16))
+    func = compat.get_func_info(int(fn_addr, 16))
     if not func:
         skip_test("IDA could not resolve function object")
 
@@ -452,7 +453,7 @@ def _find_address_without_xrefs() -> str | None:
     import idautils
 
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = compat.get_segment_info(seg_ea)
         if seg is None:
             continue
         for head in idautils.Heads(seg.start_ea, min(seg.end_ea, seg.start_ea + 0x4000)):
@@ -582,7 +583,7 @@ def test_callees_multiple():
     """callees accepts multiple addresses and returns one result per input."""
     import idautils
 
-    addrs = [hex(ea) for ea in list(idautils.Functions())[:3]]
+    addrs = [hex(ea) for ea in list(compat.function_eas())[:3]]
     if len(addrs) < 2:
         skip_test("binary has fewer than two functions")
 

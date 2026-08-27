@@ -12,6 +12,7 @@ import ida_funcs
 import ida_name
 import ida_ua
 
+from . import compat
 from .compat import tinfo_get_udm
 from .rpc import tool
 from .sync import idasync, IDAError
@@ -194,7 +195,7 @@ def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
                 continue
 
             if ea == cfunc.entry_ea:
-                idc.set_func_cmt(ea, comment, True)
+                compat.set_func_comment(ea, comment, True)
                 cfunc.refresh_func_ctext()
                 results.append({"addr": addr_str})
                 continue
@@ -261,7 +262,7 @@ def append_comments(
                 results.append({"addr": addr_str, "error": f"Unsupported scope: {scope}"})
                 continue
 
-            fn = idaapi.get_func(ea)
+            fn = compat.get_func_info(ea)
             use_func_comment = scope == "func" or (
                 scope == "auto" and fn is not None and fn.start_ea == ea
             )
@@ -271,12 +272,12 @@ def append_comments(
                     results.append({"addr": addr_str, "error": f"No function found at {hex(ea)}"})
                     continue
                 target_ea = fn.start_ea
-                current = idc.get_func_cmt(target_ea, False) or ""
+                current = compat.get_func_comment(target_ea, False)
                 new_comment, skipped = _append_comment_text(current, comment, dedupe=dedupe)
                 if skipped:
                     results.append({"addr": addr_str, "scope": "func", "skipped": True})
                     continue
-                if not idc.set_func_cmt(target_ea, new_comment, False):
+                if not compat.set_func_comment(target_ea, new_comment, False):
                     results.append(
                         {
                             "addr": addr_str,
@@ -495,8 +496,8 @@ def rename(
                     continue
 
                 ea = parse_address(addr_text)
-                func = idaapi.get_func(ea)
-                if not func:
+                func_ea = compat.func_start_ea(ea)
+                if func_ea == idaapi.BADADDR:
                     result = {
                         "addr": addr_text,
                         "name": new_name,
@@ -508,15 +509,15 @@ def rename(
                         break
                     continue
 
-                old_name = idaapi.get_name(func.start_ea) or None
-                had_user_name = _has_user_name(func.start_ea)
-                success, error = _set_name_checked(func.start_ea, str(new_name))
+                old_name = idaapi.get_name(func_ea) or None
+                had_user_name = _has_user_name(func_ea)
+                success, error = _set_name_checked(func_ea, str(new_name))
 
                 placed, place_error = None, None
                 if success and not had_user_name:
-                    placed, place_error = _place_func_in_vibe_dir(func.start_ea)
+                    placed, place_error = _place_func_in_vibe_dir(func_ea)
                 if success and not dry_run:
-                    refresh_decompiler_ctext(func.start_ea)
+                    refresh_decompiler_ctext(func_ea)
 
                 result = {
                     "addr": addr_text,
@@ -632,7 +633,7 @@ def rename(
                         break
                     continue
 
-                func = idaapi.get_func(parse_address(func_addr))
+                func = compat.get_func_info(parse_address(func_addr))
                 if not func:
                     result = {
                         "func_addr": func_addr,
@@ -717,7 +718,7 @@ def rename(
                         break
                     continue
 
-                func = idaapi.get_func(parse_address(func_addr))
+                func = compat.get_func_info(parse_address(func_addr))
                 if not func:
                     result = {
                         "func_addr": func_addr,
@@ -732,7 +733,7 @@ def rename(
                     continue
 
                 frame_tif = ida_typeinf.tinfo_t()
-                if not ida_frame.get_func_frame(frame_tif, func):
+                if not compat.get_func_frame(frame_tif, func):
                     result = {
                         "func_addr": func_addr,
                         "old": old_name,
@@ -776,7 +777,7 @@ def rename(
                 udm = ida_typeinf.udm_t()
                 frame_tif.get_udm_by_tid(udm, tid)
                 offset = udm.offset // 8
-                if ida_frame.is_funcarg_off(func, offset):
+                if compat.is_funcarg_off(func, offset):
                     result = {
                         "func_addr": func_addr,
                         "old": old_name,
@@ -797,8 +798,10 @@ def rename(
                         success = False
                         error = f"Stack variable name {new_name!r} already exists"
                     else:
-                        sval = ida_frame.soff_to_fpoff(func, offset)
-                        success = ida_frame.define_stkvar(func, new_name, sval, udm.type)
+                        sval = compat.soff_to_fpoff(func, offset)
+                        success = compat.define_stkvar(
+                            func, new_name, sval, udm.type
+                        )
                         if not success:
                             error = (
                                 f"Rename failed: could not rename stack variable "
@@ -919,8 +922,7 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
             end_ea = parse_address(end_str) if end_str else idaapi.BADADDR
 
             # Check if already a function
-            existing = idaapi.get_func(start_ea)
-            if existing and existing.start_ea == start_ea:
+            if compat.func_start_ea(start_ea) == start_ea:
                 results.append(
                     {
                         "addr": addr_str,
@@ -931,8 +933,8 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
                 continue
 
             success = ida_funcs.add_func(start_ea, end_ea)
-            if success:
-                func = idaapi.get_func(start_ea)
+            func = compat.get_func_info(start_ea) if success else None
+            if func is not None:
                 results.append(
                     {
                         "addr": addr_str,
@@ -1076,7 +1078,7 @@ def force_recompile(
         invalidate_all = True
 
     if invalidate_all:
-        targets = list(idautils.Functions())
+        targets = list(compat.function_eas())
     else:
         for item in items or []:
             addr_str = item.get("addr") if isinstance(item, dict) else None
@@ -1084,9 +1086,9 @@ def force_recompile(
                 continue
             try:
                 ea = parse_address(addr_str)
-                func = ida_funcs.get_func(ea)
-                if func is not None:
-                    targets.append(func.start_ea)
+                func_ea = compat.func_start_ea(ea)
+                if func_ea != idaapi.BADADDR:
+                    targets.append(func_ea)
             except Exception:
                 pass
 

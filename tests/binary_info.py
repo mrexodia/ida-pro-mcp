@@ -49,9 +49,25 @@ def main():
     import idautils
     import idc
     import ida_funcs
+    import ida_segment
     import ida_name
     import ida_bytes
     import ida_entry
+    import ida_gdl
+
+    def get_func_info(ea):
+        info = ida_funcs.func_entry_info_t()
+        return info if ida_funcs.get_func_entry_info(info, ea) else None
+
+    def get_segment_info(ea):
+        info = ida_segment.segment_info_t()
+        return info if ida_segment.get_segment_info(info, ea) else None
+
+    def function_eas():
+        for ordinal in range(ida_funcs.get_func_qty()):
+            ea = ida_funcs.get_func_ea_by_num(ordinal)
+            if ea != idaapi.BADADDR:
+                yield ea
 
     info = {}
 
@@ -65,10 +81,12 @@ def main():
     # Segments
     info["segments"] = []
     for seg_ea in idautils.Segments():
-        seg = idaapi.getseg(seg_ea)
+        seg = get_segment_info(seg_ea)
+        if seg is None:
+            continue
         info["segments"].append(
             {
-                "name": idaapi.get_segm_name(seg),
+                "name": ida_segment.get_segment_name(seg_ea),
                 "start": hex(seg.start_ea),
                 "end": hex(seg.end_ea),
                 "size": hex(seg.end_ea - seg.start_ea),
@@ -92,16 +110,16 @@ def main():
 
     # Functions
     info["functions"] = []
-    for ea in idautils.Functions():
+    for ea in function_eas():
         name = ida_funcs.get_func_name(ea)
-        func = ida_funcs.get_func(ea)
+        func = get_func_info(ea)
         size = func.end_ea - func.start_ea if func else 0
 
         # Get callers
         callers = []
         for xref in idautils.XrefsTo(ea):
             if xref.type in [idaapi.fl_CN, idaapi.fl_CF]:
-                caller_func = ida_funcs.get_func(xref.frm)
+                caller_func = get_func_info(xref.frm)
                 if caller_func:
                     caller_name = ida_funcs.get_func_name(caller_func.start_ea)
                     if caller_name and caller_name not in callers:
@@ -167,7 +185,7 @@ def main():
     # Globals (named addresses that aren't functions)
     info["globals"] = []
     for ea, name in idautils.Names():
-        if not ida_funcs.get_func(ea):
+        if not get_func_info(ea):
             # Get size if possible
             size = ida_bytes.get_item_size(ea)
             info["globals"].append(
@@ -181,12 +199,19 @@ def main():
     # Basic blocks for main (if exists)
     main_ea = ida_name.get_name_ea(idaapi.BADADDR, "main")
     if main_ea != idaapi.BADADDR:
-        func = ida_funcs.get_func(main_ea)
+        func = get_func_info(main_ea)
         if func:
             info["main_basic_blocks"] = []
-            fc = idaapi.FlowChart(func)
-            for block in fc:
-                succs = [hex(s.start_ea) for s in block.succs()]
+            # Sentinel bounds, matching ida_gdl.FlowChart(func).
+            fc = ida_gdl.qflow_chart_ea_t(
+                "", func.start_ea, idaapi.BADADDR, idaapi.BADADDR, 0
+            )
+            for i in range(fc.size()):
+                block = fc[i]
+                succs = [
+                    hex(fc[fc.succ(i, j)].start_ea)
+                    for j in range(fc.nsucc(i))
+                ]
                 info["main_basic_blocks"].append(
                     {
                         "start": hex(block.start_ea),

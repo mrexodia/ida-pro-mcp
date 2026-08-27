@@ -73,6 +73,8 @@ import typing
 import idaapi
 import idc
 
+from . import compat
+
 __author__ = "mahmoudimus"
 __version__ = "1.8.0"
 
@@ -231,13 +233,14 @@ class InMemoryBuffer:
 
     def _load_segments(self):
         buf = self._buffer
-        seg = idaapi.get_first_seg()
-        while seg:
+        for seg_ea in compat.segment_eas():
+            seg = compat.get_segment_info(seg_ea)
+            if seg is None:
+                continue
             size = seg.end_ea - seg.start_ea
             data = idaapi.get_bytes(seg.start_ea, size)
             if data:
                 buf.extend(data)
-            seg = idaapi.get_next_seg(seg.start_ea)
 
     def _load_input_file(self):
         if not self.file_path.exists():
@@ -844,7 +847,7 @@ class UniqueSignatureGenerator:
             raise Unexpected("Cannot create code signature for data")
 
         sig = Signature()
-        start_fn = idaapi.get_func(ea)
+        start_fn = compat.get_func_info(ea)
         bytes_since_last_check = 0
 
         # Seed-and-refine (issue #398): on the compiled SIMD path, scan the

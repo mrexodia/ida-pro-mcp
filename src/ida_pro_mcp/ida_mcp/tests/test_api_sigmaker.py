@@ -29,6 +29,7 @@ from ..api_sigmaker import (
     find_xref_signatures,
 )
 from ..api_analysis import find_bytes
+from .. import compat
 
 
 # ============================================================================
@@ -72,7 +73,7 @@ def test_make_signature_batch():
     """make_signature handles multiple addresses in one call."""
     import idautils
 
-    addrs = [hex(ea) for ea in list(idautils.Functions())[:3]]
+    addrs = [hex(ea) for ea in list(compat.function_eas())[:3]]
     if len(addrs) < 2:
         skip_test("binary has fewer than two functions")
 
@@ -110,15 +111,15 @@ def test_make_signature_for_function_resolves_to_start():
 
     # Find a function with at least 2 bytes so we can pick a mid-function addr
     func_ea = None
-    for ea in idautils.Functions():
-        f = ida_funcs.get_func(ea)
+    for ea in compat.function_eas():
+        f = compat.get_func_info(ea)
         if f and f.end_ea - f.start_ea > 2:
             func_ea = f.start_ea
             break
     if func_ea is None:
         skip_test("no function with size > 2 found")
 
-    func = ida_funcs.get_func(func_ea)
+    func = compat.get_func_info(func_ea)
     mid_addr = hex(func.start_ea + 1)  # one byte into the function
 
     result = make_signature_for_function(mid_addr)
@@ -169,7 +170,7 @@ def test_make_signature_for_function_batch_mixed_input():
     import idautils
 
     # Build a mixed batch: first function as hex, second as its IDA name
-    funcs = list(idautils.Functions())[:2]
+    funcs = list(compat.function_eas())[:2]
     if len(funcs) < 2:
         skip_test("binary has fewer than two functions")
 
@@ -208,7 +209,7 @@ def test_make_signature_for_range_valid():
         skip_test("binary has no functions")
 
     import ida_funcs
-    func = ida_funcs.get_func(int(fn_addr, 16))
+    func = compat.get_func_info(int(fn_addr, 16))
     if not func:
         skip_test("cannot get function object")
 
