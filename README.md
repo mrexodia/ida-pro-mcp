@@ -99,6 +99,13 @@ Configure the MCP servers and install the IDA Plugin:
 ida-pro-mcp --install
 ```
 
+For Claude, Claude Code, Codex, and OpenCode, installation creates ten MCP entries
+(`ida-pro-mcp-1` through `ida-pro-mcp-10`) on consecutive ports starting at
+`13337`. Each IDA instance tries the configured port and then increments it
+until it finds a free port, so multiple IDA windows can be used at once. To
+use another base port during installation, pass it explicitly, for example:
+`ida-pro-mcp --install claude,codex,opencode --ida-rpc http://127.0.0.1:14000`.
+
 **Important**: Make sure you completely restart IDA and your MCP client for the installation to take effect. Some clients (like Claude) run in the background and need to be quit from the tray icon.
 
 ## Prompt Engineering

@@ -222,6 +222,7 @@ class MCP(idaapi.plugin_t):
 
     DEFAULT_HOST = "127.0.0.1"
     DEFAULT_PORT = 13337
+    MAX_PORT = 65535
 
     def init(self):
         hotkey = MCP.wanted_hotkey.replace("-", "+")
@@ -288,22 +289,29 @@ class MCP(idaapi.plugin_t):
             from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
 
         port = self.port
-        max_port = port + 100
-        while port < max_port:
+        if port < 1 or port > self.MAX_PORT:
+            print(f"[MCP] Invalid configured port: {port}")
+            return
+
+        while port <= self.MAX_PORT:
             try:
                 MCP_SERVER.serve(
                     self.host, port, request_handler=IdaMcpHttpRequestHandler
                 )
+                if port != self.port:
+                    print(
+                        f"[MCP] Port {self.port} is occupied, using next available port {port}"
+                    )
                 print(f"  Config: http://{self.host}:{port}/config.html")
                 self.mcp = MCP_SERVER
                 self._register_instance(port)
                 return
             except OSError as e:
-                if e.errno in (48, 98, 10048):  # Address already in use
+                if e.errno in (48, 98, 10048) or getattr(e, "winerror", None) == 10048:
                     port += 1
                 else:
                     raise
-        print(f"[MCP] Error: No available port in range {self.port}-{max_port - 1}")
+        print(f"[MCP] Error: No available port in range {self.port}-{self.MAX_PORT}")
 
     def _register_instance(self, port: int):
         try:

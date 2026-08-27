@@ -12,6 +12,46 @@
         "idalib-mcp",
         "--stdio"
       ]
+    },
+    "ida-pro-mcp-1": {
+      "type": "http",
+      "url": "http://127.0.0.1:13337/mcp"
+    },
+    "ida-pro-mcp-2": {
+      "type": "http",
+      "url": "http://127.0.0.1:13338/mcp"
+    },
+    "ida-pro-mcp-3": {
+      "type": "http",
+      "url": "http://127.0.0.1:13339/mcp"
+    },
+    "ida-pro-mcp-4": {
+      "type": "http",
+      "url": "http://127.0.0.1:13340/mcp"
+    },
+    "ida-pro-mcp-5": {
+      "type": "http",
+      "url": "http://127.0.0.1:13341/mcp"
+    },
+    "ida-pro-mcp-6": {
+      "type": "http",
+      "url": "http://127.0.0.1:13342/mcp"
+    },
+    "ida-pro-mcp-7": {
+      "type": "http",
+      "url": "http://127.0.0.1:13343/mcp"
+    },
+    "ida-pro-mcp-8": {
+      "type": "http",
+      "url": "http://127.0.0.1:13344/mcp"
+    },
+    "ida-pro-mcp-9": {
+      "type": "http",
+      "url": "http://127.0.0.1:13345/mcp"
+    },
+    "ida-pro-mcp-10": {
+      "type": "http",
+      "url": "http://127.0.0.1:13346/mcp"
     }
   }
 }

@@ -30,6 +30,10 @@ except ImportError:
     from installer_tui import interactive_choose, interactive_select
 
 MCP_SERVER_NAME = "ida-pro-mcp"
+MCP_SERVER_INSTANCE_COUNT = 10
+MCP_SERVER_INSTANCE_CLIENTS = frozenset(
+    ("Claude", "Claude Code", "Codex", "Opencode")
+)
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 SERVER_SCRIPT = os.path.join(SCRIPT_DIR, "server.py")
 IDA_PLUGIN_PKG = os.path.join(SCRIPT_DIR, "ida_mcp")
@@ -122,9 +126,21 @@ def infer_http_transport_type(transport_url: str) -> str:
     return "sse" if urlparse(transport_url).path.rstrip("/") == "/sse" else "http"
 
 
-def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
+def _instance_server_name(index: int) -> str:
+    return f"{MCP_SERVER_NAME}-{index}"
+
+
+def _instance_ports(base_port: int | None = None):
+    if base_port is None:
+        base_port = IDA_PORT
+    return range(base_port, base_port + MCP_SERVER_INSTANCE_COUNT)
+
+
+def generate_mcp_config(
+    *, client_name: str, transport: str = "stdio", port: int | None = None
+):
+    configured_port = IDA_PORT if port is None else port
     if transport == "stdio":
-        # No --ida-rpc: server auto-discovers running IDA instances
         if client_name == "Opencode":
             mcp_config = {
                 "type": "local",
@@ -140,6 +156,12 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
                     SERVER_SCRIPT,
                 ],
             }
+        if port is not None:
+            # Instance configs must be pinned to a port. Otherwise all ten
+            # stdio processes would auto-select the same first IDA instance.
+            mcp_config.setdefault("args", []).extend(
+                ["--ida-rpc", f"http://{IDA_HOST}:{configured_port}"]
+            )
         env = {}
         if copy_python_env(env):
             print("[WARNING] Custom Python environment variables detected")
@@ -147,9 +169,9 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
         return mcp_config
 
     if transport == "streamable-http":
-        transport = f"http://{IDA_HOST}:{IDA_PORT}/mcp"
+        transport = f"http://{IDA_HOST}:{configured_port}/mcp"
     elif transport == "sse":
-        transport = f"http://{IDA_HOST}:{IDA_PORT}/sse"
+        transport = f"http://{IDA_HOST}:{configured_port}/sse"
 
     transport_url = normalize_transport_url(transport)
     if client_name == "Opencode":
@@ -161,6 +183,40 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
     if client_name == "Antigravity IDE":
         return {"type": "http", "serverUrl": force_mcp_path(transport_url)}
     return {"type": "http", "url": force_mcp_path(transport_url)}
+
+
+def generate_mcp_configs(*, client_name: str, transport: str = "stdio") -> dict:
+    """Generate all MCP entries needed by a multi-instance client.
+
+    IDA starts at ``IDA_PORT`` and moves upward when that port is occupied.
+    The generated entries therefore cover the same consecutive range. Clients
+    may show unavailable entries until the corresponding IDA instance starts.
+    """
+    if client_name not in MCP_SERVER_INSTANCE_CLIENTS:
+        return {
+            MCP_SERVER_NAME: generate_mcp_config(
+                client_name=client_name, transport=transport
+            )
+        }
+
+    return {
+        _instance_server_name(index): generate_mcp_config(
+            client_name=client_name,
+            transport=transport,
+            port=port,
+        )
+        for index, port in enumerate(_instance_ports(), start=1)
+    }
+
+
+def _all_server_names() -> tuple[str, ...]:
+    return (
+        MCP_SERVER_NAME,
+        *(
+            _instance_server_name(i)
+            for i in range(1, MCP_SERVER_INSTANCE_COUNT + 1)
+        ),
+    )
 
 
 def print_mcp_config():
@@ -323,7 +379,7 @@ def is_client_installed(
         is_toml=is_toml,
         special_json_structures=special_json_structures,
     )
-    return MCP_SERVER_NAME in mcp_servers
+    return any(name in mcp_servers for name in _all_server_names())
 
 
 def list_available_clients():
@@ -402,23 +458,36 @@ def install_mcp_servers(
             special_json_structures=special_json_structures,
         )
         old_name = "github.com/mrexodia/ida-pro-mcp"
-        if old_name in mcp_servers:
-            mcp_servers[MCP_SERVER_NAME] = mcp_servers[old_name]
-            del mcp_servers[old_name]
 
         if uninstall:
-            if MCP_SERVER_NAME not in mcp_servers:
+            names_to_remove = {old_name, *_all_server_names()}
+            removed_names = [
+                server_name
+                for server_name in names_to_remove
+                if mcp_servers.pop(server_name, None) is not None
+            ]
+            if not removed_names:
                 if not quiet:
                     print(
                         f"Skipping {name} uninstall\n  Config: {config_path} (not installed)"
                     )
                 continue
-            del mcp_servers[MCP_SERVER_NAME]
         else:
-            mcp_servers[MCP_SERVER_NAME] = generate_mcp_config(
-                client_name=name,
-                transport=transport,
-            )
+            if name in MCP_SERVER_INSTANCE_CLIENTS:
+                # Replace both the old single endpoint and any previous pool
+                # so re-installation also repairs a partially edited config.
+                for server_name in (old_name, *_all_server_names()):
+                    mcp_servers.pop(server_name, None)
+                mcp_servers.update(
+                    generate_mcp_configs(client_name=name, transport=transport)
+                )
+            else:
+                if old_name in mcp_servers:
+                    mcp_servers[MCP_SERVER_NAME] = mcp_servers.pop(old_name)
+                mcp_servers[MCP_SERVER_NAME] = generate_mcp_config(
+                    client_name=name,
+                    transport=transport,
+                )
 
         _write_config_file(config_path, config, is_toml=is_toml)
         if not quiet:
