@@ -262,6 +262,53 @@ class HttpSessionManagementTests(unittest.TestCase):
         if session_id is not None:
             self.assertGreater(len(session_id), 0)
 
+    def test_delete_terminates_streamable_http_session(self):
+        payload = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "delete-test", "version": "0"},
+                },
+            }
+        ).encode("utf-8")
+        connection = http.client.HTTPConnection(
+            self.harness.host, self.harness.port, timeout=2
+        )
+        try:
+            connection.request(
+                "POST",
+                "/mcp",
+                body=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+            )
+            initialize_response = connection.getresponse()
+            initialize_response.read()
+            session_id = initialize_response.getheader("Mcp-Session-Id")
+            self.assertTrue(session_id)
+            self.assertTrue(self.harness.server.has_http_session(session_id))
+
+            connection.request(
+                "DELETE",
+                "/mcp",
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Mcp-Session-Id": session_id,
+                },
+            )
+            delete_response = connection.getresponse()
+            self.assertEqual(delete_response.status, 204)
+            self.assertEqual(delete_response.read(), b"")
+            self.assertFalse(self.harness.server.has_http_session(session_id))
+        finally:
+            connection.close()
+
     def test_notification_response_is_bodyless(self):
         payload = json.dumps(
             {"jsonrpc": "2.0", "method": "notifications/initialized"}

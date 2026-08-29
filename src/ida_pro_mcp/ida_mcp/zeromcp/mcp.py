@@ -267,7 +267,9 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             return
         self.send_header("Access-Control-Allow-Origin", origin)
         if preflight:
-            self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+            self.send_header(
+                "Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS"
+            )
             self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, Mcp-Session-Id, Mcp-Protocol-Version")
             if self.headers.get("Access-Control-Request-Private-Network") == "true":
                 self.send_header("Access-Control-Allow-Private-Network", "true")
@@ -429,6 +431,30 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
                 self._handle_mcp_post(body)
             case _:
                 self.send_error(404, "Not Found")
+
+    def do_DELETE(self):
+        """Terminate a stateful Streamable HTTP session."""
+        if not self._check_api_request():
+            return
+        if self._has_unexpected_body():
+            self.send_error(400, "Request body is not allowed")
+            return
+        if urlparse(self.path).path != "/mcp":
+            self.send_error(404, "Not Found")
+            return
+
+        session_id = self.headers.get("Mcp-Session-Id")
+        if not session_id:
+            self.send_error(400, "Missing Mcp-Session-Id")
+            return
+        if not self.mcp_server.unregister_http_session(session_id):
+            self.send_error(404, "Unknown MCP session")
+            return
+
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.send_cors_headers()
+        self.end_headers()
 
     def do_OPTIONS(self):
         """Handle CORS preflight requests"""
@@ -990,6 +1016,11 @@ class McpServer:
             self._http_sessions.pop(session_id, None)
             self._http_sessions[session_id] = now
             return True
+
+    def unregister_http_session(self, session_id: str) -> bool:
+        """Explicitly terminate a Streamable HTTP session."""
+        with self._http_sessions_lock:
+            return self._http_sessions.pop(session_id, None) is not None
 
     def cors_localhost(self, origin: str) -> bool:
         """Allow CORS requests from localhost on ANY port."""
