@@ -4,6 +4,7 @@ import os
 import signal
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
@@ -67,7 +68,14 @@ _BOUND_HOST: str = ""
 _BOUND_PORT: int = 0
 
 
-def _register_in_discovery(host: str, port: int, input_path: Path) -> None:
+def _register_in_discovery(
+    host: str,
+    port: int,
+    input_path: Path,
+    *,
+    state: str | None = None,
+    session_ids: list[str] | None = None,
+) -> None:
     global _REGISTERED_PORT
     try:
         register_instance(
@@ -77,11 +85,44 @@ def _register_in_discovery(host: str, port: int, input_path: Path) -> None:
             binary=input_path.name,
             idb_path=str(input_path),
             backend="worker",
+            state=state,
+            session_ids=session_ids,
         )
         _REGISTERED_PORT = port
         logger.info("Registered idalib worker in discovery (port %d)", port)
     except Exception:
         logger.exception("Failed to register worker in discovery")
+
+
+def _refresh_discovery_registration(state: str, active_path: Path | None = None) -> None:
+    """Rewrite this worker's discovery entry so it reflects current sessions.
+
+    One-shot supervisors (e.g. cartograph's per-call stdio gateway) die right
+    after answering; the registry is the only place a later supervisor can
+    learn which sessions this worker holds and whether it is still opening a
+    database. Never raises: discovery is advisory, not load-bearing for IDA.
+    """
+    if not _BOUND_HOST or not _BOUND_PORT:
+        return
+    try:
+        sessions = get_session_manager().list_sessions()
+        if not sessions:
+            # Nothing held: a stale entry would attract doomed adoptions.
+            if _REGISTERED_PORT is not None:
+                _deregister_from_discovery()
+            return
+        if active_path is None:
+            active_path = Path(sessions[0]["input_path"])
+        session_ids = [s["session_id"] for s in sessions]
+        _register_in_discovery(
+            _BOUND_HOST,
+            _BOUND_PORT,
+            active_path,
+            state=state,
+            session_ids=session_ids,
+        )
+    except Exception:
+        logger.exception("Failed to refresh worker discovery registration")
 
 
 def _deregister_from_discovery() -> None:
@@ -93,6 +134,42 @@ def _deregister_from_discovery() -> None:
     except Exception:
         logger.debug("Failed to unregister worker", exc_info=True)
     _REGISTERED_PORT = None
+
+
+def _session_id_for_path(resolved_path: Path) -> str | None:
+    """Existing session ID for `resolved_path`, if this worker already holds it."""
+    for session in get_session_manager().list_sessions():
+        try:
+            if Path(session["input_path"]).resolve() == resolved_path:
+                return session["session_id"]
+        except (KeyError, OSError):
+            continue
+    return None
+
+
+def _register_opening_in_discovery(resolved_path: Path, requested_id: str) -> None:
+    """Publish state="opening" before the blocking open starts.
+
+    While open_binary pins the IDA main thread (auto-analysis can take
+    minutes), the discovery registry is the only channel through which a
+    one-shot supervisor can find this worker and adopt the pending session
+    instead of spawning a duplicate.
+    """
+    if not _BOUND_HOST or not _BOUND_PORT:
+        return
+    try:
+        session_ids = [s["session_id"] for s in get_session_manager().list_sessions()]
+        if requested_id not in session_ids:
+            session_ids.append(requested_id)
+        _register_in_discovery(
+            _BOUND_HOST,
+            _BOUND_PORT,
+            resolved_path,
+            state="opening",
+            session_ids=session_ids,
+        )
+    except Exception:
+        logger.exception("Failed to publish opening state in discovery")
 
 
 @tool
@@ -112,6 +189,17 @@ def idb_open(
 ) -> IdalibOpenResult:
     """Open a binary, activate it, and warm up subsystems in one call."""
 
+    manager = get_session_manager()
+    resolved_path = Path(input_path).resolve()
+    # Reuse the existing session ID when the path is already open so a retry
+    # mid-open does not double-register under a fresh ID.
+    requested_id = (
+        _session_id_for_path(resolved_path)
+        or preferred_session_id
+        or uuid.uuid4().hex[:8]
+    )
+    _register_opening_in_discovery(resolved_path, requested_id)
+
     if _PUMP.active and not _PUMP.on_main_thread():
         # open_database and everything after it must run on the IDA thread.
         return _PUMP.submit(
@@ -127,13 +215,11 @@ def idb_open(
         )
 
     try:
-        manager = get_session_manager()
-        resolved_path = Path(input_path).resolve()
         load_started_at = time.monotonic()
         opened_session_id = manager.open_binary(
             resolved_path,
             run_auto_analysis=run_auto_analysis,
-            session_id=preferred_session_id or None,
+            session_id=requested_id,
         )
         session = manager.activate_session(opened_session_id)
         warmup: ServerWarmupResult | None = None
@@ -144,8 +230,7 @@ def idb_open(
                 init_hexrays=init_hexrays,
             )
         _LIFECYCLE.set_idle_ttl(float(idle_ttl_sec), time.monotonic() - load_started_at)
-        if _REGISTERED_PORT is None and _BOUND_HOST and _BOUND_PORT:
-            _register_in_discovery(_BOUND_HOST, _BOUND_PORT, session.input_path)
+        _refresh_discovery_registration("ready", resolved_path)
         return {
             "success": True,
             "session": session.to_dict(),
@@ -155,8 +240,12 @@ def idb_open(
             ),
         }
     except (FileNotFoundError, RuntimeError, ValueError) as e:
+        # A failed open must not leave an "opening" entry behind: refresh with
+        # the remaining sessions (or unregister entirely when none are left).
+        _refresh_discovery_registration("ready")
         return {"error": str(e)}
     except Exception as e:
+        _refresh_discovery_registration("ready")
         return {"error": f"Unexpected error: {e}"}
 
 
@@ -243,9 +332,15 @@ def main():
 
         logger.info("opening initial database: %s", args.input_path)
         resolved = args.input_path.resolve()
-        session_id = session_manager.open_binary(resolved, run_auto_analysis=True)
+        session_id = uuid.uuid4().hex[:8]
+        _register_in_discovery(
+            args.host, args.port, resolved, state="opening", session_ids=[session_id]
+        )
+        session_id = session_manager.open_binary(
+            resolved, run_auto_analysis=True, session_id=session_id
+        )
         logger.info("Initial session created: %s", session_id)
-        _register_in_discovery(args.host, args.port, resolved)
+        _refresh_discovery_registration("ready", resolved)
     else:
         logger.info(
             "No initial binary specified. Use idb_open() to load binaries dynamically."

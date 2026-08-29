@@ -35,6 +35,11 @@ class InstanceInfo(TypedDict, total=False):
     idb_path: str
     started_at: str
     backend: str  # "gui" or "worker"
+    # Worker-only lifecycle hints. "opening" means idb_open is still running
+    # (auto-analysis may take minutes); "ready" means tools can be served.
+    # Absent on GUI instances and older workers — treat as "ready".
+    state: str  # "opening" or "ready"
+    session_ids: list[str]  # session IDs the worker currently holds
 
 
 def _get_ida_user_dir() -> str:
@@ -52,21 +57,48 @@ def _instance_file_path(port: int) -> str:
 
 
 def register_instance(
-    host: str, port: int, pid: int, binary: str, idb_path: str, backend: str = "gui"
+    host: str,
+    port: int,
+    pid: int,
+    binary: str,
+    idb_path: str,
+    backend: str = "gui",
+    *,
+    state: str | None = None,
+    session_ids: list[str] | None = None,
 ) -> str:
-    """Write an instance registration file. Returns the file path."""
+    """Write an instance registration file. Returns the file path.
+
+    Re-registering the same port atomically replaces the file, so workers
+    refresh their entry as sessions open/close. `started_at` is preserved
+    across re-registrations when a previous entry exists.
+    """
+    file_path = _instance_file_path(port)
+    started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if state is not None or session_ids is not None:
+        # Refresh, not first registration: keep the original start time.
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                previous = json.load(f)
+            if previous.get("pid") == pid and previous.get("started_at"):
+                started_at = previous["started_at"]
+        except (json.JSONDecodeError, OSError, KeyError):
+            pass
     info: InstanceInfo = {
         "host": host,
         "port": port,
         "pid": pid,
         "binary": binary,
         "idb_path": idb_path,
-        "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "started_at": started_at,
         "backend": backend,
     }
+    if state is not None:
+        info["state"] = state
+    if session_ids is not None:
+        info["session_ids"] = session_ids
     instances_dir = get_instances_dir()
     os.makedirs(instances_dir, exist_ok=True)
-    file_path = _instance_file_path(port)
     # Atomic write
     fd, tmp_path = tempfile.mkstemp(dir=instances_dir, prefix=".tmp_", suffix=".json")
     try:
