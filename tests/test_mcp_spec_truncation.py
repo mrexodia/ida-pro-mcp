@@ -39,31 +39,10 @@ def _fresh_truncated_server() -> McpServer:
     rpc = load_ida_rpc_module()
     srv = rpc.McpServer("truncation-test")
     original = srv.registry.methods["tools/call"]
-    limit = rpc.OUTPUT_LIMIT_MAX_CHARS
 
     def patched(name, arguments=None, _meta=None):
         response = original(name, arguments, _meta)
-        if response.get("isError"):
-            return response
-        structured = response.get("structuredContent")
-        if structured is None:
-            return response
-        serialized = json.dumps(structured)
-        if len(serialized) <= limit:
-            return response
-        output_id = rpc._generate_output_id()
-        rpc._cache_output(output_id, structured)
-        preview = rpc._truncate_value(structured)
-        download_meta = rpc._build_download_meta(output_id, len(serialized))
-        return {
-            "structuredContent": preview,
-            "content": [
-                {"type": "text", "text": json.dumps(preview, separators=(",", ":"))},
-                {"type": "text", "text": download_meta["download_hint"]},
-            ],
-            "isError": False,
-            "_meta": {"ida_mcp": download_meta},
-        }
+        return rpc._limit_output_response(response)
 
     srv.registry.methods["tools/call"] = patched
     return srv
@@ -131,6 +110,24 @@ class TruncationInvariantTests(unittest.TestCase):
             with self.subTest(block=block):
                 self.assertEqual(block["type"], "text")
                 self.assertIsInstance(block["text"], str)
+
+    def test_preview_respects_aggregate_character_budget(self):
+        class ManyStrings(TypedDict):
+            fields: dict[str, str]
+
+        srv = _fresh_truncated_server()
+
+        @srv.tool
+        def many_strings() -> ManyStrings:
+            """Returns many independently large string fields."""
+            return {"fields": {f"field_{i}": "x" * 10000 for i in range(20)}}
+
+        result = call_rpc(srv, "tools/call", name="many_strings", arguments={})
+        preview = result["structuredContent"]
+        rpc = load_ida_rpc_module()
+        self.assertLessEqual(
+            len(json.dumps(preview)), rpc.OUTPUT_LIMIT_PREVIEW_MAX_CHARS
+        )
 
 
 class DownloadUrlDerivationOverHttpTests(unittest.TestCase):

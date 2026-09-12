@@ -43,15 +43,17 @@ def _generate_output_id() -> str:
 
 
 OUTPUT_LIMIT_PREVIEW_ITEMS = 10
-OUTPUT_LIMIT_PREVIEW_STR_LEN = 1000
+OUTPUT_LIMIT_PREVIEW_STR_LEN = 4000
+OUTPUT_LIMIT_PREVIEW_MAX_CHARS = 40000
 
 
-def _truncate_value(value: Any, depth: int = 0) -> Any:
-    if depth > 5:
-        return value
-
-    if isinstance(value, str) and len(value) > OUTPUT_LIMIT_PREVIEW_STR_LEN:
-        return value[:OUTPUT_LIMIT_PREVIEW_STR_LEN] + f"... [{len(value)} chars total]"
+def _truncate_value_with_limits(
+    value: Any, depth: int, string_limit: int, item_limit: int
+) -> Any:
+    if isinstance(value, str) and len(value) > string_limit:
+        if string_limit == 0:
+            return ""
+        return value[:string_limit] + f"... [{len(value)} chars total]"
 
     if isinstance(value, list):
         # IMPORTANT: Do not inject sentinel objects like {"_truncated": "..."} into lists.
@@ -59,14 +61,42 @@ def _truncate_value(value: Any, depth: int = 0) -> Any:
         # so sentinels can break structured output validation. Truncation is reported
         # via _meta.ida_mcp and the download_hint content.
         return [
-            _truncate_value(item, depth + 1)
-            for item in value[:OUTPUT_LIMIT_PREVIEW_ITEMS]
+            _truncate_value_with_limits(item, depth + 1, string_limit, item_limit)
+            for item in value[:item_limit]
         ]
 
     if isinstance(value, dict):
-        return {k: _truncate_value(v, depth + 1) for k, v in value.items()}
+        return {
+            k: _truncate_value_with_limits(v, depth + 1, string_limit, item_limit)
+            for k, v in value.items()
+        }
 
     return value
+
+
+def _truncate_value(value: Any, depth: int = 0) -> Any:
+    """Build a schema-preserving preview bounded across the whole value."""
+    limits = (
+        (OUTPUT_LIMIT_PREVIEW_STR_LEN, OUTPUT_LIMIT_PREVIEW_ITEMS),
+        (2000, 10),
+        (1000, 10),
+        (1000, 5),
+        (500, 5),
+        (500, 2),
+        (200, 2),
+        (200, 1),
+        (100, 1),
+        (50, 1),
+        (0, 0),
+    )
+    preview: Any = value
+    for string_limit, item_limit in limits:
+        preview = _truncate_value_with_limits(
+            value, depth, string_limit, item_limit
+        )
+        if len(json.dumps(preview)) <= OUTPUT_LIMIT_PREVIEW_MAX_CHARS:
+            break
+    return preview
 
 
 def _build_download_meta(output_id: str, total_chars: int) -> dict:
@@ -91,6 +121,40 @@ def _cache_output(output_id: str, data: Any) -> None:
     _output_cache[output_id] = data
 
 
+def _limit_output_response(response: dict) -> dict:
+    if response.get("isError"):
+        return response
+
+    structured = response.get("structuredContent")
+    if structured is None:
+        return response
+
+    serialized = json.dumps(structured)
+    if len(serialized) <= OUTPUT_LIMIT_MAX_CHARS:
+        return response
+
+    output_id = _generate_output_id()
+    _cache_output(output_id, structured)
+
+    preview = _truncate_value(structured)
+    download_meta = _build_download_meta(output_id, len(serialized))
+
+    content = [{
+        "type": "text",
+        "text": json.dumps(preview, separators=(",", ":")),
+    }, {
+        "type": "text",
+        "text": download_meta["download_hint"],
+    }]
+
+    return {
+        "structuredContent": preview,
+        "content": content,
+        "isError": False,
+        "_meta": {"ida_mcp": download_meta},
+    }
+
+
 def _install_tools_call_patch() -> None:
     original = MCP_SERVER.registry.methods["tools/call"]
 
@@ -98,38 +162,7 @@ def _install_tools_call_patch() -> None:
         name: str, arguments: Optional[dict] = None, _meta: Optional[dict] = None
     ) -> dict:
         response = original(name, arguments, _meta)
-
-        if response.get("isError"):
-            return response
-
-        structured = response.get("structuredContent")
-        if structured is None:
-            return response
-
-        serialized = json.dumps(structured)
-        if len(serialized) <= OUTPUT_LIMIT_MAX_CHARS:
-            return response
-
-        output_id = _generate_output_id()
-        _cache_output(output_id, structured)
-
-        preview = _truncate_value(structured)
-        download_meta = _build_download_meta(output_id, len(serialized))
-
-        content = [{
-            "type": "text",
-            "text": json.dumps(preview, separators=(",", ":")),
-        }, {
-            "type": "text",
-            "text": download_meta["download_hint"],
-        }]
-
-        return {
-            "structuredContent": preview,
-            "content": content,
-            "isError": False,
-            "_meta": {"ida_mcp": download_meta},
-        }
+        return _limit_output_response(response)
 
     MCP_SERVER.registry.methods["tools/call"] = patched
 

@@ -1,5 +1,6 @@
-from itertools import islice
+import json
 import struct
+from itertools import islice
 from typing import Annotated, Any, NotRequired, Optional, TypedDict
 import ida_lines
 import ida_funcs
@@ -14,7 +15,7 @@ import ida_kernwin
 import ida_xref
 import ida_ua
 import ida_name
-from .rpc import tool
+from .rpc import OUTPUT_LIMIT_MAX_CHARS, tool
 from .sync import idasync, tool_timeout, IDAError
 from .utils import (
     parse_address,
@@ -49,17 +50,22 @@ from .utils import (
 from . import compat
 
 
-class DecompileResult(TypedDict):
-    addr: str
-    code: str | None
-    refs: NotRequired[list[Ref]]
-    error: NotRequired[str]
-
-
 class ResultCursor(TypedDict, total=False):
     next: int
     done: bool
     cancelled: bool
+
+
+class DecompileResult(TypedDict):
+    addr: str
+    code: str | None
+    line_count: NotRequired[int]
+    total_lines: NotRequired[int]
+    truncated: NotRequired[bool]
+    cursor: NotRequired[ResultCursor]
+    refs: NotRequired[list[Ref]]
+    refs_truncated: NotRequired[bool]
+    error: NotRequired[str]
 
 
 class DisasmResult(TypedDict, total=False):
@@ -541,11 +547,11 @@ def _resolve_ref_name(ea: int) -> str:
 _STR_CODECS = {0: "utf-8", 1: "utf-16-le", 2: "utf-32-le"}
 
 
-def _resolve_ref(ea: int) -> dict | None:
+def _resolve_ref(ea: int) -> Ref | None:
     name = _resolve_ref_name(ea)
     if not name:
         return None
-    info: dict = {"addr": hex(ea), "name": name}
+    info: Ref = {"addr": hex(ea), "name": name}
     flags = ida_bytes.get_flags(ea)
     if ida_bytes.is_strlit(flags):
         strtype = ida_nalt.get_str_type(ea)
@@ -561,11 +567,11 @@ def _resolve_ref(ea: int) -> dict | None:
     return info
 
 
-def _collect_decompile_refs(cfunc) -> list[dict]:
+def _collect_decompile_refs(cfunc) -> list[Ref]:
     import ida_hexrays
 
     seen: set[int] = set()
-    refs: list[dict] = []
+    refs: list[Ref] = []
 
     class _Visitor(ida_hexrays.ctree_visitor_t):
         def __init__(self):
@@ -585,9 +591,9 @@ def _collect_decompile_refs(cfunc) -> list[dict]:
     return refs
 
 
-def _collect_line_refs(ea: int) -> list[dict]:
+def _collect_line_refs(ea: int) -> list[Ref]:
     seen: set[int] = set()
-    refs: list[dict] = []
+    refs: list[Ref] = []
     for ref_ea in idautils.CodeRefsFrom(ea, False):
         if ref_ea == idaapi.BADADDR or ref_ea in seen:
             continue
@@ -749,6 +755,58 @@ def _profile_function(
 # Code Analysis & Decompilation
 # ============================================================================
 
+_DECOMPILE_CODE_MAX_CHARS = 30_000
+_DECOMPILE_RESULT_MAX_CHARS = OUTPUT_LIMIT_MAX_CHARS - 5_000
+
+
+def _paginate_decompile_code(
+    code: str, offset: int, max_lines: int
+) -> tuple[str, int, int, bool]:
+    """Return a line page whose JSON-encoded code fits the output budget."""
+    lines = code.split("\n")
+    total_lines = len(lines)
+    available = lines[offset : offset + max_lines]
+    page: list[str] = []
+    # json.dumps("") is two quote characters. Embedded newlines encode as "\\n".
+    encoded_chars = 2
+
+    for line in available:
+        addition = len(json.dumps(line)) - 2
+        if page:
+            addition += 2
+        if page and encoded_chars + addition > _DECOMPILE_CODE_MAX_CHARS:
+            break
+        page.append(line)
+        encoded_chars += addition
+
+    line_count = len(page)
+    more = offset + line_count < total_lines
+    return "\n".join(page), line_count, total_lines, more
+
+
+def _attach_decompile_refs(result: DecompileResult, refs: list[Ref]) -> None:
+    """Attach as many refs as fit without pushing the result into RPC truncation."""
+    if not refs:
+        return
+
+    candidate = dict(result)
+    candidate["refs"] = []
+    # Reserve the marker before sizing so adding it cannot cross the budget.
+    candidate["refs_truncated"] = True
+    encoded_chars = len(json.dumps(candidate))
+    retained: list[Ref] = []
+
+    for ref in refs:
+        addition = len(json.dumps(ref)) + (2 if retained else 0)
+        if encoded_chars + addition > _DECOMPILE_RESULT_MAX_CHARS:
+            result["refs_truncated"] = True
+            break
+        retained.append(ref)
+        encoded_chars += addition
+
+    if retained:
+        result["refs"] = retained
+
 
 @tool
 @idasync
@@ -758,28 +816,63 @@ def decompile(
     include_addresses: Annotated[
         bool, "Append /*0xNNNN*/ markers per line (default: true). Set false to save tokens."
     ] = True,
+    max_lines: Annotated[
+        int,
+        "Max pseudocode lines per page (default: 500, max: 5000); "
+        "pages may be smaller to stay under the output cap",
+    ] = 500,
+    offset: Annotated[int, "Skip first N pseudocode lines (default: 0)"] = 0,
 ) -> DecompileResult:
-    """Decompile function(s) at address(es); returns pseudocode and per-item errors."""
+    """Decompile a function. Follow cursor.next for more code; refs appear on the first page."""
+    if max_lines <= 0 or max_lines > 5000:
+        max_lines = 5000
+    if offset < 0:
+        offset = 0
+
     try:
         start = parse_address(addr)
         code, err = decompile_function_safe(start, include_addresses=include_addresses)
         if code is None:
-            return {"addr": addr, "code": None, "error": err or "Decompilation failed"}
-        result: DecompileResult = {"addr": addr, "code": code}
-        try:
-            import ida_hexrays
+            return {
+                "addr": addr,
+                "code": None,
+                "error": err or "Decompilation failed",
+                "cursor": {"done": True},
+            }
 
-            if ida_hexrays.init_hexrays_plugin():
-                cfunc = ida_hexrays.decompile(start)
-                if cfunc:
-                    refs = _collect_decompile_refs(cfunc)
-                    if refs:
-                        result["refs"] = refs
-        except Exception:
-            pass
+        page, line_count, total_lines, more = _paginate_decompile_code(
+            code, offset, max_lines
+        )
+
+        result: DecompileResult = {
+            "addr": addr,
+            "code": page,
+            "line_count": line_count,
+            "total_lines": total_lines,
+            "truncated": offset > 0 or more,
+            "cursor": {"next": offset + line_count} if more else {"done": True},
+        }
+
+        # Refs only on the first page to keep later pages under the RPC size envelope.
+        if offset == 0:
+            try:
+                import ida_hexrays
+
+                if ida_hexrays.init_hexrays_plugin():
+                    cfunc = ida_hexrays.decompile(start)
+                    if cfunc:
+                        refs = _collect_decompile_refs(cfunc)
+                        _attach_decompile_refs(result, refs)
+            except Exception:
+                pass
         return result
     except Exception as e:
-        return {"addr": addr, "code": None, "error": str(e)}
+        return {
+            "addr": addr,
+            "code": None,
+            "error": str(e),
+            "cursor": {"done": True},
+        }
 
 
 @tool
