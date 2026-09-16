@@ -1,12 +1,20 @@
 """Targeted tests for deeper internal helpers in api_analysis.py."""
 
+import json
+
 from ..framework import test, assert_non_empty
 from ..api_analysis import (
+    _DECOMPILE_CODE_MAX_CHARS,
+    _DECOMPILE_RESULT_MAX_CHARS,
+    DecompileResult,
+    _attach_decompile_refs,
+    _paginate_decompile_code,
     _resolve_insn_scan_ranges,
     _scan_insn_ranges,
     _value_to_le_bytes,
     _value_candidates_for_immediate,
 )
+from ..utils import Ref
 
 
 @test(binary="typed_fixture.elf")
@@ -112,3 +120,50 @@ def test_internal_immediate_encoding_helpers():
     assert_non_empty(candidates)
     assert any(item[0] == 1234 and item[1] == 4 for item in candidates)
     assert any(item[0] == 1234 and item[1] == 8 for item in candidates)
+
+
+@test()
+def test_internal_decompile_pagination_respects_character_budget():
+    """Large line pages stop at the character budget and advance by visible lines."""
+    lines = [f"{i:04d} " + ("x" * 115) for i in range(500)]
+    code = "\n".join(lines)
+
+    page1, count1, total, more1 = _paginate_decompile_code(code, 0, 500)
+    assert 0 < count1 < 500
+    assert total == 500
+    assert more1 is True
+    assert page1.split("\n") == lines[:count1]
+    assert len(json.dumps(page1)) <= _DECOMPILE_CODE_MAX_CHARS
+
+    page2, count2, total2, more2 = _paginate_decompile_code(
+        code, count1, 500
+    )
+    assert count2 > 0
+    assert total2 == total
+    assert page2.split("\n") == lines[count1 : count1 + count2]
+    assert more2 is (count1 + count2 < total)
+
+
+@test()
+def test_internal_decompile_refs_fit_result_budget():
+    """First-page refs are truncated before they can trigger RPC truncation."""
+    result: DecompileResult = {
+        "addr": "main",
+        "code": "x" * _DECOMPILE_CODE_MAX_CHARS,
+        "line_count": 1,
+        "total_lines": 1,
+        "truncated": False,
+        "cursor": {"done": True},
+    }
+    refs: list[Ref] = [
+        {"addr": hex(i), "name": f"ref_{i}", "string": "s" * 1000}
+        for i in range(100)
+    ]
+
+    _attach_decompile_refs(result, refs)
+
+    retained = result.get("refs", [])
+    assert retained
+    assert len(retained) < len(refs)
+    assert result.get("refs_truncated") is True
+    assert len(json.dumps(result)) <= _DECOMPILE_RESULT_MAX_CHARS

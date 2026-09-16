@@ -48,9 +48,25 @@ def test_decompile_valid_function():
         skip_test("binary has no functions")
 
     result = decompile(fn_addr)
-    assert_shape(result, {"addr": str, "code": optional(str), "error": optional(str)})
+    assert_shape(
+        result,
+        {
+            "addr": str,
+            "code": optional(str),
+            "line_count": optional(int),
+            "total_lines": optional(int),
+            "truncated": optional(bool),
+            "cursor": optional(dict),
+            "refs": optional(list),
+            "refs_truncated": optional(bool),
+            "error": optional(str),
+        },
+    )
     assert_ok(result, "code")
     assert_non_empty(result["code"])
+    assert result["line_count"] == len(result["code"].split("\n"))
+    assert result["total_lines"] >= result["line_count"]
+    assert "done" in result["cursor"] or "next" in result["cursor"]
 
 
 @test(binary="crackme03.elf")
@@ -118,6 +134,50 @@ def test_decompile_include_addresses_false_strips_markers():
     result = decompile("main", include_addresses=False)
     assert_ok(result, "code")
     assert "/*0x" not in result["code"]
+
+
+@test()
+def test_decompile_pagination():
+    """decompile enforces max_lines and advances the cursor across pages."""
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    full = decompile(fn_addr, max_lines=5000)
+    assert_ok(full, "code")
+    total = full["total_lines"]
+    if total < 6:
+        skip_test("function has fewer than 6 pseudocode lines")
+
+    page1 = decompile(fn_addr, max_lines=3)
+    assert_ok(page1, "code")
+    assert page1["line_count"] == 3
+    assert page1["total_lines"] == total
+    assert page1["truncated"] is True
+    assert "next" in page1["cursor"]
+    assert page1["code"] == "\n".join(full["code"].split("\n")[:3])
+
+    page2 = decompile(fn_addr, max_lines=3, offset=page1["cursor"]["next"])
+    assert_ok(page2, "code")
+    assert page2["line_count"] <= 3
+    assert page2["code"] != page1["code"]
+    assert page2["code"] == "\n".join(full["code"].split("\n")[3 : 3 + page2["line_count"]])
+
+
+@test(binary="crackme03.elf")
+def test_decompile_refs_only_on_first_page():
+    """Refs are attached on offset=0 and omitted on later pages."""
+    first = decompile(CRACKME_MAIN, max_lines=2, offset=0)
+    assert_ok(first, "code")
+    assert first.get("refs"), "expected refs on first page"
+
+    nxt = first["cursor"].get("next")
+    if nxt is None:
+        skip_test("main has fewer than 3 pseudocode lines")
+
+    later = decompile(CRACKME_MAIN, max_lines=2, offset=nxt)
+    assert_ok(later, "code")
+    assert "refs" not in later
 
 
 @test()
