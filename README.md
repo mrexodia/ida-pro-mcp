@@ -210,7 +210,7 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 
 ## Headless idalib Session Model
 
-`idalib-mcp` is a supervisor that keeps each open database in its own idalib worker process. Workers register themselves in a host-local discovery directory and outlive the supervisor that spawned them; any subsequent supervisor that wants the same path adopts the running worker. A worker self-exits when no request has hit it for its idle TTL (default 1 hour). Call `idb_close` to release a worker eagerly (freeing a slot toward `--max-workers`), adopted GUI/worker instances are detached rather than killed.
+`idalib-mcp` is a supervisor that keeps each open database in its own idalib worker process. Workers register themselves in a host-local discovery directory and outlive the supervisor that spawned them; any subsequent supervisor that wants the same path adopts the running worker. A worker self-exits when no request has hit it for its idle TTL (default 10 minutes). Call `idb_close` to release a worker eagerly (freeing a slot toward `--max-workers`), adopted GUI/worker instances are detached rather than killed.
 
 `idb_open` picks the backend via its `mode` parameter:
 
@@ -249,6 +249,8 @@ Worker controls:
 
 - `--max-workers N`: maximum simultaneous database workers (`0` = unlimited, default `4`).
 - `IDA_MCP_MAX_WORKERS`: environment default for `--max-workers`.
+- `--idle-timeout SECONDS`: idle timeout for a new worker opened from the positional `input_path` (`0` = disabled, default `600`). An existing worker keeps its current timeout.
+- `IDA_MCP_IDLE_TIMEOUT`: environment default for `--idle-timeout`.
 
 The bundled Codex plugin forwards the runtime's `IDA_MCP_*` configuration variables from the Codex host environment:
 

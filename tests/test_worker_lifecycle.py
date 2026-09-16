@@ -75,10 +75,16 @@ def test_set_idle_ttl_uses_request_when_above_min():
     assert lc.idle_ttl_sec == 1800.0
 
 
-def test_set_idle_ttl_clamps_to_min():
+def test_set_idle_ttl_zero_disables_timeout():
     lc = WorkerLifecycle(idle_ttl_sec=1000.0)
-    lc.set_idle_ttl(0)
-    assert lc.idle_ttl_sec == WorkerLifecycle.MIN_IDLE_TTL_SEC
+    lc.set_idle_ttl(0, load_time_sec=120.0)
+    assert lc.idle_ttl_sec == 0
+    lc._last_request_at = time.monotonic() - 1000
+    assert lc.check_shutdown_reason() is None
+
+
+def test_set_idle_ttl_clamps_nonzero_values_below_min():
+    lc = WorkerLifecycle(idle_ttl_sec=1000.0)
     lc.set_idle_ttl(-50.0)
     assert lc.idle_ttl_sec == WorkerLifecycle.MIN_IDLE_TTL_SEC
     lc.set_idle_ttl(3.0)
@@ -93,7 +99,7 @@ def test_set_idle_ttl_adds_load_time():
 
 def test_set_idle_ttl_clamps_user_then_adds_load_time():
     lc = WorkerLifecycle(idle_ttl_sec=10.0)
-    lc.set_idle_ttl(0.0, load_time_sec=120.0)
+    lc.set_idle_ttl(3.0, load_time_sec=120.0)
     assert lc.idle_ttl_sec == WorkerLifecycle.MIN_IDLE_TTL_SEC + 120.0
 
 

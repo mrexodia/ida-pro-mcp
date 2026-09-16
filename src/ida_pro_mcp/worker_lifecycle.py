@@ -73,6 +73,9 @@ class WorkerLifecycle:
 
     def set_idle_ttl(self, user_ttl_sec: float, load_time_sec: float = 0.0) -> None:
         with self._lock:
+            if user_ttl_sec == 0:
+                self.idle_ttl_sec = 0
+                return
             self.idle_ttl_sec = (
                 max(self.MIN_IDLE_TTL_SEC, user_ttl_sec) + max(0.0, load_time_sec)
             )
