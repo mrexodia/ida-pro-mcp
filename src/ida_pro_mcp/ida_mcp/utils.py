@@ -22,13 +22,89 @@ import ida_bytes
 import ida_funcs
 import ida_hexrays
 import ida_kernwin
+import ida_name
 import ida_nalt
+import ida_netnode
 import ida_typeinf
 import idaapi
 import idautils
 import idc
 
 from .sync import IDAError
+
+# ============================================================================
+# Ignore Micro (Skippable Instructions) Constants & Helpers
+# ============================================================================
+
+IM_NONE = 0
+IM_PROLOG = 1
+IM_EPILOG = 2
+IM_SWITCH = 3
+IM_NAMES: dict[int, str] = {IM_PROLOG: "prolog", IM_EPILOG: "epilog", IM_SWITCH: "switch"}
+IM_FROM_STR: dict[str, int] = {"none": IM_NONE, "prolog": IM_PROLOG, "epilog": IM_EPILOG, "switch": IM_SWITCH}
+IM_NETNODE_NAME = "$ ignore micro"
+_IM_CMT_PREFIX = "[ida-mcp: restore ignore_micro to "
+
+
+def im_get_node() -> ida_netnode.netnode:
+    """Get the ignore_micro netnode instance."""
+    return ida_netnode.netnode(IM_NETNODE_NAME)
+
+
+def im_get_tag(ea: int, node: ida_netnode.netnode | None = None) -> str | None:
+    """Return the ignore_micro type string for ea, or None if not marked."""
+    if node is None:
+        node = im_get_node()
+    val = node.charval_ea(ea, 0)
+    return IM_NAMES.get(val)
+
+
+def im_backup_comment(ea: int, im_type_str: str) -> None:
+    """Save the original ignore_micro type as a comment for cross-session recovery.
+
+    Prefers regular comments (0) so the tag is always visible in IDA GUI,
+    even when another regular comment already exists on the line.
+    """
+    tag = f"{_IM_CMT_PREFIX}{im_type_str}]"
+    reg_cmt = ida_bytes.get_cmt(ea, 0) or ""
+    rep_cmt = ida_bytes.get_cmt(ea, 1) or ""
+    if tag in reg_cmt or tag in rep_cmt:
+        return
+
+    # Clean existing tags from both comment types first
+    im_remove_backup_comment(ea)
+
+    # Re-fetch existing regular comment after cleanup and attach tag
+    reg_cmt = ida_bytes.get_cmt(ea, 0) or ""
+    new_cmt = f"{reg_cmt} {tag}".strip() if reg_cmt else tag
+    ida_bytes.set_cmt(ea, new_cmt, 0)
+
+
+def im_remove_backup_comment(ea: int) -> None:
+    """Remove the ignore_micro backup tag from both regular and repeatable comments."""
+    for r in (0, 1):
+        existing = ida_bytes.get_cmt(ea, r) or ""
+        if _IM_CMT_PREFIX in existing:
+            cleaned = im_remove_backup_comment_str(existing)
+            ida_bytes.set_cmt(ea, cleaned if cleaned else None, r)
+
+
+def im_remove_backup_comment_str(cmt: str) -> str:
+    """Strip the [ida-mcp: restore ignore_micro to ...] tag from a comment string."""
+    import re
+    cleaned = re.sub(r"\s*\[ida-mcp: restore ignore_micro to \w+\]", "", cmt).strip()
+    return cleaned
+
+
+def im_get_backup_type(ea: int) -> str | None:
+    """Read the backed-up original ignore_micro type from regular or repeatable comment."""
+    import re
+    for r in (0, 1):
+        cmt = ida_bytes.get_cmt(ea, r) or ""
+        m = re.search(r"\[ida-mcp: restore ignore_micro to (\w+)\]", cmt)
+        if m:
+            return m.group(1)
+    return None
 
 # ============================================================================
 # Analysis Prompt Configuration
@@ -483,6 +559,18 @@ class DisassemblyLine(TypedDict):
     instruction: str
     comments: NotRequired[list[str]]
     refs: NotRequired[list[Ref]]
+    ignore_micro: NotRequired[str]
+    """If present, the instruction is marked as a skippable instruction
+    ("prolog", "epilog", or "switch") that the decompiler will skip/NOP.
+    When the decompiler produces incorrect pseudocode, check whether
+    a necessary instruction was incorrectly marked. Use set_ignore_micro
+    with im_type='none' to clear the mark, then re-decompile.
+
+    If a comment contains '[ida-mcp: restore ignore_micro to <type>]',
+    the instruction was previously modified by set_ignore_micro. To undo
+    the change, call set_ignore_micro with im_type=<type> (the value
+    shown after 'to'). The backup comment is removed automatically
+    upon successful restoration."""
 
 
 class Argument(TypedDict):
@@ -1191,6 +1279,7 @@ def get_assembly_lines(ea: int) -> str:
     # Build compact string format
     lines_str = f"{func_name} ({segment_name} @ {hex(func.start_ea)}):"
 
+    im_node = im_get_node()
     for item_ea in idautils.FuncItems(func.start_ea):
         mnem = idc.print_insn_mnem(item_ea) or ""
         ops = []
@@ -1199,7 +1288,9 @@ def get_assembly_lines(ea: int) -> str:
                 break
             ops.append(idc.print_operand(item_ea, n) or "")
         instruction = f"{mnem} {', '.join(ops)}".rstrip()
-        lines_str += f"\n{item_ea:x}  {instruction}"
+        tag = im_get_tag(item_ea, im_node)
+        suffix = f"  [SKIP:{tag}]" if tag else ""
+        lines_str += f"\n{item_ea:x}  {instruction}{suffix}"
 
     return lines_str
 
