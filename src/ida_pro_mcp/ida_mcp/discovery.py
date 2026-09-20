@@ -7,6 +7,7 @@ instances by reading these files and validating PID liveness.
 
 import datetime
 import glob
+import ipaddress
 import json
 import os
 import socket
@@ -126,6 +127,23 @@ def probe_instance(host: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
+def _connectable_host(host: str) -> str:
+    """Map a recorded bind address to an address we can connect to.
+
+    A registration stores the address the instance bound to, and a wildcard
+    bind is not connectable: Winsock rejects connect("0.0.0.0") / connect("::")
+    with WSAEADDRNOTAVAIL (10049) where BSD sockets route them to loopback, so
+    a live instance read its own registration as unreachable.
+    """
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return host  # a name ("localhost") or an explicit interface address
+    if address.is_unspecified:
+        return "127.0.0.1" if address.version == 4 else "::1"
+    return host
+
+
 def discover_instances() -> list[InstanceInfo]:
     """Scan for registered instances, cleaning up stale entries."""
     instances_dir = get_instances_dir()
@@ -151,6 +169,10 @@ def discover_instances() -> list[InstanceInfo]:
             except OSError:
                 pass
             continue
+
+        # Consumers (the probe below and the supervisor sessions adopted from
+        # this result) connect to this host, so record a connectable one.
+        info["host"] = _connectable_host(info["host"])
 
         if not is_pid_alive(info["pid"]):
             try:
