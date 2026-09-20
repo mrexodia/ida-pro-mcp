@@ -15,7 +15,7 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
   - [Amazon Q Developer CLI](https://aws.amazon.com/q/developer/)
   - [Augment Code](https://www.augmentcode.com/)
   - [Claude](https://claude.ai/download)
-  - [Claude Code](https://www.anthropic.com/code)
+  - [Claude Code](https://claude.com/product/claude-code)
   - [Cline](https://cline.bot)
   - [Codex](https://github.com/openai/codex)
   - [Copilot CLI](https://docs.github.com/en/copilot)
