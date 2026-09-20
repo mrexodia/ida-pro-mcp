@@ -314,17 +314,37 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         `stop()` shuts idle keep-alive sockets down, but on Windows that does not interrupt a
         handler already blocked in `recv()`, so `stop()` would wait out the full `timeout`. Waiting
         in slices bounded by the server's running flag lets the handler notice the stop itself, and
-        keeps the same overall bound on a connection that goes quiet. Between requests the read
-        buffer is empty, so polling the socket cannot hide a pipelined request line.
+        keeps the same overall bound on a connection that goes quiet.
+
+        Polling the socket is not enough on its own: a pipelined client's next request can already
+        be sitting in the buffered reader, where `select()` cannot see it. Ask the buffer first,
+        with the socket non-blocking so that the check itself cannot block -- `peek()` fills from
+        the socket, so on a blocking socket it would wait here for exactly as long as we are
+        trying not to.
         """
         deadline = time.monotonic() + self.timeout
-        while self.mcp_server._running:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return False
-            if select.select([self.connection], [], [], min(remaining, _IDLE_POLL_SECONDS))[0]:
-                return True
+        self.connection.setblocking(False)
+        try:
+            while self.mcp_server._running:
+                if self._request_bytes_are_buffered():
+                    return True
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                if select.select([self.connection], [], [], min(remaining, _IDLE_POLL_SECONDS))[0]:
+                    return True
+        finally:
+            self.connection.setblocking(True)
         return False
+
+    def _request_bytes_are_buffered(self) -> bool:
+        """Report whether the read buffer already holds bytes, without touching the socket."""
+        try:
+            return bool(self.rfile.peek(1))
+        except (BlockingIOError, OSError, ValueError):
+            # Nothing buffered and nothing readable yet (or the connection is gone), so the
+            # socket check below decides. An idle socket then exits via `_running` or `deadline`.
+            return False
 
     def _check_api_request(self) -> bool:
         """Block browser traffic that violates the configured origin policy.
