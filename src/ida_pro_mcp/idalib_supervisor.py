@@ -62,6 +62,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
 # A worker cannot answer a ping while a tool occupies its IDA main thread, so
 # probing must separate "process gone" (reap) from "alive but busy" (wait).
 WORKER_TCP_HEALTH_TIMEOUT_SEC = _env_float("IDA_MCP_HEALTH_TCP_TIMEOUT", 2.0)
@@ -85,7 +92,7 @@ PARTIAL_DATABASE_EXTENSIONS = (".id0", ".id1", ".id2", ".nam", ".til")
 # no limit this silently wedges the worker process (and the blocking supervisor
 # RPC waiting on it) forever, with no progress feedback and no recovery.
 # Set IDA_MCP_OPEN_TIMEOUT=0 to wait indefinitely (previous behavior).
-WORKER_OPEN_TIMEOUT_SEC = float(os.environ.get("IDA_MCP_OPEN_TIMEOUT", "1800"))
+WORKER_OPEN_TIMEOUT_SEC = _env_float("IDA_MCP_OPEN_TIMEOUT", 1800.0)
 
 
 def _import_zeromcp():
@@ -1482,7 +1489,7 @@ def main() -> None:
     parser.add_argument(
         "--max-workers",
         type=int,
-        default=int(os.environ.get("IDA_MCP_MAX_WORKERS", "4")),
+        default=_env_int("IDA_MCP_MAX_WORKERS", 4),
         help="Maximum simultaneous idalib worker databases (0 = unlimited, default: 4).",
     )
     parser.add_argument("input_path", type=Path, nargs="?", help="Optional binary to open on startup.")
