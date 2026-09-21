@@ -296,7 +296,7 @@ class JsonRpcRegistry:
                     # To work around this, if the expected type is a Union
                     # that does not include str, and the provided value is
                     # a str, we try to parse it as JSON first.
-                    if type(str) not in args and isinstance(value, str):
+                    if str not in args and isinstance(value, str):
                         try:
                             value = json.loads(value)
                         except json.JSONDecodeError:
