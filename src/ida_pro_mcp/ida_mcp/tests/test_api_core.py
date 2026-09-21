@@ -409,6 +409,15 @@ def test_entity_query_functions_sort_by_size():
     assert sizes == sorted(sizes, reverse=True)
 
 
+@test(binary="typed_fixture.elf")
+def test_entity_query_count_zero_returns_all():
+    """count=0 returns every row, as the schema documents."""
+    page = entity_query({"kind": "functions", "count": 0})[0]
+    assert page["total"] > 100
+    assert len(page["data"]) == page["total"]
+    assert page["next_offset"] is None
+
+
 @test()
 def test_server_health():
     """server_health returns readiness payload"""
