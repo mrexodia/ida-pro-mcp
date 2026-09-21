@@ -476,7 +476,7 @@ def install_ida_plugin(
     *, uninstall: bool = False, quiet: bool = False, allow_ida_free: bool = False
 ):
     ida_folder = _get_ida_user_dir()
-    if not allow_ida_free:
+    if not allow_ida_free and not uninstall:
         free_licenses = glob.glob(os.path.join(ida_folder, "idafree_*.hexlic"))
         if free_licenses:
             print(
