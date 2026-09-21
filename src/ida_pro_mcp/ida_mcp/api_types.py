@@ -597,7 +597,7 @@ def type_query(
             kind = "any"
 
         offset = int(query.get("offset", 0) or 0)
-        count = int(query.get("count", 100) or 100)
+        count = int(query["count"]) if query.get("count") is not None else 100
         sort_by = str(query.get("sort_by", "name") or "name")
         descending = bool(query.get("descending", False))
         include_decl = bool(query.get("include_decl", True))

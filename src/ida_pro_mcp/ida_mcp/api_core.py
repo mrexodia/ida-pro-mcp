@@ -788,7 +788,7 @@ def entity_query(
             rows.sort(key=lambda row: str(row.get(sort_by, "")).lower(), reverse=descending)
 
         offset = int(query.get("offset", 0) or 0)
-        count = int(query.get("count", 100) or 100)
+        count = int(query["count"]) if query.get("count") is not None else 100
         page = paginate(rows, offset, count)
         data = [{k: v for k, v in item.items() if k != "size_int"} for item in page["data"]]
 
