@@ -66,6 +66,23 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     return default
 
 
+def _expects_json_container(expected_type: Any, origin: Any, args: tuple) -> bool:
+    """Whether a parameter wants a structured (object/array) value.
+
+    Used to decide if a `str` argument may be a JSON document that was sent
+    as a string instead of as the object/array the schema declares.  A union
+    that accepts `str` keeps the string as-is; everything else that wants a
+    dict or a list is a candidate for decoding.
+    """
+    if origin in (Union, UnionType):
+        return str not in args
+    if is_typeddict(expected_type):
+        return True
+    if origin is not None:
+        return origin in (list, dict)
+    return expected_type in (list, dict)
+
+
 logger = logging.getLogger(__name__)
 
 _LOG_REQUESTS = _parse_bool_env("IDA_MCP_LOG_REQUESTS", True)
@@ -282,25 +299,27 @@ class JsonRpcRegistry:
                     validated_params[param_name] = None
                     continue
 
+                # HACK: Try to parse str as JSON for parameters that want a
+                # dict/list, not a string.
+                #
+                # When JSON schema says one field is "object", Claude Code
+                # (and maybe other MCP clients) can't (or won't) detect
+                # that the field is actually a dict/list. Instead, they
+                # treat the field as a string containing JSON object.
+                #
+                # This applies to every structured parameter shape, not just
+                # unions: `batch: RenameBatch` (rename), `batch:
+                # TypeApplyBatch` (type_apply_batch) and `action_args: dict`
+                # (diff_before_after) are declared without a union member.
+                if isinstance(value, str) and _expects_json_container(expected_type, origin, args):
+                    try:
+                        value = json.loads(value)
+                    except json.JSONDecodeError:
+                        pass
+
                 # Handle Union types (int | str, Optional[int], etc.)
                 if origin in (Union, UnionType):
                     type_matched = False
-
-                    # HACK: Try to parse str as JSON for non-str unions
-                    # 
-                    # When JSON schema says one field is "object", Claude Code
-                    # (and maybe other MCP clients) can't (or won't) detect
-                    # that the field is actually a dict/list. Instead, they
-                    # treat the field as a string containing JSON object.
-                    #
-                    # To work around this, if the expected type is a Union
-                    # that does not include str, and the provided value is
-                    # a str, we try to parse it as JSON first.
-                    if str not in args and isinstance(value, str):
-                        try:
-                            value = json.loads(value)
-                        except json.JSONDecodeError:
-                            pass
 
                     for arg_type in args:
                         if arg_type is type(None):
