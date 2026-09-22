@@ -121,6 +121,12 @@ def test_internal_immediate_encoding_helpers():
     assert any(item[0] == 1234 and item[1] == 4 for item in candidates)
     assert any(item[0] == 1234 and item[1] == 8 for item in candidates)
 
+    candidates = _value_candidates_for_immediate(0x8007000E)
+    assert (0x8007000E, 4, b"\x0e\x00\x07\x80") in candidates
+    candidates = _value_candidates_for_immediate(0xFFFFFFFFFFFFFF50)
+    assert (0xFFFFFF50, 4, b"\x50\xff\xff\xff") in candidates
+    assert _value_candidates_for_immediate((1 << 64) + 5) == []
+
 
 @test()
 def test_internal_decompile_pagination_respects_character_budget():
