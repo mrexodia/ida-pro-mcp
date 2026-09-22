@@ -588,6 +588,16 @@ def test_insn_query_requires_scope_by_default():
     assert result[0].get("error") is not None
 
 
+@test(binary="crackme03.elf")
+def test_insn_query_sign_extended_dword_operand():
+    """insn_query matches a dword immediate by its 32-bit or signed value."""
+    for op1 in ("0xffffffff", "-1", "0xffffffffffffffff"):
+        result = insn_query({"func": CRACKME_MAIN, "mnem": "mov", "op1": op1})
+        assert_is_list(result, min_length=1)
+        addrs = [m["addr"] for m in result[0]["matches"]]
+        assert "0x1275" in addrs, (op1, addrs)
+
+
 # ============================================================================
 # Tests for xrefs_to_field
 # ============================================================================
@@ -729,6 +739,29 @@ def test_find_immediate_out_of_range():
     result = find("immediate", str(1 << 80))
     assert_is_list(result, min_length=1)
     assert_error(result[0], contains="Immediate out of range")
+
+
+@test(binary="crackme03.elf")
+def test_find_immediate_sign_extended_dword():
+    """find(immediate, ...) matches `mov eax, 0FFFFFFFFh` however the value is spelled."""
+    for target in ("0xffffffff", "-1", "0xffffffffffffffff"):
+        result = find("immediate", target)
+        assert_is_list(result, min_length=1)
+        assert result[0]["error"] is None, target
+        assert result[0]["matches"] == ["0x1275"], (target, result[0]["matches"])
+
+
+@test(binary="typed_fixture.elf")
+def test_find_immediate_reports_instruction_start():
+    """find(immediate, ...) reports where the instruction starts, not a byte inside it."""
+    import ida_bytes
+
+    for target in ("0x100", "-0xb0"):
+        matches = find("immediate", target)[0]["matches"]
+        assert_non_empty(matches)
+        for addr in matches:
+            ea = int(addr, 16)
+            assert ida_bytes.get_item_head(ea) == ea, (target, addr)
 
 
 @test()
