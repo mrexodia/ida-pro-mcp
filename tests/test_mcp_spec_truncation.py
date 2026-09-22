@@ -5,11 +5,14 @@ outputSchema, and truncation metadata must live under `_meta`, not
 merged into structuredContent.
 """
 
+import importlib
 import json
+import os
 import sys
 import pathlib
 import unittest
 from typing import TypedDict
+from unittest import mock
 
 from jsonschema import Draft202012Validator
 
@@ -235,6 +238,60 @@ class TruncationOverDeeplyNestedDataTests(unittest.TestCase):
         tool = next(t for t in tools if t["name"] == "deep")
         result = call_rpc(srv, "tools/call", name="deep", arguments={})
         Draft202012Validator(tool["outputSchema"]).validate(result["structuredContent"])
+
+
+class DownloadBaseUrlFromEnvTests(unittest.TestCase):
+    """`IDA_MCP_URL` is the operator's public base URL for downloads (#383)."""
+
+    @staticmethod
+    def _reload_rpc_with_url(value: str | None):
+        """Re-evaluate rpc.py with IDA_MCP_URL set to `value` (None: unset)."""
+        rpc = load_ida_rpc_module()
+        with mock.patch.dict(os.environ, clear=True):
+            if value is not None:
+                os.environ["IDA_MCP_URL"] = value
+            importlib.reload(rpc)
+        return rpc
+
+    def tearDown(self):
+        importlib.reload(load_ida_rpc_module())
+
+    def test_blank_url_falls_back_to_the_default_base(self):
+        for value in ["", "   ", None]:
+            with self.subTest(IDA_MCP_URL=value):
+                rpc = self._reload_rpc_with_url(value)
+                self.assertEqual(
+                    rpc.get_download_base_url(),
+                    "http://127.0.0.1:13337",
+                )
+
+    def test_configured_url_is_used_verbatim_once_stripped(self):
+        rpc = self._reload_rpc_with_url("  https://mcp.example.com/ida ")
+        self.assertEqual(
+            rpc.get_download_base_url(),
+            "https://mcp.example.com/ida",
+        )
+
+    def test_truncated_output_still_advertises_an_absolute_download_url(self):
+        self._reload_rpc_with_url("")
+        srv = _fresh_truncated_server()
+
+        @srv.tool
+        def big_list() -> _ListResult:
+            """Returns a huge list; forces truncation."""
+            return {
+                "items": [{"name": f"n{i}", "value": i} for i in range(5000)],
+                "count": 5000,
+            }
+
+        result = call_rpc(srv, "tools/call", name="big_list", arguments={})
+        meta = result["_meta"]["ida_mcp"]
+        self.assertTrue(meta["output_truncated"])
+        self.assertTrue(
+            meta["download_url"].startswith("http://127.0.0.1:13337/output/"),
+            meta["download_url"],
+        )
+        self.assertIn(meta["download_url"], meta["download_hint"])
 
 
 if __name__ == "__main__":

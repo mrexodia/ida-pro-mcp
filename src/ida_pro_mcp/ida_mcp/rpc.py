@@ -20,7 +20,21 @@ MCP_SERVER = McpServer("ida-pro-mcp", extensions=MCP_EXTENSIONS)
 OUTPUT_LIMIT_MAX_CHARS = 50000
 OUTPUT_CACHE_MAX_SIZE = 100
 _output_cache: dict[str, Any] = {}
-_download_base_url: str = os.environ.get("IDA_MCP_URL", "http://127.0.0.1:13337")
+_DOWNLOAD_BASE_URL_DEFAULT = "http://127.0.0.1:13337"
+
+
+def configured_download_base_url() -> Optional[str]:
+    """The public base URL the operator configured (#383), None if unset.
+
+    The other IDA_MCP_* knobs (idalib_supervisor._env_float/_env_int,
+    zeromcp._parse_bool_env) already treat a blank value as unset; so does the
+    download base url here, otherwise a blank IDA_MCP_URL degrades the
+    truncated-output hint to a bare "/output/<id>.json" path.
+    """
+    return os.environ.get("IDA_MCP_URL", "").strip() or None
+
+
+_download_base_url: str = configured_download_base_url() or _DOWNLOAD_BASE_URL_DEFAULT
 
 
 def set_download_base_url(url: str) -> None:
