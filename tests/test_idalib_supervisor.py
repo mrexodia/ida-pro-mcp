@@ -1506,3 +1506,45 @@ def test_open_session_still_raises_when_no_concurrent_winner(tmp_path):
     sup = _FailingOpen()
     with pytest.raises(RuntimeError, match="Failed to open database"):
         sup.open_session(str(binary.resolve()))
+
+
+def _module_set_literal(path, name):
+    """Read a module-level set literal without importing the module."""
+    import ast
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == name for t in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"{name} not found in {path}")
+
+
+def test_worker_profile_keeps_tools_the_supervisor_calls_internally():
+    """A worker profile must never prune a tool the supervisor calls itself.
+
+    `close_session(save=True)` forwards `idb_save` to the worker, so pruning it
+    makes every `idb_close` report success while discarding the session's
+    edits.  The worker's own `--profile` help states that idb_* management
+    tools are always kept.
+    """
+    import ast
+
+    src = Path(__file__).resolve().parents[1] / "src" / "ida_pro_mcp"
+    supervisor_tree = ast.parse(
+        (src / "idalib_supervisor.py").read_text(encoding="utf-8")
+    )
+    forwarded = {
+        node.args[1].value
+        for node in ast.walk(supervisor_tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "attr", "") == "call_worker_tool"
+        and len(node.args) > 1
+        and isinstance(node.args[1], ast.Constant)
+    }
+    assert forwarded, "supervisor should forward tools to workers"
+    protected = _module_set_literal(src / "idalib_server.py", "IDB_MANAGEMENT_TOOLS")
+    assert not forwarded - protected, (
+        f"prunable by --profile: {sorted(forwarded - protected)}"
+    )
