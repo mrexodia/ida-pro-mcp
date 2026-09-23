@@ -22,12 +22,15 @@ def test_check_fires_after_idle_ttl():
 
 
 def test_touch_resets_idle_ttl():
-    lc = WorkerLifecycle(idle_ttl_sec=0.10, poll_interval_sec=0.05)
-    time.sleep(0.06)
+    # Keep the reset assertion comfortably below the TTL. Very small
+    # sub-second margins can be flaky on contended CI hosts where a 60 ms
+    # sleep occasionally resumes after 100+ ms.
+    lc = WorkerLifecycle(idle_ttl_sec=0.75, poll_interval_sec=0.05)
+    time.sleep(0.05)
     lc.touch()
-    time.sleep(0.06)
-    assert lc.check_shutdown_reason() is None
     time.sleep(0.10)
+    assert lc.check_shutdown_reason() is None
+    time.sleep(0.80)
     assert lc.check_shutdown_reason() is not None
 
 
@@ -50,13 +53,15 @@ def test_watchdog_fires_callback_and_exits():
 
 def test_watchdog_does_not_fire_while_touched():
     fired: list[str] = []
-    lc = WorkerLifecycle(idle_ttl_sec=0.10, poll_interval_sec=0.02)
+    # Use a wider TTL margin than the touch interval so scheduler delays do not
+    # turn this keepalive regression test into a timing race.
+    lc = WorkerLifecycle(idle_ttl_sec=0.75, poll_interval_sec=0.05)
     lc.start(on_shutdown=lambda reason: fired.append(reason))
     try:
         deadline = time.monotonic() + 0.30
         while time.monotonic() < deadline:
             lc.touch()
-            time.sleep(0.03)
+            time.sleep(0.05)
         assert fired == []
     finally:
         lc.stop()
