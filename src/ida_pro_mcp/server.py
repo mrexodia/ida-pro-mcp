@@ -126,14 +126,22 @@ def _proxy_output_download(path: str) -> tuple[int, str, list[tuple[str, str]], 
 
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
     """Dispatch JSON-RPC requests by proxying everything (except initialize/notifications) to IDA."""
-    if not isinstance(request, dict):
-        request_obj: JsonRpcRequest = json.loads(request)
-    else:
-        request_obj: JsonRpcRequest = request  # type: ignore
-
-    if request_obj["method"] == "initialize":
+    try:
+        request_obj: JsonRpcRequest = (
+            request if isinstance(request, dict) else json.loads(request)
+        )
+        method = request_obj["method"]
+    except (ValueError, KeyError, TypeError):
+        # Not a well-formed request object. Hand it to the base registry, which
+        # answers with a JSON-RPC -32600/-32700 error instead of crashing here.
         return dispatch_original(request)
-    if request_obj["method"].startswith("notifications/"):
+
+    if not isinstance(method, str):
+        return dispatch_original(request)
+
+    if method == "initialize":
+        return dispatch_original(request)
+    if method.startswith("notifications/"):
         return dispatch_original(request)
 
     try:
