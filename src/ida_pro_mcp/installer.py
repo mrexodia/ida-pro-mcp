@@ -103,6 +103,14 @@ def copy_python_env(env: dict[str, str]):
     return result
 
 
+def _transport_authority(host: str, port: int) -> str:
+    # urlparse() strips the brackets from an IPv6 literal, and an unbracketed
+    # IPv6 address is not a valid URL authority: "http://::1:13337/mcp".
+    if ":" in host:
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
+
+
 def normalize_transport_url(transport: str) -> str:
     url = urlparse(transport)
     if url.hostname is None or url.port is None:
@@ -110,12 +118,16 @@ def normalize_transport_url(transport: str) -> str:
     path = url.path or "/mcp"
     if path == "/":
         path = "/mcp"
-    return urlunparse((url.scheme, f"{url.hostname}:{url.port}", path, "", "", ""))
+    return urlunparse(
+        (url.scheme, _transport_authority(url.hostname, url.port), path, "", "", "")
+    )
 
 
 def force_mcp_path(transport_url: str) -> str:
     url = urlparse(transport_url)
-    return urlunparse((url.scheme, f"{url.hostname}:{url.port}", "/mcp", "", "", ""))
+    return urlunparse(
+        (url.scheme, _transport_authority(url.hostname, url.port), "/mcp", "", "", "")
+    )
 
 
 def infer_http_transport_type(transport_url: str) -> str:
@@ -147,9 +159,9 @@ def generate_mcp_config(*, client_name: str, transport: str = "stdio"):
         return mcp_config
 
     if transport == "streamable-http":
-        transport = f"http://{IDA_HOST}:{IDA_PORT}/mcp"
+        transport = f"http://{_transport_authority(IDA_HOST, IDA_PORT)}/mcp"
     elif transport == "sse":
-        transport = f"http://{IDA_HOST}:{IDA_PORT}/sse"
+        transport = f"http://{_transport_authority(IDA_HOST, IDA_PORT)}/sse"
 
     transport_url = normalize_transport_url(transport)
     if client_name == "Opencode":
@@ -184,7 +196,9 @@ def print_mcp_config():
                 "mcpServers": {
                     MCP_SERVER_NAME: generate_mcp_config(
                         client_name="Generic",
-                        transport=f"http://{IDA_HOST}:{IDA_PORT}/mcp",
+                        transport=(
+                            f"http://{_transport_authority(IDA_HOST, IDA_PORT)}/mcp"
+                        ),
                     )
                 }
             },
@@ -198,7 +212,9 @@ def print_mcp_config():
                 "mcpServers": {
                     MCP_SERVER_NAME: generate_mcp_config(
                         client_name="Generic",
-                        transport=f"http://{IDA_HOST}:{IDA_PORT}/sse",
+                        transport=(
+                            f"http://{_transport_authority(IDA_HOST, IDA_PORT)}/sse"
+                        ),
                     )
                 }
             },
@@ -476,7 +492,7 @@ def install_ida_plugin(
     *, uninstall: bool = False, quiet: bool = False, allow_ida_free: bool = False
 ):
     ida_folder = _get_ida_user_dir()
-    if not allow_ida_free:
+    if not allow_ida_free and not uninstall:
         free_licenses = glob.glob(os.path.join(ida_folder, "idafree_*.hexlic"))
         if free_licenses:
             print(

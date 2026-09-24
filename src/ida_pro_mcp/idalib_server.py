@@ -19,7 +19,11 @@ from ida_pro_mcp.ida_mcp.discovery import register_instance, unregister_instance
 from ida_pro_mcp.ida_mcp.http import IdaMcpHttpRequestHandler
 from ida_pro_mcp.ida_mcp.mainthread import get_pump
 from ida_pro_mcp.ida_mcp.profile import apply_profile, load_profile
-from ida_pro_mcp.ida_mcp.rpc import set_download_base_url, tool
+from ida_pro_mcp.ida_mcp.rpc import (
+    configured_download_base_url,
+    set_download_base_url,
+    tool,
+)
 from ida_pro_mcp.idalib_session_manager import get_session_manager
 from ida_pro_mcp.worker_lifecycle import WorkerLifecycle
 
@@ -313,7 +317,8 @@ def main():
     trace.install_tracer()
     logger.info("Tracing tools/call to IDB netnode %s", trace.IDB_NETNODE_NAME)
 
-    if not "IDA_MCP_URL" in os.environ:
+    # Only a non-blank IDA_MCP_URL counts as "the operator set it" (#383).
+    if configured_download_base_url() is None:
         set_download_base_url(f"http://{args.host}:{args.port}")
 
     try:

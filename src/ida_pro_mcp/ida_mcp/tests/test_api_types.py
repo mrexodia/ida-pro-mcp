@@ -303,6 +303,15 @@ def test_type_query():
         assert "kind" in page["data"][0]
 
 
+@test(binary="typed_fixture.elf")
+def test_type_query_count_zero_returns_all():
+    """count=0 returns every type, as the schema documents."""
+    page = type_query({"count": 0, "include_decl": False})[0]
+    assert page["total"] > 100
+    assert len(page["data"]) == page["total"]
+    assert page["next_offset"] is None
+
+
 @test()
 def test_type_inspect():
     """type_inspect returns metadata for declared struct"""

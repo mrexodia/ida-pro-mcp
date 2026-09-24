@@ -375,6 +375,25 @@ def _operand_value(insn: ida_ua.insn_t, i: int) -> int | None:
     return op.value
 
 
+def _operand_matches(insn: ida_ua.insn_t, i: int, value: int) -> bool:
+    op_val = _operand_value(insn, i)
+    if op_val is None:
+        return False
+    if op_val == value:
+        return True
+    op = insn.ops[i]
+    if op.type != ida_ua.o_imm:
+        return False
+    # IDA sign-extends immediates to 64 bits (`mov eax, 80000000h` has value
+    # 0xFFFFFFFF80000000), so compare at the operand's own width and accept
+    # either the signed or the unsigned spelling of the value.
+    bits = ida_ua.get_dtype_size(op.dtype) * 8
+    if not 8 <= bits <= 64 or not -(1 << (bits - 1)) <= value < (1 << bits):
+        return False
+    mask = (1 << bits) - 1
+    return (op_val & mask) == (value & mask)
+
+
 def _operand_type(insn: ida_ua.insn_t, i: int) -> int:
     return insn.ops[i].type
 
@@ -414,7 +433,7 @@ def _value_candidates_for_immediate(value: int) -> list[tuple[int, int, bytes]]:
     def add(size: int, signed_val: int):
         if size == 4:
             masked = signed_val & 0xFFFFFFFF
-            if not (-0x80000000 <= signed_val <= 0x7FFFFFFF):
+            if not (-0x80000000 <= signed_val <= 0xFFFFFFFF):
                 return
             b = struct.pack("<I", masked)
         else:
@@ -424,6 +443,10 @@ def _value_candidates_for_immediate(value: int) -> list[tuple[int, int, bytes]]:
             b = struct.pack("<Q", masked)
         candidates.append((masked, size, b))
 
+    # IDA reports -0xB0 as 0xFFFFFFFFFFFFFF50. Fold that back to the negative
+    # value so the 4-byte encoding is searched as well.
+    if 1 << 63 <= value < 1 << 64:
+        value -= 1 << 64
     add(4, value)
     add(8, value)
     return candidates
@@ -433,10 +456,17 @@ def _resolve_immediate_insn_start(
     match_ea: int,
     value: int,
     seg_start: int,
-    alt_value: int | None = None,
 ) -> int | None:
-    start_min = max(seg_start, match_ea - _IMM_SCAN_BACK_MAX)
-    for start in range(match_ea, start_min - 1, -1):
+    head = ida_bytes.get_item_head(match_ea)
+    if ida_bytes.is_code(ida_bytes.get_flags(head)):
+        # Use IDA's instruction. Scanning back byte by byte can stop inside a
+        # longer one: 41 B9 10 00 00 00 (mov r9d, 10h) also decodes as
+        # mov ecx, 10h one byte in.
+        starts = [head]
+    else:
+        start_min = max(seg_start, match_ea - _IMM_SCAN_BACK_MAX)
+        starts = range(match_ea, start_min - 1, -1)
+    for start in starts:
         insn = _decode_insn_at(start)
         if insn is None:
             continue
@@ -449,10 +479,7 @@ def _resolve_immediate_insn_start(
                 break
             if op_type != ida_ua.o_imm:
                 continue
-            op_val = _operand_value(insn, i)
-            if op_val is None:
-                continue
-            if op_val == value or (alt_value is not None and op_val == alt_value):
+            if _operand_matches(insn, i, value):
                 offb = getattr(insn.ops[i], "offb", 0)
                 if offb and start + offb != match_ea:
                     continue
@@ -1972,7 +1999,7 @@ def find(
                     seg = idaapi.getseg(seg_ea)
                     if not seg or not (seg.perm & idaapi.SEGPERM_EXEC):
                         continue
-                    for normalized, size, pattern_bytes in candidates:
+                    for _, size, pattern_bytes in candidates:
                         ea = seg.start_ea
                         while ea != idaapi.BADADDR and ea < seg.end_ea:
                             ea = _raw_bin_search(
@@ -1982,7 +2009,7 @@ def find(
                                 break
 
                             insn_start = _resolve_immediate_insn_start(
-                                ea, value, seg.start_ea, normalized
+                                ea, value, seg.start_ea
                             )
                             if insn_start is not None and insn_start not in seen_insn:
                                 seen_insn.add(insn_start)
@@ -2215,11 +2242,11 @@ def _scan_insn_ranges(
                 continue
 
             match = True
-            if op0_val is not None and _operand_value(insn, 0) != op0_val:
+            if op0_val is not None and not _operand_matches(insn, 0, op0_val):
                 match = False
-            if op1_val is not None and _operand_value(insn, 1) != op1_val:
+            if op1_val is not None and not _operand_matches(insn, 1, op1_val):
                 match = False
-            if op2_val is not None and _operand_value(insn, 2) != op2_val:
+            if op2_val is not None and not _operand_matches(insn, 2, op2_val):
                 match = False
 
             if any_val is not None and match:
@@ -2227,7 +2254,7 @@ def _scan_insn_ranges(
                 for i in range(8):
                     if _operand_type(insn, i) == ida_ua.o_void:
                         break
-                    if _operand_value(insn, i) == any_val:
+                    if _operand_matches(insn, i, any_val):
                         found_any = True
                         break
                 if not found_any:
