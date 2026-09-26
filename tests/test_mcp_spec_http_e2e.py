@@ -424,5 +424,40 @@ class Http11TransportTests(unittest.TestCase):
             connection.close()
             server.stop()
 
+    def test_pipelined_request_on_a_keepalive_connection_is_answered(self):
+        # Sending both requests in one write leaves the second request line inside the handler's
+        # buffered reader, invisible to the socket check that keeps `stop()` prompt. If only the
+        # socket is polled, that answer sits unread until the request timeout expires.
+        server = _make_server()
+        server.serve("127.0.0.1", 0, background=True, threaded=False)
+        port = server._http_server.server_address[1]
+        body = json.dumps({"jsonrpc": "2.0", "method": "ping", "id": 1}).encode()
+        request = (
+            b"POST /mcp HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+            b"\r\n" + body
+        )
+        connection = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            connection.sendall(request * 2)
+            data = b""
+            deadline = time.monotonic() + 5
+            while data.count(b"HTTP/1.1 200 OK") < 2 and time.monotonic() < deadline:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            self.assertEqual(
+                data.count(b"HTTP/1.1 200 OK"),
+                2,
+                f"only {data.count(b'HTTP/1.1 200 OK')} of 2 pipelined requests were answered",
+            )
+        finally:
+            connection.close()
+            server.stop()
+
+
 if __name__ == "__main__":
     unittest.main()
