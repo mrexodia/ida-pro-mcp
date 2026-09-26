@@ -1,5 +1,10 @@
 # IDA Pro MCP
 
+> [!IMPORTANT]
+> **I recommend using the [Official Hex-Rays IDA MCP Server](https://github.com/HexRaysSA/ida-mcp) instead!**
+> 
+> See the [announcement blog post](https://hex-rays.com/blog/hex-rays-ida-mcp-server) for more information.
+
 Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
 
 https://github.com/user-attachments/assets/6ebeaa92-a9db-43fa-b756-eececce2aca0
