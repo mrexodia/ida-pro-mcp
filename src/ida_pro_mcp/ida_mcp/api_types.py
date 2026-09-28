@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Annotated, Any, TypedDict
 
 import idc
@@ -35,6 +36,13 @@ from .compat import tinfo_get_udm
 
 class DeclareTypeResult(TypedDict, total=False):
     decl: str
+    error: str
+
+
+class ImportTypeHeaderResult(TypedDict, total=False):
+    path: str
+    errors: int
+    messages: list[str]
     error: str
 
 
@@ -178,6 +186,51 @@ def declare_type(
                 results.append({"decl": decl})
         except Exception as e:
             results.append({"decl": decl, "error": str(e)})
+
+    return results
+
+
+@tool
+@idasync
+def import_type_header(
+    paths: Annotated[
+        list[str] | str,
+        "Header file path or paths accessible to the IDA/idalib process",
+    ],
+) -> list[ImportTypeHeaderResult]:
+    """Parse C header file(s) into the current database's local type library.
+
+    Paths are resolved on the machine running IDA or the idalib worker. The
+    parser uses the current database's compiler, include paths, and predefined
+    macros, matching IDA's native C-header import behavior.
+    """
+    results: list[ImportTypeHeaderResult] = []
+
+    for raw_path in normalize_list_input(paths):
+        path = Path(raw_path).expanduser().resolve()
+        result: ImportTypeHeaderResult = {"path": str(path)}
+
+        if not path.is_file():
+            result["error"] = f"Header file not found: {path}"
+            results.append(result)
+            continue
+
+        try:
+            errors, messages = parse_decls_ctypes(
+                str(path), ida_typeinf.HTI_FIL
+            )
+            result["errors"] = errors
+            result["messages"] = messages
+            if errors > 0:
+                details = "\n".join(messages).strip()
+                result["error"] = (
+                    f"Failed to parse header ({errors} error(s))"
+                    + (f":\n{details}" if details else "")
+                )
+        except Exception as e:
+            result["error"] = str(e)
+
+        results.append(result)
 
     return results
 
