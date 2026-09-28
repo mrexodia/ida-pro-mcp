@@ -1,5 +1,8 @@
 """Tests for api_types API functions."""
 
+import tempfile
+from pathlib import Path
+
 from ..framework import (
     test,
     skip_test,
@@ -15,6 +18,7 @@ from ..framework import (
 )
 from ..api_types import (
     declare_type,
+    import_type_header,
     enum_upsert,
     read_struct,
     search_structs,
@@ -89,6 +93,34 @@ def test_declare_type_invalid_declaration():
     result = declare_type("struct broken { int x }")
     assert_is_list(result, min_length=1)
     assert_error(result[0], contains="Failed to parse")
+
+
+@test()
+def test_import_type_header_creates_searchable_type():
+    """import_type_header parses a file into the active IDB's local types."""
+    type_name = "__ImportedHeaderType__"
+    with tempfile.TemporaryDirectory() as temp_dir:
+        header = Path(temp_dir) / "ida_mcp_test_types.h"
+        header.write_text(
+            f"typedef struct {type_name} {{ int value; }} {type_name};\n",
+            encoding="utf-8",
+        )
+        result = import_type_header(str(header))
+
+    assert_is_list(result, min_length=1)
+    assert "error" not in result[0], result[0].get("error")
+    assert result[0]["errors"] == 0
+    matches = search_structs(type_name)
+    assert any(item["name"] == type_name for item in matches)
+
+
+@test()
+def test_import_type_header_missing_file():
+    """import_type_header reports a missing path without invoking the parser."""
+    missing = Path(tempfile.gettempdir()) / "ida_mcp_missing_types_7f31c9.h"
+    result = import_type_header(str(missing))
+    assert_is_list(result, min_length=1)
+    assert_error(result[0], contains="Header file not found")
 
 
 @test()
