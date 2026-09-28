@@ -111,6 +111,17 @@ class FunctionRename(TypedDict):
     name: Annotated[str, "New function name"]
 
 
+class FunctionFolderOp(TypedDict):
+    """Function folder organization operation"""
+
+    addr: Annotated[str, "Function address or name"]
+    folder: Annotated[str, "Destination function folder path, e.g. /crypto/"]
+    create_missing: NotRequired[
+        Annotated[bool, "Create the folder path if missing"]
+    ]
+    dry_run: NotRequired[Annotated[bool, "Validate only, no changes"]]
+
+
 class GlobalRename(TypedDict):
     """Global variable rename operation"""
 

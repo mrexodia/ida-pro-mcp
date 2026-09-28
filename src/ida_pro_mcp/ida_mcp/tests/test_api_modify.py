@@ -14,6 +14,7 @@ from ..api_modify import (
     set_comments,
     patch_asm,
     rename,
+    organize_functions,
     define_func,
     define_code,
     undefine,
@@ -459,6 +460,68 @@ def test_rename_function_same_name_is_stable():
     result = rename({"func": [{"addr": "0x1013ef0", "name": "main"}]})
     entry = result["func"][0]
     assert "error" not in entry
+
+
+@test()
+def test_organize_functions_moves_function_to_created_folder():
+    """organize_functions creates a folder and moves a function into it."""
+    import ida_dirtree
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    folder = "/__ida_mcp_test_folder__/"
+    tree = ida_dirtree.get_std_dirtree(ida_dirtree.DIRTREE_FUNCS)
+    if tree is None or not tree.load():
+        skip_test("function dirtree not available")
+
+    try:
+        result = organize_functions({"addr": fn_addr, "folder": folder})
+        assert result["summary"]["total"] == 1
+        assert result["summary"]["ok"] == 1
+        assert result["summary"]["failed"] == 0
+        entry = result["results"][0]
+        assert "error" not in entry
+        assert entry["addr"] == fn_addr
+        assert entry["folder"] == folder
+        assert tree.isdir(folder)
+    finally:
+        organize_functions({"addr": fn_addr, "folder": "/"})
+        tree.load()
+        tree.rmdir(folder)
+        tree.save()
+
+
+@test()
+def test_organize_functions_dry_run_does_not_create_folder():
+    """organize_functions dry_run validates without mutating the function dirtree."""
+    import ida_dirtree
+
+    fn_addr = get_any_function()
+    if not fn_addr:
+        skip_test("binary has no functions")
+
+    folder = "/__ida_mcp_dry_run_folder__/"
+    result = organize_functions({"addr": fn_addr, "folder": folder, "dry_run": True})
+    assert result["summary"]["dry_run"] is True
+    assert result["summary"]["ok"] == 1
+    entry = result["results"][0]
+    assert entry["dry_run"] is True
+    assert entry["folder"] == folder
+
+    tree = ida_dirtree.get_std_dirtree(ida_dirtree.DIRTREE_FUNCS)
+    if tree is not None and tree.load():
+        assert not tree.isdir(folder)
+
+
+@test()
+def test_organize_functions_missing_function_errors():
+    """organize_functions reports missing functions without stopping the batch."""
+    result = organize_functions({"addr": "0xdeadbeef", "folder": "/__missing__/"})
+    assert result["summary"]["total"] == 1
+    assert result["summary"]["failed"] == 1
+    assert_error(result["results"][0], contains="Function not found")
 
 
 @test(binary="typed_fixture.elf")
