@@ -92,7 +92,19 @@ def declare_stack(
                 )
                 continue
 
+            if not var_name or not isinstance(var_name, str):
+                results.append(
+                    {"addr": fn_addr, "name": var_name, "error": "Invalid name"}
+                )
+                continue
+
             tif = get_type_by_name(type_name)
+            if not tif:
+                results.append(
+                    {"addr": fn_addr, "name": var_name, "error": "Invalid type name"}
+                )
+                continue
+
             if not ida_frame.define_stkvar(func, var_name, ea, tif):
                 results.append(
                     {"addr": fn_addr, "name": var_name, "error": "Failed to define"}
@@ -157,9 +169,18 @@ def delete_stack(
                 continue
 
             udm = ida_typeinf.udm_t()
-            frame_tif.get_udm_by_tid(udm, tid)
+            if not frame_tif.get_udm_by_tid(udm, tid):
+                results.append(
+                    {"addr": fn_addr, "name": var_name, "error": "Failed to get udm"}
+                )
+                continue
             offset = udm.offset // 8
             size = udm.size // 8
+            if size <= 0:
+                results.append(
+                    {"addr": fn_addr, "name": var_name, "error": "Invalid size"}
+                )
+                continue
             if ida_frame.is_funcarg_off(func, offset):
                 results.append(
                     {
