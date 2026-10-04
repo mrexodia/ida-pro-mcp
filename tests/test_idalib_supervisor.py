@@ -200,6 +200,32 @@ def test_cleanup_partial_database_removes_only_new_parts(tmp_path):
     assert packed.read_bytes() == b"packed database"
 
 
+def test_cleanup_partial_database_retries_transient_unlink_failure(
+    tmp_path, monkeypatch
+):
+    binary = tmp_path / "sample.bin"
+    part = tmp_path / "sample.bin.id0"
+    binary.write_bytes(b"binary")
+    part.write_bytes(b"working database")
+    real_unlink = Path.unlink
+    calls = 0
+
+    def flaky_unlink(path, *args, **kwargs):
+        nonlocal calls
+        if path == part and calls == 0:
+            calls += 1
+            raise PermissionError("file is temporarily in use")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    monkeypatch.setattr(supmod, "PARTIAL_DATABASE_CLEANUP_RETRY_SEC", 0)
+
+    supmod.IdalibSupervisor._cleanup_partial_database(str(binary))
+
+    assert calls == 1
+    assert not part.exists()
+
+
 @pytest.mark.parametrize("database_extension", [".i64", ".idb"])
 def test_partial_database_paths_strip_packed_database_extension(
     tmp_path, database_extension
@@ -1048,6 +1074,19 @@ def test_close_session_without_save_skips_idb_save(tmp_path):
     assert session.process.returncode == 0
 
 
+def test_close_session_without_save_discards_working_files(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    working_part = tmp_path / "sample.bin.id0"
+    working_part.write_bytes(b"unsaved database")
+    sup = _FakeSupervisor()
+    sup.open_session(str(sample), session_id="sample")
+
+    sup.close_session("sample", save=False)
+
+    assert not working_part.exists()
+
+
 def test_close_session_unknown_session_raises():
     sup = _FakeSupervisor()
     try:
@@ -1110,6 +1149,26 @@ def test_close_session_reports_save_failure_but_still_closes(tmp_path):
     assert result["save_error"] == "disk full"
     assert "sample" not in sup.sessions
     assert session.process.returncode == 0
+
+
+def test_close_session_preserves_working_files_when_save_fails(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    working_part = tmp_path / "sample.bin.id0"
+    working_part.write_bytes(b"recoverable database")
+
+    class _SaveFailsSupervisor(_FakeSupervisor):
+        def call_worker_tool(self, worker, name, arguments=None, *, timeout=None):
+            if name == "idb_save":
+                return {"ok": False, "path": None, "error": "disk full"}
+            return super().call_worker_tool(worker, name, arguments, timeout=timeout)
+
+    sup = _SaveFailsSupervisor()
+    sup.open_session(str(sample), session_id="sample")
+
+    sup.close_session("sample", save=True)
+
+    assert working_part.read_bytes() == b"recoverable database"
 
 
 def test_close_session_frees_worker_slot(tmp_path):

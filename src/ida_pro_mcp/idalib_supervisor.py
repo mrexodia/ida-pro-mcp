@@ -85,6 +85,8 @@ WORKER_WEDGED_GRACE_SEC = _env_float("IDA_MCP_WEDGED_GRACE_SEC", 1800.0)
 WORKER_CALL_TIMEOUT_SEC = _env_float("IDA_MCP_WORKER_CALL_TIMEOUT", 900.0)
 
 PARTIAL_DATABASE_EXTENSIONS = (".id0", ".id1", ".id2", ".nam", ".til")
+PARTIAL_DATABASE_CLEANUP_ATTEMPTS = 20
+PARTIAL_DATABASE_CLEANUP_RETRY_SEC = 0.05
 
 # Upper bound (seconds) on how long a worker may take to open and auto-analyze a
 # binary before it is reaped and an error is returned. A malformed or hostile
@@ -366,14 +368,31 @@ class IdalibSupervisor:
         unpacked parts that predated this open attempt are kept.
         """
         preserved = preserve or set()
-        for part in cls._partial_database_paths(input_path):
-            if part in preserved:
-                continue
-            try:
-                if part.exists():
-                    part.unlink()
-            except OSError:
-                pass
+        pending = {
+            part
+            for part in cls._partial_database_paths(input_path)
+            if part not in preserved
+        }
+        last_errors: dict[Path, OSError] = {}
+        for attempt in range(PARTIAL_DATABASE_CLEANUP_ATTEMPTS):
+            for part in tuple(pending):
+                try:
+                    part.unlink(missing_ok=True)
+                    pending.remove(part)
+                    last_errors.pop(part, None)
+                except OSError as e:
+                    last_errors[part] = e
+            if not pending:
+                return
+            if attempt + 1 < PARTIAL_DATABASE_CLEANUP_ATTEMPTS:
+                time.sleep(PARTIAL_DATABASE_CLEANUP_RETRY_SEC)
+
+        for part in sorted(pending):
+            logger.warning(
+                "Failed to remove IDA database working file %s: %s",
+                part,
+                last_errors[part],
+            )
 
     def shutdown(self) -> None:
         """Forget local session state without killing persistent workers.
@@ -1132,10 +1151,12 @@ class IdalibSupervisor:
             if self.sessions.get(database) is session:
                 self._unregister_session_locked(database)
         self._terminate_worker(session)
-        if saved and session.owned:
+        if session.owned and (saved or not save):
             # The worker is SIGTERM'd without a clean close_database(), so the
-            # working files it unpacked stay behind; the save above already
-            # rewrote the packed database.
+            # working files it unpacked stay behind. A successful save already
+            # rewrote the packed database; save=False explicitly discards them.
+            # Preserve them after a failed requested save so recovery remains
+            # possible.
             self._cleanup_partial_database(session.input_path)
 
         info: IdalibCloseResult = {
