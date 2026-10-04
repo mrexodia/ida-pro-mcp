@@ -334,6 +334,8 @@ class IdalibSupervisor:
     @staticmethod
     def _partial_database_paths(input_path: str) -> tuple[Path, ...]:
         base = Path(input_path)
+        if base.suffix.lower() in (".i64", ".idb"):
+            base = base.with_suffix("")
         return tuple(
             base.with_name(base.name + ext)
             for ext in PARTIAL_DATABASE_EXTENSIONS

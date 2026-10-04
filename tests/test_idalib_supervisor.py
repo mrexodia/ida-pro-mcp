@@ -200,6 +200,20 @@ def test_cleanup_partial_database_removes_only_new_parts(tmp_path):
     assert packed.read_bytes() == b"packed database"
 
 
+@pytest.mark.parametrize("database_extension", [".i64", ".idb"])
+def test_partial_database_paths_strip_packed_database_extension(
+    tmp_path, database_extension
+):
+    packed = tmp_path / f"sample.bin{database_extension}"
+
+    parts = supmod.IdalibSupervisor._partial_database_paths(str(packed))
+
+    assert parts == tuple(
+        tmp_path / f"sample.bin{extension}"
+        for extension in supmod.PARTIAL_DATABASE_EXTENSIONS
+    )
+
+
 def test_open_session_cleans_new_parts_after_worker_failure(tmp_path):
     sample = tmp_path / "sample.bin"
     sample.write_bytes(b"sample")
