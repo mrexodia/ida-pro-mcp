@@ -38,6 +38,7 @@ CRACKME_CHECK_PW = "0x11a9"
 CRACKME_MAIN = "0x123e"
 CRACKME_CALL_TO_CHECK_PW = "0x12d3"
 CRACKME_USAGE_STRING = "0x2004"
+CRACKME_TEST_EAX = "0x12d8"
 
 ARM64_SUM_POINT = "0x100000530"
 ARM64_USE_WRAPPER = "0x100000560"
@@ -650,6 +651,51 @@ def test_callees_by_name():
     assert_is_list(entry["callees"], min_length=1)
     by_name = {callee["name"]: callee for callee in entry["callees"]}
     assert "check_pw" in by_name
+
+
+@test(binary="crackme03.elf")
+def test_callees_ignores_int_vector():
+    """callees does not report the vector of an int instruction as a call target."""
+    import ida_auto
+    import ida_bytes
+    import idaapi
+    import idc
+
+    def recreate_insn(ea: int) -> None:
+        assert ida_bytes.del_items(ea, ida_bytes.DELIT_NOTRUNC, 2)
+        assert idc.create_insn(ea) == 2
+
+    def callee_map() -> dict[str, str]:
+        entry = callees(CRACKME_MAIN)[0]
+        return {callee["addr"]: callee["name"] for callee in entry["callees"]}
+
+    def main_bounds() -> tuple[int, int]:
+        func = idaapi.get_func(int(CRACKME_MAIN, 16))
+        return func.start_ea, func.end_ea
+
+    ea = int(CRACKME_TEST_EAX, 16)
+    original = ida_bytes.get_bytes(ea, 2)
+    assert original == b"\x85\xc0", "expected `test eax, eax` in main"
+
+    expected = callee_map()
+    bounds = main_bounds()
+    assert CRACKME_CHECK_PW in expected
+    try:
+        ida_bytes.patch_bytes(ea, b"\xcd\x80")  # int 0x80
+        recreate_insn(ea)
+        insn = idaapi.insn_t()
+        assert idaapi.decode_insn(insn, ea) == 2
+        assert idaapi.is_call_insn(insn), "int must be a call for the processor"
+        assert callee_map() == expected
+    finally:
+        ida_bytes.patch_bytes(ea, original)
+        recreate_insn(ea)
+
+    ida_auto.auto_wait()
+    assert ida_bytes.get_bytes(ea, 2) == original
+    assert idc.print_insn_mnem(ea) == "test"
+    assert main_bounds() == bounds
+    assert callee_map() == expected
 
 
 @test(binary="typed_fixture_arm64.macho")
