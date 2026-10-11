@@ -754,7 +754,7 @@ def test_resolve_session_removes_unreachable_worker(tmp_path):
     assert session.process.returncode == 0
 
 
-def test_open_session_prunes_unreachable_existing_mapping(tmp_path):
+def test_open_session_refuses_unreachable_but_still_live_worker(tmp_path):
     sample = tmp_path / "sample.bin"
     sample.write_bytes(b"x")
     restore = _patch_discovery(instances=[], probe=False)
@@ -771,10 +771,15 @@ def test_open_session_prunes_unreachable_existing_mapping(tmp_path):
 
         sup._session_is_reachable = lambda session: session.session_id != "stale" and session.is_alive()
 
+        with pytest.raises(RuntimeError, match="unverified worker"):
+            sup.open_session(str(sample), session_id="new")
+        assert stale.process.poll() is None
+        assert ("stale", stale.release_id) in sup._pending_releases
+        stale.process.terminate()
         session = sup.open_session(str(sample), session_id="new")
-
         assert session.session_id == "new"
         assert "stale" not in sup.sessions
+        sup.close_session("new", save=False)
     finally:
         restore()
 

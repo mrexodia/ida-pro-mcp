@@ -20,6 +20,7 @@ import subprocess
 import sys
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -87,6 +88,11 @@ WORKER_CALL_TIMEOUT_SEC = _env_float("IDA_MCP_WORKER_CALL_TIMEOUT", 900.0)
 PARTIAL_DATABASE_EXTENSIONS = (".id0", ".id1", ".id2", ".nam", ".til")
 RELEASE_RECEIPT_TTL_SEC = 3600.0
 MAX_RELEASE_RECEIPTS = 256
+MAX_UNVERIFIED_PENDING_WORKERS = 256
+
+
+class WorkerCapacityUnavailable(RuntimeError):
+    """Worker slots are occupied, but local management tools must stay usable."""
 
 # Upper bound (seconds) on how long a worker may take to open and auto-analyze a
 # binary before it is reaped and an error is returned. A malformed or hostile
@@ -206,6 +212,7 @@ class WorkerSession:
     unresponsive_since: float | None = None
     release_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     closing: bool = False
+    active_calls: int = 0
 
     def to_dict(self) -> IdalibSessionInfo:
         return {
@@ -257,6 +264,52 @@ class IdalibSupervisor:
         self._lock = RLock()
         self._pending_releases: dict[tuple[str, str], WorkerSession] = {}
         self._release_receipts: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+        # Allocated processes are counted even before idb_open finishes and
+        # before an input-backed session enters the normal registry.
+        self._opening_workers: dict[int, WorkerSession] = {}
+        # Path-scoped serialisation covers *unregistered* idb_open RPCs and
+        # failed-open sidecar cleanup, without blocking unrelated binaries.
+        self._input_guards: dict[str, tuple[Any, int]] = {}
+
+    def _input_guard_key(self, path: str) -> str:
+        key = self._path_key(path)
+        for suffix in (".i64", ".idb"):
+            if key.lower().endswith(suffix):
+                return key[: -len(suffix)]
+        return key
+
+    @contextmanager
+    def _input_path_guard(self, path: str):
+        """One guard per input, refcounted before waiting to avoid lock ABA."""
+        key = self._input_guard_key(path)
+        with self._lock:
+            existing = self._input_guards.get(key)
+            if existing is None:
+                guard = RLock()
+                count = 0
+            else:
+                guard, count = existing
+            self._input_guards[key] = (guard, count + 1)
+        acquired = False
+        try:
+            guard.acquire()
+            acquired = True
+            yield
+        finally:
+            try:
+                if acquired:
+                    guard.release()
+            finally:
+                # Also executed if acquisition itself was cancelled; do not
+                # leave a permanently registered guard for this input.
+                with self._lock:
+                    current, count = self._input_guards[key]
+                    if current is not guard:
+                        raise RuntimeError("Input guard identity changed while in use")
+                    if count == 1:
+                        del self._input_guards[key]
+                    else:
+                        self._input_guards[key] = (guard, count - 1)
 
     # ------------------------------------------------------------------
     # Worker process lifecycle
@@ -309,8 +362,15 @@ class IdalibSupervisor:
         )
         try:
             self._wait_worker_ready(worker)
-        except Exception:
-            self._terminate_worker(worker)
+        except BaseException:
+            try:
+                self._terminate_worker(worker)
+            finally:
+                # Startup failed before an input-backed session exists. Keep
+                # the original process handle if kill/wait cannot prove exit.
+                if worker.process is not None and worker.process.poll() is None:
+                    with self._lock:
+                        self._opening_workers[id(worker.process)] = worker
             raise
         return worker
 
@@ -334,14 +394,20 @@ class IdalibSupervisor:
         if worker.backend != "worker" or not worker.owned:
             return
         proc = worker.process
-        if proc is None or proc.poll() is not None:
+        if proc is None:
             return
-        try:
-            proc.terminate()
-            proc.wait(timeout=10)
-        except Exception:
-            proc.kill()
-            proc.wait(timeout=5)
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=10)
+            except Exception:
+                proc.kill()
+                proc.wait(timeout=5)
+        # Only forget an opening reservation when the original process has
+        # actually exited. Failed terminate/kill keeps a capacity owner.
+        if proc.poll() is not None:
+            with self._lock:
+                self._opening_workers.pop(id(proc), None)
 
     @staticmethod
     def _partial_database_paths(input_path: str) -> tuple[Path, ...]:
@@ -407,6 +473,20 @@ class IdalibSupervisor:
                     return worker
             if self._schema_worker is not None and self._schema_worker.is_alive():
                 return self._schema_worker
+            self._prune_dead_worker_sessions_locked()
+            if (
+                len(self._pending_releases) + len(self._opening_workers)
+                >= MAX_UNVERIFIED_PENDING_WORKERS
+            ):
+                raise WorkerCapacityUnavailable("Too many unverified pending idalib workers")
+            if self.max_workers > 0 and self._owned_worker_slots_locked() >= self.max_workers:
+                raise WorkerCapacityUnavailable(
+                    f"Maximum idalib worker count reached ({self.max_workers})."
+                )
+            if self._owned_worker_slots_locked() >= MAX_UNVERIFIED_PENDING_WORKERS:
+                raise WorkerCapacityUnavailable(
+                    "Owned worker safety capacity reached; resolve live workers first."
+                )
             self._schema_worker = self._spawn_worker()
             return self._schema_worker
 
@@ -428,22 +508,76 @@ class IdalibSupervisor:
             stale = self._unregister_session_locked(session_id)
             if stale is not None:
                 self._terminate_worker(stale)
+        for session in tuple(self._pending_releases.values()):
+            if self._process_exited(session):
+                self._record_release_locked(session)
+        for key, session in tuple(self._opening_workers.items()):
+            if self._process_exited(session):
+                self._opening_workers.pop(key, None)
+
+    def _owned_worker_slots_locked(self) -> int:
+        """Count distinct live owned Popen handles, including unregistered ones."""
+        processes: set[int] = set()
+        workers = (
+            *self.sessions.values(),
+            *self._pending_releases.values(),
+            *self._opening_workers.values(),
+        )
+        for worker in workers:
+            if worker.backend != "worker" or not worker.owned:
+                continue
+            process = worker.process
+            if process is None:
+                # Unknown termination must consume a slot, not grant capacity.
+                processes.add(id(worker))
+            elif process.poll() is None:
+                processes.add(id(process))
+        if self._schema_worker is not None and self._schema_worker.is_alive():
+            process = self._schema_worker.process
+            if process is not None:
+                processes.add(id(process))
+        return len(processes)
+
+    def _unverified_input_in_use_locked(self, input_path: str) -> bool:
+        """A cancelled/reaped *live* owner still reserves its original input."""
+        key = self._input_guard_key(input_path)
+        for worker in (*self._pending_releases.values(), *self._opening_workers.values()):
+            if not worker.input_path or self._input_guard_key(worker.input_path) != key:
+                continue
+            process = worker.process
+            if process is None or process.poll() is None:
+                return True
+        return False
 
     def _allocate_worker_locked(self) -> WorkerSession:
+        self._prune_dead_worker_sessions_locked()
+        if (
+            len(self._pending_releases) + len(self._opening_workers)
+            >= MAX_UNVERIFIED_PENDING_WORKERS
+        ):
+            raise WorkerCapacityUnavailable(
+                "Too many unverified pending idalib workers; resolve their "
+                "termination before opening more binaries."
+            )
         worker = self._take_schema_worker_for_session()
         if worker is not None:
+            if worker.process is not None:
+                self._opening_workers[id(worker.process)] = worker
+            return worker
+        # Registered workers can later all become unverified pending workers
+        # without any further allocation. Bound *all* owned live processes
+        # rather than only the already-pending subset (including max_workers=0).
+        if self._owned_worker_slots_locked() >= MAX_UNVERIFIED_PENDING_WORKERS:
+            raise WorkerCapacityUnavailable(
+                "Owned worker safety capacity reached; resolve live workers first."
+            )
+        if self.max_workers <= 0 or self._owned_worker_slots_locked() < self.max_workers:
+            worker = self._spawn_worker()
+            if worker.process is not None:
+                self._opening_workers[id(worker.process)] = worker
             return worker
 
-        self._prune_dead_worker_sessions_locked()
-        owned_workers = sum(
-            1
-            for session in self.sessions.values()
-            if session.backend == "worker" and session.owned and session.is_alive()
-        )
-        if self.max_workers <= 0 or owned_workers < self.max_workers:
-            return self._spawn_worker()
-
-        raise RuntimeError(
+        raise WorkerCapacityUnavailable(
             f"Maximum idalib worker count reached ({self.max_workers}). "
             "Wait for an existing worker to be released or increase --max-workers."
         )
@@ -573,6 +707,8 @@ class IdalibSupervisor:
         self.sessions[session.session_id] = session
         for candidate in self._candidate_idb_paths(resolved_path):
             self.path_to_session[candidate] = session.session_id
+        if session.backend == "worker" and session.owned and session.process is not None:
+            self._opening_workers.pop(id(session.process), None)
 
     def _session_is_reachable(self, session: WorkerSession) -> bool:
         return bool(self._probe_session_health(session)["reachable"])
@@ -814,6 +950,10 @@ class IdalibSupervisor:
                         raise RuntimeError(
                             f"Worker release blocked: input still in use: {database}"
                         )
+                if self._unverified_input_in_use_locked(proof["input_path"]):
+                    raise RuntimeError(
+                        f"Worker release blocked: input still in use: {database}"
+                    )
                 return {
                     "success": True,
                     "session_id": database,
@@ -922,11 +1062,35 @@ class IdalibSupervisor:
         idle_ttl_sec: int = 600,
         session_id: str | None = None,
     ) -> WorkerSession:
+        resolved = self._normalize_input_path(input_path)
+        with self._input_path_guard(resolved):
+            return self._open_session_under_input_guard(
+                resolved,
+                mode=mode,
+                run_auto_analysis=run_auto_analysis,
+                build_caches=build_caches,
+                init_hexrays=init_hexrays,
+                idle_ttl_sec=idle_ttl_sec,
+                session_id=session_id,
+            )
+
+    def _open_session_under_input_guard(
+        self,
+        input_path: str,
+        *,
+        mode: str = "prefer_headless",
+        run_auto_analysis: bool = True,
+        build_caches: bool = True,
+        init_hexrays: bool = True,
+        idle_ttl_sec: int = 600,
+        session_id: str | None = None,
+    ) -> WorkerSession:
         if mode not in IDB_OPEN_MODES:
             raise ValueError(
                 f"Unknown mode: {mode!r}. Expected one of: {sorted(IDB_OPEN_MODES)}."
             )
         resolved = self._normalize_input_path(input_path)
+        worker: WorkerSession | None = None
         with self._lock:
             existing = self.path_to_session.get(self._path_key(resolved))
             if existing is not None:
@@ -937,6 +1101,11 @@ class IdalibSupervisor:
                     session.last_accessed = datetime.now()
                     return session
                 self._unregister_session_locked(existing)
+            self._prune_dead_worker_sessions_locked()
+            if self._unverified_input_in_use_locked(resolved):
+                raise RuntimeError(
+                    f"Private input still in use by an unverified worker: {resolved}"
+                )
 
             if session_id is None:
                 session_id = str(uuid.uuid4())[:8]
@@ -974,9 +1143,12 @@ class IdalibSupervisor:
 
             if not break_for_launch:
                 worker = self._allocate_worker_locked()
+                worker.input_path = resolved
 
         if break_for_launch:
             return self._launch_gui_and_adopt(resolved, session_id)
+        if worker is None:
+            raise RuntimeError("Headless worker allocation did not complete")
 
         open_timeout = (WORKER_OPEN_TIMEOUT_SEC or None) if run_auto_analysis else None
         preexisting_parts = self._existing_partial_database_parts(resolved)
@@ -1013,6 +1185,13 @@ class IdalibSupervisor:
             winner = self._concurrent_session_for_path(resolved)
             if winner is not None:
                 return winner
+            self._cleanup_partial_database(resolved, preserve=preexisting_parts)
+            raise
+        except BaseException:
+            # KeyboardInterrupt/async cancellation must not orphan an
+            # untracked live Popen. If termination fails, its opening
+            # reservation remains until confirmed exit.
+            self._terminate_worker(worker)
             self._cleanup_partial_database(resolved, preserve=preexisting_parts)
             raise
 
@@ -1060,6 +1239,8 @@ class IdalibSupervisor:
         self._discard_opened_worker_session(worker)
         if session_collision_error is not None:
             raise session_collision_error
+        if existing_session is None:
+            raise RuntimeError("Concurrent open did not return a usable worker")
         return existing_session
 
     def _resolve_gui_fallback_path(self, session: WorkerSession) -> str:
@@ -1082,13 +1263,31 @@ class IdalibSupervisor:
         )
 
     def _reopen_gui_session_headless(self, session: WorkerSession) -> WorkerSession:
+        resolved = self._resolve_gui_fallback_path(session)
+        with self._input_path_guard(resolved):
+            with self._lock:
+                current = self.sessions.get(session.session_id)
+                if session.closing or (current is not None and current is not session):
+                    raise RuntimeError(
+                        f"Session changed while reopening: {session.session_id}"
+                    )
+            return self._reopen_gui_session_under_input_guard(session, resolved)
+
+    def _reopen_gui_session_under_input_guard(
+        self, session: WorkerSession, resolved: str
+    ) -> WorkerSession:
         logger.info(
             "GUI IDA backend for session %s is unavailable; reopening headless",
             session.session_id,
         )
-        resolved = self._resolve_gui_fallback_path(session)
         with self._lock:
+            self._prune_dead_worker_sessions_locked()
+            if self._unverified_input_in_use_locked(resolved):
+                raise RuntimeError(
+                    f"Private input still in use by an unverified worker: {resolved}"
+                )
             worker = self._allocate_worker_locked()
+            worker.input_path = resolved
         preexisting_parts = self._existing_partial_database_parts(resolved)
         try:
             opened = self.call_worker_tool(
@@ -1162,8 +1361,7 @@ class IdalibSupervisor:
         state = self._health_state(health)
         wedged = self._record_health_state(session, state)
         if state == "ok":
-            session.last_accessed = datetime.now()
-            return session
+            return self._require_current_session(database, session)
         if state == "busy":
             if not wedged:
                 # Mid tool call: let the request queue on the worker rather
@@ -1173,15 +1371,13 @@ class IdalibSupervisor:
                     session.session_id,
                     health.get("failed_probe"),
                 )
-                session.last_accessed = datetime.now()
-                return session
+                return self._require_current_session(database, session)
             # Silent past the grace window: confirm with generous timeouts
             # before killing a process that may still be working.
             confirmed = self._probe_session_health_retrying(session)
             if self._health_state(confirmed) == "ok":
                 self._record_health_state(session, "ok")
-                session.last_accessed = datetime.now()
-                return session
+                return self._require_current_session(database, session)
             logger.warning(
                 "Worker session %s unresponsive for over %.0fs; reaping",
                 session.session_id,
@@ -1194,12 +1390,44 @@ class IdalibSupervisor:
             if session.closing:
                 raise RuntimeError(f"Session release in progress: {database}")
             current = self.sessions.get(session_id)
-            if current is session:
-                self._unregister_session_locked(session_id)
+            if current is not session:
+                raise RuntimeError(f"Session changed during health probe: {database}")
+            self._unregister_session_locked(session_id)
         self._terminate_worker(session)
         with self._lock:
             self._record_release_locked(session)
         raise RuntimeError(f"Worker for session '{session_id}' is not reachable")
+
+    def _require_current_session(self, database: str, session: WorkerSession) -> WorkerSession:
+        """Reject stale health responses after a concurrent close or replacement."""
+        with self._lock:
+            if self.sessions.get(database) is not session:
+                raise RuntimeError(f"Session changed during health probe: {database}")
+            if session.closing:
+                raise RuntimeError(f"Session release in progress: {database}")
+            session.last_accessed = datetime.now()
+            return session
+
+    def forward_session_rpc(
+        self, database: str, session: WorkerSession, request: dict[str, Any],
+        *, timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """Lease the exact current worker before dispatch; close fails busy.
+
+        A health result alone does not lease a session. The short atomic
+        recheck/count prevents requests starting after close or unregister.
+        """
+        with self._lock:
+            if self.sessions.get(database) is not session:
+                raise RuntimeError(f"Session changed before worker call: {database}")
+            if session.closing:
+                raise RuntimeError(f"Session release in progress: {database}")
+            session.active_calls += 1
+        try:
+            return self._worker_rpc(session, request, timeout=timeout)
+        finally:
+            with self._lock:
+                session.active_calls -= 1
 
     def peek_session(self, database: str) -> WorkerSession:
         if not database:
@@ -1212,6 +1440,34 @@ class IdalibSupervisor:
             return session
 
     def close_session(
+        self, database: str, *, save: bool = True,
+        expected_input_path: str = "", release_id: str = "",
+    ) -> IdalibCloseResult:
+        with self._lock:
+            session = self.sessions.get(database)
+            # Preserve the existing non-blocking concurrent-close contract:
+            # a second close must not queue behind a slow terminating worker.
+            if session is not None and session.closing:
+                raise RuntimeError(f"Session release in progress: {database}")
+            if session is not None and session.active_calls:
+                raise RuntimeError(f"Session busy with active worker calls: {database}")
+            path = (
+                expected_input_path
+                if session is None or (release_id and release_id != session.release_id)
+                else session.input_path
+            )
+        if path:
+            with self._input_path_guard(path):
+                return self._close_session_under_input_guard(
+                    database, save=save,
+                    expected_input_path=expected_input_path, release_id=release_id,
+                )
+        return self._close_session_under_input_guard(
+            database, save=save,
+            expected_input_path=expected_input_path, release_id=release_id,
+        )
+
+    def _close_session_under_input_guard(
         self, database: str, *, save: bool = True,
         expected_input_path: str = "", release_id: str = "",
     ) -> IdalibCloseResult:
@@ -1237,6 +1493,8 @@ class IdalibSupervisor:
                 raise RuntimeError(f"Release identity mismatch for session: {database}")
             if session.closing:
                 raise RuntimeError(f"Session release in progress: {database}")
+            if session.active_calls:
+                raise RuntimeError(f"Session busy with active worker calls: {database}")
             session.closing = True
         try:
             saved: bool | None = None
@@ -1296,6 +1554,18 @@ class IdalibSupervisor:
 
     def list_sessions(self, *, strict_discovery: bool = False) -> list[IdalibSessionListInfo]:
         with self._lock:
+            if strict_discovery:
+                self._prune_dead_worker_sessions_locked()
+                if any(
+                    worker.process is None or worker.process.poll() is None
+                    for worker in (
+                        *self._pending_releases.values(),
+                        *self._opening_workers.values(),
+                    )
+                ):
+                    raise RuntimeError(
+                        "Instance discovery incomplete: unverified owned worker"
+                    )
             adopted = [
                 self._session_list_entry(session) for session in self.sessions.values()
             ]
@@ -1524,7 +1794,13 @@ def databases_resource() -> dict:
 def _handle_tools_list(request_obj: dict[str, Any]) -> dict[str, Any]:
     sup = _require_supervisor()
     local_tools = mcp._mcp_tools_list().get("tools", [])
-    worker_tools = sup.worker_tools()
+    try:
+        worker_tools = sup.worker_tools()
+    except WorkerCapacityUnavailable:
+        # A fresh client must still discover idb_close/idb_list when all
+        # slots contain unverified workers; don't spawn a fifth worker merely
+        # to enumerate worker-specific tools.
+        worker_tools = []
     return _jsonrpc_result(request_obj.get("id"), {"tools": worker_tools + local_tools})
 
 
@@ -1552,8 +1828,8 @@ def _handle_tools_call(request_obj: dict[str, Any]) -> dict[str, Any] | None:
     forwarded = copy.deepcopy(request_obj)
     forwarded.setdefault("params", {})["arguments"] = arguments
     try:
-        return sup._worker_rpc(
-            session, forwarded, timeout=WORKER_CALL_TIMEOUT_SEC or None
+        return sup.forward_session_rpc(
+            database, session, forwarded, timeout=WORKER_CALL_TIMEOUT_SEC or None
         )
     except socket.timeout:
         return _jsonrpc_result(
