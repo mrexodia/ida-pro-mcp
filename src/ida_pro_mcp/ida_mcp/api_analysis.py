@@ -710,7 +710,7 @@ def _collect_callers_for_function(func: ida_funcs.func_t) -> list[dict]:
 
         insn = idaapi.insn_t()
         idaapi.decode_insn(insn, caller_site)
-        if insn.itype not in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+        if not idaapi.is_call_insn(insn):
             continue
 
         callers[caller_start] = {
@@ -1668,7 +1668,7 @@ def callees(
                         break
                     current_ea = next_ea
                     continue
-                if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+                if idaapi.is_call_insn(insn):
                     op0 = insn.ops[0]
                     if op0.type in (ida_ua.o_mem, ida_ua.o_near, ida_ua.o_far):
                         target = op0.addr
