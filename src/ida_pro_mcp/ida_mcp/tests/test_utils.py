@@ -149,6 +149,26 @@ def test_utils_callees_callers_and_xrefs_from_helpers():
     assert any(x["addr"] == "0x1013dc0" for x in xrefs_from)
 
 
+@test(binary="typed_fixture_arm64.macho")
+def test_utils_arm64_get_callees_resolves_bl_targets():
+    """get_callees finds BL call targets on an AArch64 database."""
+    callees = get_callees("_main")
+    assert {c["name"]: c["addr"] for c in callees} == {
+        "_puts": "0x100000634",
+        "_use_wrapper": "0x100000560",
+        "_printf": "0x100000640",
+    }
+
+
+@test(binary="typed_fixture_arm64.macho")
+def test_utils_arm64_get_callers_resolves_bl_sites():
+    """get_callers finds BL call sites on an AArch64 database."""
+    callers = get_callers("_sum_point")
+    assert [(c["addr"], c["name"]) for c in callers] == [
+        ("0x100000560", "_use_wrapper")
+    ]
+
+
 @test(binary="crackme03.elf")
 def test_utils_extract_strings_and_constants():
     """Utility extractors find referenced strings and immediate constants."""

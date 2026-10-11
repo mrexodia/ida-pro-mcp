@@ -39,6 +39,11 @@ CRACKME_MAIN = "0x123e"
 CRACKME_CALL_TO_CHECK_PW = "0x12d3"
 CRACKME_USAGE_STRING = "0x2004"
 
+ARM64_SUM_POINT = "0x100000530"
+ARM64_USE_WRAPPER = "0x100000560"
+ARM64_PUTS = "0x100000634"
+ARM64_PRINTF = "0x100000640"
+
 
 @test()
 def test_decompile_valid_function():
@@ -647,6 +652,19 @@ def test_callees_by_name():
     assert "check_pw" in by_name
 
 
+@test(binary="typed_fixture_arm64.macho")
+def test_callees_arm64_main_lists_bl_targets():
+    """callees finds BL call targets on an AArch64 database."""
+    result = callees("_main")
+    assert_is_list(result, min_length=1)
+    by_name = {callee["name"]: callee["addr"] for callee in result[0]["callees"]}
+    assert by_name == {
+        "_puts": ARM64_PUTS,
+        "_use_wrapper": ARM64_USE_WRAPPER,
+        "_printf": ARM64_PRINTF,
+    }
+
+
 @test()
 def test_callees_multiple():
     """callees accepts multiple addresses and returns one result per input."""
@@ -891,6 +909,16 @@ def test_func_profile():
             "has_type",
             "error",
         )
+
+
+@test(binary="typed_fixture_arm64.macho")
+def test_func_profile_arm64_callers():
+    """func_profile reports BL call sites as callers on an AArch64 database."""
+    result = func_profile({"addr": ARM64_SUM_POINT, "include_lists": True})
+    assert_is_list(result, min_length=1)
+    profile = result[0]["data"][0]
+    assert profile["caller_count"] == 1
+    assert profile["callers"] == [{"addr": ARM64_USE_WRAPPER, "name": "_use_wrapper"}]
 
 
 @test()
