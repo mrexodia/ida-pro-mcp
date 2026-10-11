@@ -1672,7 +1672,13 @@ def callees(
                     op0 = insn.ops[0]
                     if op0.type in (ida_ua.o_mem, ida_ua.o_near, ida_ua.o_far):
                         target = op0.addr
-                    elif op0.type == ida_ua.o_imm:
+                    # An immediate is a call target only when IDA links this
+                    # instruction to it (x86 `int N` holds a vector instead).
+                    elif op0.type == ida_ua.o_imm and any(
+                        xref.to == op0.value
+                        and xref.type in (ida_xref.fl_CN, ida_xref.fl_CF)
+                        for xref in idautils.XrefsFrom(current_ea, 0)
+                    ):
                         target = op0.value
                     else:
                         target = None
