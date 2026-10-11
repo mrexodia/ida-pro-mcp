@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, TypedDict, cast
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,8 @@ WORKER_WEDGED_GRACE_SEC = _env_float("IDA_MCP_WEDGED_GRACE_SEC", 1800.0)
 WORKER_CALL_TIMEOUT_SEC = _env_float("IDA_MCP_WORKER_CALL_TIMEOUT", 900.0)
 
 PARTIAL_DATABASE_EXTENSIONS = (".id0", ".id1", ".id2", ".nam", ".til")
+RELEASE_RECEIPT_TTL_SEC = 3600.0
+MAX_RELEASE_RECEIPTS = 256
 
 # Upper bound (seconds) on how long a worker may take to open and auto-analyze a
 # binary before it is reaped and an error is returned. A malformed or hostile
@@ -144,6 +146,10 @@ class IdalibSessionInfo(TypedDict):
     metadata: dict[str, Any]
 
 
+class IdalibOpenedSessionInfo(IdalibSessionInfo, total=False):
+    release_id: str
+
+
 class IdalibSessionListInfo(IdalibSessionInfo, total=False):
     is_active: bool
     busy: bool
@@ -156,7 +162,7 @@ class IdalibSessionListInfo(IdalibSessionInfo, total=False):
 
 class IdalibOpenResult(TypedDict, total=False):
     success: bool
-    session: IdalibSessionInfo
+    session: IdalibOpenedSessionInfo
     warmup: dict[str, Any] | None
     message: str
     error: str
@@ -177,6 +183,7 @@ class IdalibCloseResult(TypedDict, total=False):
     save_error: str
     message: str
     error: str
+    release: dict[str, Any]
 
 
 @dataclass
@@ -196,6 +203,8 @@ class WorkerSession:
     pid: int | None = None
     last_warmup: dict[str, Any] | None = None
     unresponsive_since: float | None = None
+    release_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    closing: bool = False
 
     def to_dict(self) -> IdalibSessionInfo:
         return {
@@ -245,6 +254,8 @@ class IdalibSupervisor:
         self._tools_cache: dict[tuple[str, ...], list[dict]] = {}
         self._resources_cache: dict[str, list[dict]] = {}
         self._lock = RLock()
+        self._pending_releases: dict[tuple[str, str], WorkerSession] = {}
+        self._release_receipts: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 
     # ------------------------------------------------------------------
     # Worker process lifecycle
@@ -729,7 +740,73 @@ class IdalibSupervisor:
         ]
         for path_key in stale_paths:
             self.path_to_session.pop(path_key, None)
+        if (
+            session is not None
+            and session.backend == "worker"
+            and session.owned
+            and self._record_release_locked(session) is None
+        ):
+            self._pending_releases[(session.session_id, session.release_id)] = session
         return session
+
+    def _record_release_locked(self, session: WorkerSession) -> dict[str, Any] | None:
+        """Only the originally owned Popen handle, confirmed exited, is proof."""
+        process = session.process
+        if session.backend != "worker" or not session.owned or process is None:
+            return None
+        exit_code = process.poll()
+        if exit_code is None:
+            return None
+        key = (session.session_id, session.release_id)
+        self._pending_releases.pop(key, None)
+        proof = {
+            "status": "terminated",
+            "verified": True,
+            "session_id": session.session_id,
+            "input_path": session.input_path,
+            "release_id": session.release_id,
+            "backend": "worker",
+            "owned": True,
+            "worker_pid": process.pid,
+            "exit_code": exit_code,
+        }
+        now = time.monotonic()
+        for old, (at, _) in list(self._release_receipts.items()):
+            if now - at > RELEASE_RECEIPT_TTL_SEC:
+                del self._release_receipts[old]
+        self._release_receipts[key] = (now, proof)
+        while len(self._release_receipts) > MAX_RELEASE_RECEIPTS:
+            self._release_receipts.pop(next(iter(self._release_receipts)))
+        return proof
+
+    def _recalled_close_locked(
+        self, database: str, expected_input_path: str, release_id: str
+    ) -> IdalibCloseResult:
+        # No session-ID-only proof: generations can be reused.
+        if not release_id or not expected_input_path:
+            raise RuntimeError(f"Session not found: {database}")
+        key = (database, release_id)
+        pending = self._pending_releases.get(key)
+        if pending is not None:
+            self._record_release_locked(pending)
+        entry = self._release_receipts.get(key)
+        if entry is not None:
+            recorded, proof = entry
+            if time.monotonic() - recorded > RELEASE_RECEIPT_TTL_SEC:
+                del self._release_receipts[key]
+            elif self._path_key(expected_input_path) == self._path_key(proof["input_path"]):
+                return {
+                    "success": True,
+                    "session_id": database,
+                    "backend": "worker",
+                    "owned": True,
+                    "saved": None,
+                    "message": f"Worker release already verified: {database}",
+                    "release": copy.deepcopy(proof),
+                }
+            else:
+                raise RuntimeError(f"Release identity mismatch for session: {database}")
+        raise RuntimeError(f"Worker release unknown for session: {database}")
 
     def _discard_opened_worker_session(self, worker: WorkerSession) -> None:
         # Race lost: we opened a worker but a competing thread already
@@ -1052,6 +1129,8 @@ class IdalibSupervisor:
 
     def resolve_session(self, database: str) -> WorkerSession:
         session = self.peek_session(database)
+        if session.closing:
+            raise RuntimeError(f"Session release in progress: {database}")
         # Short timeouts: a busy worker is forwarded to anyway, so waiting
         # longer here only adds latency to every call.
         health = self._probe_session_health(
@@ -1091,10 +1170,14 @@ class IdalibSupervisor:
             return self._reopen_gui_session_headless(session)
         session_id = session.session_id
         with self._lock:
+            if session.closing:
+                raise RuntimeError(f"Session release in progress: {database}")
             current = self.sessions.get(session_id)
             if current is session:
                 self._unregister_session_locked(session_id)
         self._terminate_worker(session)
+        with self._lock:
+            self._record_release_locked(session)
         raise RuntimeError(f"Worker for session '{session_id}' is not reachable")
 
     def peek_session(self, database: str) -> WorkerSession:
@@ -1107,46 +1190,68 @@ class IdalibSupervisor:
             session.last_accessed = datetime.now()
             return session
 
-    def close_session(self, database: str, *, save: bool = True) -> IdalibCloseResult:
-        """Save (optionally), unregister, and terminate a session's owned worker.
-
-        Adopted GUI/worker instances (``owned`` is False) are detached rather
-        than killed: they keep running so another supervisor can adopt them.
-        """
-        session = self.peek_session(database)
-        saved: bool | None = None
-        save_error: str | None = None
-        if save and self._session_is_reachable(session):
-            try:
-                result = self.call_worker_tool(session, "idb_save")
-                if isinstance(result, dict):
-                    saved = bool(result.get("ok"))
-                    if result.get("error"):
-                        save_error = str(result["error"])
-            except Exception as e:
-                save_error = str(e)
-
+    def close_session(
+        self, database: str, *, save: bool = True,
+        expected_input_path: str = "", release_id: str = "",
+    ) -> IdalibCloseResult:
+        """Confirm owned-worker exit before unregistering or issuing proof."""
         with self._lock:
-            if self.sessions.get(database) is session:
+            if not database:
+                raise RuntimeError(_DATABASE_REQUIRED_ERROR)
+            session = self.sessions.get(database)
+            if session is None:
+                return self._recalled_close_locked(database, expected_input_path, release_id)
+            if release_id and release_id != session.release_id:
+                raise RuntimeError(f"Release identity mismatch for session: {database}")
+            if expected_input_path and (
+                self._path_key(expected_input_path) != self._path_key(session.input_path)
+            ):
+                raise RuntimeError(f"Release identity mismatch for session: {database}")
+            if session.closing:
+                raise RuntimeError(f"Session release in progress: {database}")
+            session.closing = True
+        try:
+            saved: bool | None = None
+            save_error: str | None = None
+            if save and self._session_is_reachable(session):
+                try:
+                    result = self.call_worker_tool(session, "idb_save")
+                    if isinstance(result, dict):
+                        saved = bool(result.get("ok"))
+                        if result.get("error"):
+                            save_error = str(result["error"])
+                except Exception as e:
+                    save_error = str(e)
+            self._terminate_worker(session)
+            if session.backend == "worker" and session.owned and (
+                session.process is None or session.process.poll() is None
+            ):
+                # Keep the registry/path bound until confirmed termination.
+                raise RuntimeError(f"Worker termination unconfirmed for session: {database}")
+            with self._lock:
+                if self.sessions.get(database) is not session:
+                    raise RuntimeError(f"Session changed while closing: {database}")
                 self._unregister_session_locked(database)
-        self._terminate_worker(session)
-        if saved and session.owned:
-            # The worker is SIGTERM'd without a clean close_database(), so the
-            # working files it unpacked stay behind; the save above already
-            # rewrote the packed database.
-            self._cleanup_partial_database(session.input_path)
-
-        info: IdalibCloseResult = {
-            "success": True,
-            "session_id": database,
-            "backend": session.backend,
-            "owned": session.owned,
-            "saved": saved,
-            "message": f"Session closed: {session.filename} ({database})",
-        }
-        if save_error is not None:
-            info["save_error"] = save_error
-        return info
+                release = self._record_release_locked(session)
+            if saved and session.owned:
+                # Never delete input. Only unpacked IDA parts after confirmed exit.
+                self._cleanup_partial_database(session.input_path)
+            info: IdalibCloseResult = {
+                "success": True,
+                "session_id": database,
+                "backend": session.backend,
+                "owned": session.owned,
+                "saved": saved,
+                "message": f"Session closed: {session.filename} ({database})",
+            }
+            if release is not None:
+                info["release"] = release
+            if save_error is not None:
+                info["save_error"] = save_error
+            return info
+        finally:
+            with self._lock:
+                session.closing = False
 
     def _session_list_entry(self, session: WorkerSession) -> IdalibSessionListInfo:
         """Listing must stay snappy, so probe with short timeouts only."""
@@ -1171,11 +1276,8 @@ class IdalibSupervisor:
             }
 
         unadopted: list[IdalibSessionListInfo] = []
-        try:
-            instances = _discovery.discover_instances()
-        except Exception:
-            logger.debug("discover_instances failed during list_sessions", exc_info=True)
-            instances = []
+        # Discovery failure is not a confirmed empty list.
+        instances = _discovery.discover_instances()
         for inst in instances:
             idb_path = str(inst.get("idb_path") or "")
             if idb_path:
@@ -1318,9 +1420,12 @@ def idb_open(
             idle_ttl_sec=idle_ttl_sec,
             session_id=preferred_session_id or None,
         )
+        session_info = cast(IdalibOpenedSessionInfo, session.to_dict())
+        if session.backend == "worker" and session.owned:
+            session_info["release_id"] = session.release_id
         return {
             "success": True,
-            "session": session.to_dict(),
+            "session": session_info,
             "warmup": session.last_warmup,
             "message": f"Binary opened: {session.filename} ({session.session_id})",
         }
@@ -1343,6 +1448,8 @@ def idb_list() -> IdalibListResult:
 def idb_close(
     database: Annotated[str, "Session ID returned by idb_open (see idb_list)."],
     save: Annotated[bool, "Save the database before closing"] = True,
+    expected_input_path: Annotated[str, "Exact original input path, needed for reaped-worker proof"] = "",
+    release_id: Annotated[str, "Open-generation release ID returned by idb_open, needed for reaped-worker proof"] = "",
 ) -> IdalibCloseResult:
     """
     Close a session: optionally save it, unregister it from the supervisor, and
@@ -1351,7 +1458,10 @@ def idb_close(
     """
     sup = _require_supervisor()
     try:
-        return sup.close_session(database, save=save)
+        return sup.close_session(
+            database, save=save,
+            expected_input_path=expected_input_path, release_id=release_id,
+        )
     except Exception as e:
         return {"error": str(e)}
 
