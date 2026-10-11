@@ -1,5 +1,6 @@
 """Worker release-proof regression tests; no licensed IDA engine required."""
 
+import json
 import subprocess
 import sys
 from itertools import count
@@ -316,3 +317,178 @@ def test_real_os_process_termination_and_no_leak(fixture):
         if proc.poll() is None:
             proc.kill()
         proc.wait(timeout=5)
+
+
+def test_prior_release_survives_reused_session_id_for_other_input(fixture, tmp_path):
+    sup, first = fixture
+    older = open_owned(sup, first, "reused-id")
+    sup.close_session("reused-id", save=False)
+    second_input = tmp_path / "different.bin"
+    second_input.write_bytes(b"different private input")
+    newer = open_owned(sup, second_input, "reused-id")
+
+    result = sup.close_session(
+        "reused-id", save=False, expected_input_path=str(first),
+        release_id=older.release_id,
+    )
+    check_proof(result["release"], older, first)
+    assert sup.sessions["reused-id"] is newer
+    assert newer.process.poll() is None
+    assert first.read_bytes() == b"original private input"
+    assert second_input.read_bytes() == b"different private input"
+    sup.close_session("reused-id", save=False)
+
+
+def test_prior_release_rejected_while_another_session_uses_same_input(fixture):
+    sup, target = fixture
+    older = open_owned(sup, target, "original")
+    sup.close_session("original", save=False)
+    newer = open_owned(sup, target, "new-owner")
+
+    with pytest.raises(RuntimeError, match="input still in use"):
+        sup.close_session(
+            "original", save=False, expected_input_path=str(target),
+            release_id=older.release_id,
+        )
+    assert newer.process.poll() is None
+    assert sup.sessions["new-owner"] is newer
+
+    sup.close_session("new-owner", save=False)
+    proof = sup.close_session(
+        "original", save=False, expected_input_path=str(target),
+        release_id=older.release_id,
+    )
+    check_proof(proof["release"], older, target)
+
+
+def test_prior_release_rejected_while_unregistered_live_worker_uses_input(fixture):
+    sup, target = fixture
+    older = open_owned(sup, target, "original")
+    sup.close_session("original", save=False)
+    newer = open_owned(sup, target, "unregistered")
+    with sup._lock:
+        sup._unregister_session_locked("unregistered")
+    assert newer.process.poll() is None
+    assert sup.sessions == {}
+
+    with pytest.raises(RuntimeError, match="input still in use"):
+        sup.close_session(
+            "original", save=False, expected_input_path=str(target),
+            release_id=older.release_id,
+        )
+    assert newer.process.poll() is None
+    assert target.read_bytes() == b"original private input"
+    newer.process.terminate()
+    proof = sup.close_session(
+        "original", save=False, expected_input_path=str(target),
+        release_id=older.release_id,
+    )
+    check_proof(proof["release"], older, target)
+
+
+def _strict_discovery_fixture(monkeypatch, tmp_path):
+    discovery = m._import_discovery()
+    directory = tmp_path / "registrations"
+    directory.mkdir()
+    monkeypatch.setattr(discovery, "get_instances_dir", lambda: str(directory))
+    monkeypatch.setattr(m._discovery, "discover_instances", discovery.discover_instances)
+    monkeypatch.setattr(m, "supervisor", FakeSupervisor())
+    return discovery, directory
+
+
+def test_strict_inventory_completed_empty_scan(monkeypatch, tmp_path):
+    _, directory = _strict_discovery_fixture(monkeypatch, tmp_path)
+    assert m.idb_list(strict_discovery=True) == {
+        "sessions": [], "count": 0, "registry_scan_complete": True,
+    }
+    directory.rmdir()
+    assert m.idb_list(strict_discovery=True)["registry_scan_complete"] is True
+
+
+def test_strict_inventory_rejects_corrupt_registration(monkeypatch, tmp_path):
+    _, directory = _strict_discovery_fixture(monkeypatch, tmp_path)
+    registration = directory / "instance_12345.json"
+    registration.write_text("{broken json", encoding="utf-8")
+    result = m.idb_list(strict_discovery=True)
+    assert "error" in result and "incomplete" in result["error"].lower()
+    assert "sessions" not in result and "registry_scan_complete" not in result
+    assert registration.exists()
+
+
+def test_strict_inventory_rejects_unreachable_registration(monkeypatch, tmp_path):
+    discovery, directory = _strict_discovery_fixture(monkeypatch, tmp_path)
+    registration = directory / "instance_43210.json"
+    registration.write_text(json.dumps({
+        "host": "127.0.0.1", "port": 43210, "pid": 424242,
+    }), encoding="utf-8")
+    monkeypatch.setattr(discovery, "is_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(discovery, "probe_instance", lambda *_a, **_k: False)
+    result = m.idb_list(strict_discovery=True)
+    assert "error" in result and "incomplete" in result["error"].lower()
+    assert "sessions" not in result and "registry_scan_complete" not in result
+    assert registration.exists()
+
+
+def test_strict_inventory_rejects_directory_read_error(monkeypatch, tmp_path):
+    discovery, directory = _strict_discovery_fixture(monkeypatch, tmp_path)
+    directory.rmdir()
+    nondir = tmp_path / "plain-file"
+    nondir.write_bytes(b"not a directory")
+    monkeypatch.setattr(discovery, "get_instances_dir", lambda: str(nondir))
+    result = m.idb_list(strict_discovery=True)
+    assert "error" in result and "incomplete" in result["error"].lower()
+    assert "sessions" not in result and "registry_scan_complete" not in result
+
+
+def test_open_session_does_not_return_a_worker_already_closing(fixture):
+    sup, target = fixture
+    existing = open_owned(sup, target, "owned")
+    existing.closing = True
+    try:
+        with pytest.raises(RuntimeError, match="release in progress"):
+            open_owned(sup, target, "new")
+        assert sup.sessions["owned"] is existing
+        assert existing.process.poll() is None
+    finally:
+        existing.closing = False
+    sup.close_session("owned", save=False)
+
+
+def test_saved_cleanup_holds_registration_lock_until_complete(fixture):
+    sup, target = fixture
+    session = open_owned(sup, target, "owned")
+    sidecar = target.with_name(target.name + ".id0")
+    sidecar.write_bytes(b"disposable unpacked database")
+    entered, resume = Event(), Event()
+    previous_cleanup = sup._cleanup_partial_database
+    outcomes = []
+
+    def paused_cleanup(path):
+        entered.set()
+        assert resume.wait(5)
+        previous_cleanup(path)
+
+    sup._cleanup_partial_database = paused_cleanup
+
+    def close():
+        outcomes.append(sup.close_session("owned", save=True))
+
+    closer = Thread(target=close)
+    closer.start()
+    acquired = False
+    try:
+        assert entered.wait(5)
+        # Registration uses this exact lock. Cleanup may not race with an
+        # incoming open_session after the terminating worker is unregistered.
+        acquired = sup._lock.acquire(blocking=False)
+        assert not acquired, "A new worker could register during IDA sidecar cleanup"
+    finally:
+        if acquired:
+            sup._lock.release()
+        resume.set()
+        closer.join(timeout=5)
+    assert not closer.is_alive()
+    assert outcomes[0]["success"] is True
+    assert session.process.poll() is not None
+    assert not sidecar.exists()
+    assert target.read_bytes() == b"original private input"

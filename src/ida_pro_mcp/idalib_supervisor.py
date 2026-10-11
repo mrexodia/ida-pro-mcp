@@ -172,6 +172,7 @@ class IdalibListResult(TypedDict, total=False):
     sessions: list[IdalibSessionListInfo]
     count: int
     error: str
+    registry_scan_complete: bool
 
 
 class IdalibCloseResult(TypedDict, total=False):
@@ -601,7 +602,7 @@ class IdalibSupervisor:
             if existing is None:
                 return None
             session = self.sessions.get(existing)
-            if session is None or not self._session_is_usable(session):
+            if session is None or session.closing or not self._session_is_usable(session):
                 return None
             session.last_accessed = datetime.now()
             return session
@@ -795,6 +796,24 @@ class IdalibSupervisor:
             if time.monotonic() - recorded > RELEASE_RECEIPT_TTL_SEC:
                 del self._release_receipts[key]
             elif self._path_key(expected_input_path) == self._path_key(proof["input_path"]):
+                # The terminated process is proven, but a different session
+                # may now own the same private input. Never turn the older
+                # receipt into permission to clean up that active input.
+                path_key = self._path_key(proof["input_path"])
+                for current in self.sessions.values():
+                    if self._path_key(current.input_path) == path_key:
+                        raise RuntimeError(
+                            f"Worker release blocked: input still in use: {database}"
+                        )
+                for pending in tuple(self._pending_releases.values()):
+                    if (
+                        (pending.session_id, pending.release_id) != key
+                        and self._path_key(pending.input_path) == path_key
+                        and self._record_release_locked(pending) is None
+                    ):
+                        raise RuntimeError(
+                            f"Worker release blocked: input still in use: {database}"
+                        )
                 return {
                     "success": True,
                     "session_id": database,
@@ -912,6 +931,8 @@ class IdalibSupervisor:
             existing = self.path_to_session.get(self._path_key(resolved))
             if existing is not None:
                 session = self.sessions.get(existing)
+                if session is not None and session.closing:
+                    raise RuntimeError(f"Session release in progress: {existing}")
                 if session is not None and self._session_is_usable(session):
                     session.last_accessed = datetime.now()
                     return session
@@ -1202,6 +1223,13 @@ class IdalibSupervisor:
             if session is None:
                 return self._recalled_close_locked(database, expected_input_path, release_id)
             if release_id and release_id != session.release_id:
+                # A newer session may reuse a released ID. Recall the older
+                # generation without ever closing the newer live worker.
+                old_key = (database, release_id)
+                if old_key in self._release_receipts or old_key in self._pending_releases:
+                    return self._recalled_close_locked(
+                        database, expected_input_path, release_id
+                    )
                 raise RuntimeError(f"Release identity mismatch for session: {database}")
             if expected_input_path and (
                 self._path_key(expected_input_path) != self._path_key(session.input_path)
@@ -1231,11 +1259,12 @@ class IdalibSupervisor:
             with self._lock:
                 if self.sessions.get(database) is not session:
                     raise RuntimeError(f"Session changed while closing: {database}")
+                if saved and session.owned:
+                    # Cleanup must be serialized with new opens that use the
+                    # same path mapping. Never unlink newly opened sidecars.
+                    self._cleanup_partial_database(session.input_path)
                 self._unregister_session_locked(database)
                 release = self._record_release_locked(session)
-            if saved and session.owned:
-                # Never delete input. Only unpacked IDA parts after confirmed exit.
-                self._cleanup_partial_database(session.input_path)
             info: IdalibCloseResult = {
                 "success": True,
                 "session_id": database,
@@ -1265,7 +1294,7 @@ class IdalibSupervisor:
         entry["busy"] = state == "busy"
         return entry
 
-    def list_sessions(self) -> list[IdalibSessionListInfo]:
+    def list_sessions(self, *, strict_discovery: bool = False) -> list[IdalibSessionListInfo]:
         with self._lock:
             adopted = [
                 self._session_list_entry(session) for session in self.sessions.values()
@@ -1276,10 +1305,16 @@ class IdalibSupervisor:
             }
 
         unadopted: list[IdalibSessionListInfo] = []
-        # Discovery failure is not a confirmed empty list.
-        instances = _discovery.discover_instances()
+        # Strict mode rejects silently skipped or unresponsive registrations,
+        # without changing default best-effort discovery compatibility.
+        instances = (
+            _discovery.discover_instances(strict=True)
+            if strict_discovery else _discovery.discover_instances()
+        )
         for inst in instances:
             idb_path = str(inst.get("idb_path") or "")
+            if strict_discovery and not idb_path:
+                raise RuntimeError("Instance discovery incomplete: registered input identity missing")
             if idb_path:
                 try:
                     key = self._path_key(idb_path)
@@ -1291,6 +1326,8 @@ class IdalibSupervisor:
                 reachable = bool(_discovery.probe_instance(inst["host"], inst["port"], timeout=0.5))
             except Exception:
                 reachable = False
+            if strict_discovery and not reachable:
+                raise RuntimeError("Instance discovery incomplete: instance became unreachable")
             backend = _discovered_instance_backend(inst)
             pid = int(inst["pid"]) if inst.get("pid") is not None else None
             unadopted.append(
@@ -1434,12 +1471,22 @@ def idb_open(
 
 
 @mcp.tool
-def idb_list() -> IdalibListResult:
+def idb_list(
+    strict_discovery: Annotated[
+        bool, "Require a complete, readable registration scan; fail closed on malformed or unreachable entries. Not a process-exclusivity guarantee."
+    ] = False,
+) -> IdalibListResult:
     """List adopted sessions and discovered GUI/worker instances not yet opened through idb_open."""
     sup = _require_supervisor()
     try:
-        sessions = sup.list_sessions()
-        return {"sessions": sessions, "count": len(sessions)}
+        sessions = (
+            sup.list_sessions(strict_discovery=True)
+            if strict_discovery else sup.list_sessions()
+        )
+        result: IdalibListResult = {"sessions": sessions, "count": len(sessions)}
+        if strict_discovery:
+            result["registry_scan_complete"] = True
+        return result
     except Exception as e:
         return {"error": f"Failed to list sessions: {e}"}
 

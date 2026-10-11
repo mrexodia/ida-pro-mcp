@@ -144,26 +144,59 @@ def _connectable_host(host: str) -> str:
     return host
 
 
-def discover_instances() -> list[InstanceInfo]:
-    """Scan for registered instances, cleaning up stale entries."""
-    instances_dir = get_instances_dir()
-    if not os.path.isdir(instances_dir):
-        return []
+def discover_instances(*, strict: bool = False) -> list[InstanceInfo]:
+    """Scan registered instances.
 
+    Strict inventory rejects incomplete registrations or failed probes instead
+    of silently skipping them. It never removes registrations. Normal
+    discovery retains its existing best-effort, stale-entry cleanup behavior.
+    """
+    instances_dir = get_instances_dir()
+    if strict:
+        try:
+            with os.scandir(instances_dir) as entries:
+                paths = sorted(
+                    entry.path for entry in entries
+                    if entry.name.startswith("instance_") and entry.name.endswith(".json")
+                )
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            raise RuntimeError("Instance discovery incomplete: cannot enumerate registry") from exc
+    else:
+        if not os.path.isdir(instances_dir):
+            return []
+        paths = glob.glob(os.path.join(instances_dir, "instance_*.json"))
     result: list[InstanceInfo] = []
-    pattern = os.path.join(instances_dir, "instance_*.json")
-    for file_path in glob.glob(pattern):
+    for file_path in paths:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 info: InstanceInfo = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as exc:
+            if strict:
+                raise RuntimeError(
+                    f"Instance discovery incomplete: invalid registration {os.path.basename(file_path)}"
+                ) from exc
             try:
                 os.unlink(file_path)
             except OSError:
                 pass
             continue
 
+        if strict and (
+            not isinstance(info, dict)
+            or not isinstance(info.get("host"), str)
+            or not isinstance(info.get("port"), int)
+            or not isinstance(info.get("pid"), int)
+        ):
+            raise RuntimeError(
+                f"Instance discovery incomplete: malformed registration {os.path.basename(file_path)}"
+            )
         if not all(k in info for k in ("host", "port", "pid")):
+            if strict:
+                raise RuntimeError(
+                    f"Instance discovery incomplete: missing fields in {os.path.basename(file_path)}"
+                )
             try:
                 os.unlink(file_path)
             except OSError:
@@ -175,6 +208,10 @@ def discover_instances() -> list[InstanceInfo]:
         info["host"] = _connectable_host(info["host"])
 
         if not is_pid_alive(info["pid"]):
+            if strict:
+                raise RuntimeError(
+                    f"Instance discovery incomplete: process missing for {os.path.basename(file_path)}"
+                )
             try:
                 os.unlink(file_path)
             except OSError:
@@ -185,6 +222,10 @@ def discover_instances() -> list[InstanceInfo]:
         # Catches PID reuse (Windows can recycle PIDs quickly) and
         # cases where the process is alive but the server crashed.
         if not probe_instance(info["host"], info["port"], timeout=1.0):
+            if strict:
+                raise RuntimeError(
+                    f"Instance discovery incomplete: instance unreachable in {os.path.basename(file_path)}"
+                )
             try:
                 os.unlink(file_path)
             except OSError:
