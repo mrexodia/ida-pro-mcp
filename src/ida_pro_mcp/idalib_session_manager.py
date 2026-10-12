@@ -56,6 +56,7 @@ class IDASessionManager:
     def __init__(self):
         self._sessions: Dict[str, IDASession] = {}
         self._active_session_id: Optional[str] = None
+        self._discard_on_close = False
         self._lock = threading.RLock()
         logger.info("IDASessionManager initialized")
 
@@ -175,10 +176,14 @@ class IDASessionManager:
         if idapro.open_database(input_path, run_auto_analysis=run_auto_analysis):
             raise RuntimeError(f"Failed to open database: {input_path}")
 
+    def discard_on_close(self) -> None:
+        """Close the active database without saving from now on."""
+        self._discard_on_close = True
+
     def _close_active_database(self) -> None:
         if self._active_session_id is not None:
             logger.debug("Closing active database (session: %s)", self._active_session_id)
-            idapro.close_database()
+            idapro.close_database(save=not self._discard_on_close)
             self._active_session_id = None
 
         # The strings cache is process-global, so drop it on every DB change or

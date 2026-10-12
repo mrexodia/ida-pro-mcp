@@ -1251,7 +1251,12 @@ def test_supervisor_uses_idb_prefixed_management_tools_only():
         "idalib_warmup",
         "idalib_health",
     }
-    assert supmod.IDB_MANAGEMENT_TOOLS == {"idb_open", "idb_list", "idb_close"}
+    assert supmod.IDB_MANAGEMENT_TOOLS == {
+        "idb_open",
+        "idb_list",
+        "idb_close",
+        "idb_discard",
+    }
     for name in legacy:
         assert not hasattr(supmod, name), f"{name} should have been deleted"
     for typename in ("IdalibWarmupResult", "IdalibHealthResult"):
