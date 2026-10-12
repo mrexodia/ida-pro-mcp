@@ -485,6 +485,18 @@ def lookup_funcs(
             if ea == idaapi.BADADDR:
                 ea = idaapi.get_name_ea(idaapi.BADADDR, query)
 
+            # NOTE: get_name_ea() misses names that IDA itself reports through
+            # get_func_name()/get_function(), e.g. compiler-generated entry
+            # points such as TopLevelExceptionFilter. Producers (get_callers,
+            # get_callees) return those names, so a consumer that round-trips a
+            # produced name fails even though the function exists. Fall back to
+            # a scan before giving up.
+            if ea == idaapi.BADADDR:
+                for _ea in idautils.Functions():
+                    if ida_funcs.get_func_name(_ea) == query:
+                        ea = _ea
+                        break
+
             if ea != idaapi.BADADDR:
                 func = get_function(ea, raise_error=False)
                 if func:

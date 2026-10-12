@@ -1031,10 +1031,15 @@ def disasm(
         }
         if stack_frame:
             out["stack_frame"] = stack_frame
-        if rettype:
-            out["return_type"] = rettype
-        if args is not None:
-            out["arguments"] = args
+        # NOTE: emit these explicitly, using None when IDA has no type
+        # information for the function. Omitting the NotRequired keys makes the
+        # MCP output schema validator reject the whole response with
+        # "Output validation error: None is not of type 'string'". This only
+        # shows up through the stdio proxy (which validates output schemas),
+        # not when calling the raw IDA RPC endpoint, which makes it look like a
+        # consumer-side bug.
+        out["return_type"] = rettype if rettype else None
+        out["arguments"] = args if args is not None else None
 
         return {
             "addr": addr,

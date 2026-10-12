@@ -501,8 +501,10 @@ class DisassemblyFunction(TypedDict):
     name: str
     start_ea: str
     segment: NotRequired[str]
-    return_type: NotRequired[str]
-    arguments: NotRequired[list[Argument]]
+    # NOTE: declared Optional so the MCP output schema accepts an explicit
+    # null for functions that carry no type information in the database.
+    return_type: NotRequired[Optional[str]]
+    arguments: NotRequired[Optional[list[Argument]]]
     stack_frame: NotRequired[list[StackFrameVariable]]
     lines: list[DisassemblyLine]
 
@@ -1259,8 +1261,14 @@ def get_callees(addr: str) -> list[dict]:
                         if idaapi.get_func(target) is not None
                         else "external"
                     )
-                    func_name = idc.get_name(target)
-                    if func_name is not None:
+                    # NOTE: idc.get_name() returns "" (not None) for an unnamed
+                    # target, so `is not None` let empty names through. The
+                    # target may not even be inside a loaded segment
+                    # (is_loaded() false / flags 0), in which case it is not a
+                    # meaningful callee at all. Fall back to the containing
+                    # function name, then drop the entry if still unnamed.
+                    func_name = idc.get_name(target) or idc.get_func_name(target)
+                    if func_name:
                         callees.append(
                             {
                                 "addr": hex(target),
