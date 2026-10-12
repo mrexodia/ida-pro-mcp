@@ -18,13 +18,15 @@ class _FakeIdapro(types.ModuleType):
     def __init__(self):
         super().__init__("idapro")
         self.events: list[tuple] = []
+        self.close_saves: list[bool] = []
 
     def open_database(self, path, run_auto_analysis=False):
         self.events.append(("open", path))
         return 0  # 0 == success; the manager treats a truthy return as failure
 
-    def close_database(self, *args, **kwargs):
+    def close_database(self, save=True):
         self.events.append(("close",))
+        self.close_saves.append(save)
 
 
 class _FakeIdaAuto(types.ModuleType):
@@ -144,3 +146,24 @@ def test_close_all_sessions_invalidates_strings_cache(session_env, tmp_path):
     session_env.manager.close_all_sessions()
 
     assert session_env.spy.invalidations >= 1
+
+
+def test_closing_saves_database_by_default(session_env, tmp_path):
+    a = _make_binary(tmp_path, "a.bin")
+    b = _make_binary(tmp_path, "b.bin")
+    session_env.manager.open_binary(a, run_auto_analysis=False)
+    session_env.manager.open_binary(b, run_auto_analysis=False)  # switch closes a
+
+    session_env.manager.close_all_sessions()
+
+    assert session_env.idapro.close_saves == [True, True]
+
+
+def test_discard_on_close_closes_without_saving(session_env, tmp_path):
+    a = _make_binary(tmp_path, "a.bin")
+    session_env.manager.open_binary(a, run_auto_analysis=False)
+
+    session_env.manager.discard_on_close()
+    session_env.manager.close_all_sessions()
+
+    assert session_env.idapro.close_saves == [False]
