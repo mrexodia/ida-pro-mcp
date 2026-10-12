@@ -53,6 +53,7 @@ IDB_MANAGEMENT_TOOLS = {
     "idb_open",
     "idb_list",
     "idb_close",
+    "idb_discard",
 }
 
 def _env_float(name: str, default: float) -> float:
@@ -175,6 +176,7 @@ class IdalibCloseResult(TypedDict, total=False):
     owned: bool
     saved: bool | None
     save_error: str
+    discard_error: str
     message: str
     error: str
 
@@ -1116,6 +1118,17 @@ class IdalibSupervisor:
         session = self.peek_session(database)
         saved: bool | None = None
         save_error: str | None = None
+        discard_error: str | None = None
+        if not save and session.owned and session.is_alive():
+            # A busy worker still answers on its HTTP thread, so ask it too.
+            # On POSIX, SIGTERM makes the worker close its database, which
+            # saves by default.
+            try:
+                self.call_worker_tool(
+                    session, "idb_discard", timeout=WORKER_RPC_HEALTH_TIMEOUT_SEC
+                )
+            except Exception as e:
+                discard_error = str(e)
         if save and self._session_is_reachable(session):
             try:
                 result = self.call_worker_tool(session, "idb_save")
@@ -1131,9 +1144,8 @@ class IdalibSupervisor:
                 self._unregister_session_locked(database)
         self._terminate_worker(session)
         if saved and session.owned:
-            # The worker is SIGTERM'd without a clean close_database(), so the
-            # working files it unpacked stay behind; the save above already
-            # rewrote the packed database.
+            # Remove any working files the worker left behind; the save above
+            # already rewrote the packed database.
             self._cleanup_partial_database(session.input_path)
 
         info: IdalibCloseResult = {
@@ -1146,6 +1158,8 @@ class IdalibSupervisor:
         }
         if save_error is not None:
             info["save_error"] = save_error
+        if discard_error is not None:
+            info["discard_error"] = discard_error
         return info
 
     def _session_list_entry(self, session: WorkerSession) -> IdalibSessionListInfo:
