@@ -15,6 +15,7 @@ import ida_kernwin
 import ida_xref
 import ida_ua
 import ida_name
+import ida_idp
 from .rpc import OUTPUT_LIMIT_MAX_CHARS, tool
 from .sync import idasync, tool_timeout, IDAError
 from .utils import (
@@ -34,6 +35,7 @@ from .utils import (
     Function,
     get_callers,
     get_callees,
+    resolved_call_targets,
     extract_function_strings,
     extract_function_constants,
     Argument,
@@ -684,7 +686,10 @@ def _collect_basic_blocks_limited(
 def _collect_callees_for_function(func: ida_funcs.func_t) -> list[dict]:
     callees: dict[int, dict] = {}
     for item_ea in idautils.FuncItems(func.start_ea):
-        for target in idautils.CodeRefsFrom(item_ea, 0):
+        insn = _decode_insn_at(item_ea)
+        if insn is None:
+            continue
+        for target in resolved_call_targets(item_ea, insn):
             callee = idaapi.get_func(target)
             if not callee:
                 continue
@@ -710,7 +715,7 @@ def _collect_callers_for_function(func: ida_funcs.func_t) -> list[dict]:
 
         insn = idaapi.insn_t()
         idaapi.decode_insn(insn, caller_site)
-        if insn.itype not in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+        if not ida_idp.is_call_insn(insn):
             continue
 
         callers[caller_start] = {
@@ -1653,46 +1658,25 @@ def callees(
                     {"addr": fn_addr, "callees": None, "error": "No function found"}
                 )
                 continue
-            func_end = func.end_ea
             callees_dict = {}
             more = False
-            current_ea = func_start
-            while current_ea < func_end:
-                if len(callees_dict) >= limit:
-                    more = True
-                    break
+            for current_ea in idautils.FuncItems(func.start_ea):
                 insn = _decode_insn_at(current_ea)
                 if insn is None:
-                    next_ea = _next_head(current_ea, func_end)
-                    if next_ea == idaapi.BADADDR:
-                        break
-                    current_ea = next_ea
                     continue
-                if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
-                    op0 = insn.ops[0]
-                    if op0.type in (ida_ua.o_mem, ida_ua.o_near, ida_ua.o_far):
-                        target = op0.addr
-                    elif op0.type == ida_ua.o_imm:
-                        target = op0.value
-                    else:
-                        target = None
-                    if target is not None and target not in callees_dict:
-                        func_type = (
-                            "internal"
-                            if idaapi.get_func(target) is not None
-                            else "external"
-                        )
-                        func_name = ida_name.get_name(target)
-                        if func_name is not None:
-                            callees_dict[target] = {
-                                "addr": hex(target),
-                                "name": func_name,
-                                "type": func_type,
-                            }
-                next_ea = _next_head(current_ea, func_end)
-                if next_ea == idaapi.BADADDR:
+                for target in resolved_call_targets(current_ea, insn):
+                    if target in callees_dict:
+                        continue
+                    if len(callees_dict) >= limit:
+                        more = True
+                        break
+                    callees_dict[target] = {
+                        "addr": hex(target),
+                        "name": ida_name.get_name(target),
+                        "type": "internal" if idaapi.get_func(target) else "external",
+                    }
+                if more:
                     break
-                current_ea = next_ea
 
             results.append(
                 {
