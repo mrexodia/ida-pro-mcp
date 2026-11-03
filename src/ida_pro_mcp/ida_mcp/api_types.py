@@ -40,7 +40,7 @@ class DeclareTypeResult(TypedDict, total=False):
 
 class EnumMemberUpsertResult(TypedDict, total=False):
     name: str
-    value: int
+    value: int | str
     created: bool
     skipped: bool
     error: str

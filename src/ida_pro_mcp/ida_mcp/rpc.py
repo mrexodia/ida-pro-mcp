@@ -22,6 +22,52 @@ OUTPUT_CACHE_MAX_SIZE = 100
 _output_cache: dict[str, Any] = {}
 _DOWNLOAD_BASE_URL_DEFAULT = "http://127.0.0.1:13337"
 
+# JavaScript clients lose precision above this range and may turn the value
+# into a BigInt that cannot be serialized again (issue #510).
+JSON_SAFE_INT_MAX = 2**53 - 1
+
+
+def _json_safe_int(value: Any) -> Any:
+    """Recursively stringify integers outside the JSON/JS safe-integer range."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value if -JSON_SAFE_INT_MAX <= value <= JSON_SAFE_INT_MAX else str(value)
+    if isinstance(value, list):
+        return [_json_safe_int(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe_int(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe_int(item) for key, item in value.items()}
+    return value
+
+
+def _sanitize_response_ints(response: dict) -> dict:
+    """Keep structuredContent and its text mirror JSON/JS-safe."""
+    structured = response.get("structuredContent")
+    if structured is not None:
+        sanitized = _json_safe_int(structured)
+        if sanitized != structured:
+            response["structuredContent"] = sanitized
+
+    content = response.get("content")
+    if not isinstance(content, list):
+        return response
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            continue
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            continue
+        sanitized = _json_safe_int(parsed)
+        if sanitized != parsed:
+            block["text"] = json.dumps(sanitized, separators=(",", ":"))
+    return response
+
 
 def configured_download_base_url() -> Optional[str]:
     """The public base URL the operator configured (#383), None if unset.
@@ -175,7 +221,7 @@ def _install_tools_call_patch() -> None:
     def patched(
         name: str, arguments: Optional[dict] = None, _meta: Optional[dict] = None
     ) -> dict:
-        response = original(name, arguments, _meta)
+        response = _sanitize_response_ints(original(name, arguments, _meta))
         return _limit_output_response(response)
 
     MCP_SERVER.registry.methods["tools/call"] = patched
