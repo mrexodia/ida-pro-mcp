@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import TypedDict
 
@@ -36,6 +37,26 @@ class InstanceInfo(TypedDict, total=False):
     idb_path: str
     started_at: str
     backend: str  # "gui" or "worker"
+
+
+# A live instance's HTTP server can be momentarily busy, which makes a single
+# probe fail even though the instance is reachable. Only prune a registration
+# after this many consecutive failed probes; any successful probe resets it.
+_PROBE_FAILURES_BEFORE_PRUNE = 3
+_probe_failures: dict[str, int] = {}
+_probe_failures_lock = threading.Lock()
+
+
+def _record_probe_failure(file_path: str) -> int:
+    with _probe_failures_lock:
+        count = _probe_failures.get(file_path, 0) + 1
+        _probe_failures[file_path] = count
+        return count
+
+
+def _clear_probe_failure(file_path: str) -> None:
+    with _probe_failures_lock:
+        _probe_failures.pop(file_path, None)
 
 
 def _get_ida_user_dir() -> str:
@@ -157,6 +178,7 @@ def discover_instances() -> list[InstanceInfo]:
             with open(file_path, "r", encoding="utf-8") as f:
                 info: InstanceInfo = json.load(f)
         except (json.JSONDecodeError, OSError):
+            _clear_probe_failure(file_path)
             try:
                 os.unlink(file_path)
             except OSError:
@@ -164,6 +186,7 @@ def discover_instances() -> list[InstanceInfo]:
             continue
 
         if not all(k in info for k in ("host", "port", "pid")):
+            _clear_probe_failure(file_path)
             try:
                 os.unlink(file_path)
             except OSError:
@@ -175,6 +198,7 @@ def discover_instances() -> list[InstanceInfo]:
         info["host"] = _connectable_host(info["host"])
 
         if not is_pid_alive(info["pid"]):
+            _clear_probe_failure(file_path)
             try:
                 os.unlink(file_path)
             except OSError:
@@ -184,13 +208,20 @@ def discover_instances() -> list[InstanceInfo]:
         # Secondary check: verify the instance is actually listening.
         # Catches PID reuse (Windows can recycle PIDs quickly) and
         # cases where the process is alive but the server crashed.
+        # The PID is still alive, so a transient probe failure must not delete
+        # the registration: keep it and retry on the next discovery call.
         if not probe_instance(info["host"], info["port"], timeout=1.0):
+            if _record_probe_failure(file_path) < _PROBE_FAILURES_BEFORE_PRUNE:
+                continue
             try:
                 os.unlink(file_path)
             except OSError:
                 pass
+            else:
+                _clear_probe_failure(file_path)
             continue
 
+        _clear_probe_failure(file_path)
         result.append(info)
 
     result.sort(key=lambda x: x.get("started_at", ""))
