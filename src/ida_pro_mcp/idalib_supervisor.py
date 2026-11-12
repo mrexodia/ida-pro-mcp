@@ -1130,6 +1130,8 @@ class IdalibSupervisor:
             if self.sessions.get(database) is session:
                 self._unregister_session_locked(database)
         self._terminate_worker(session)
+        if session.owned and session.backend == "worker" and session.port:
+            _discovery.unregister_instance(session.port)
         if saved and session.owned:
             # The worker is SIGTERM'd without a clean close_database(), so the
             # working files it unpacked stay behind; the save above already

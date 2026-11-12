@@ -987,7 +987,7 @@ def test_handle_tools_call_reports_busy_on_worker_timeout(monkeypatch, tmp_path)
     assert "sample" in sup.sessions
 
 
-def test_list_sessions_reports_is_active_from_health_probe(tmp_path):
+def test_list_sessions_reports_is_active_from_health_probe(tmp_path, monkeypatch):
     first = tmp_path / "first.bin"
     second = tmp_path / "second.bin"
     first.write_bytes(b"1")
@@ -997,7 +997,7 @@ def test_list_sessions_reports_is_active_from_health_probe(tmp_path):
     sup.open_session(str(second), session_id="second")
 
     sup._session_is_reachable = lambda session: session.session_id == "first"
-    supmod._discovery.discover_instances = lambda: []
+    monkeypatch.setattr(supmod._discovery, "discover_instances", list)
 
     listed = {s["session_id"]: s["is_active"] for s in sup.list_sessions()}
     assert listed == {"first": True, "second": False}
@@ -1138,6 +1138,72 @@ def test_close_session_skips_save_when_unreachable(tmp_path):
     assert all(name != "idb_save" for name, _ in sup.tool_calls)
     assert "sample" not in sup.sessions
     assert session.process.returncode == 0
+
+
+def _patch_discovery_registry(tmp_path, monkeypatch, *, pid=4242):
+    instances_dir = tmp_path / "instances"
+    monkeypatch.setattr(
+        supmod._discovery, "get_instances_dir", lambda: str(instances_dir)
+    )
+    monkeypatch.setattr(supmod._discovery, "is_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        supmod._discovery, "probe_instance", lambda *_args, **_kwargs: True
+    )
+    return pid
+
+
+def test_close_session_unregisters_owned_worker_from_discovery(tmp_path, monkeypatch):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    pid = _patch_discovery_registry(tmp_path, monkeypatch)
+
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+    supmod._discovery.register_instance(
+        session.host,
+        session.port,
+        pid,
+        "sample.bin",
+        str(sample.resolve()),
+        backend="worker",
+    )
+    assert [i["port"] for i in supmod._discovery.discover_instances()] == [session.port]
+
+    sup.close_session("sample", save=False)
+
+    assert supmod._discovery.discover_instances() == []
+    assert sup.list_sessions() == []
+
+
+def test_close_session_keeps_adopted_worker_registered(tmp_path, monkeypatch):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    pid = _patch_discovery_registry(tmp_path, monkeypatch)
+
+    sup = _FakeSupervisor()
+    adopted = supmod.WorkerSession(
+        session_id="adopted",
+        input_path=str(sample.resolve()),
+        filename="sample.bin",
+        host="127.0.0.1",
+        port=31337,
+        process=_FakeProcess(),
+        owned=False,
+    )
+    with sup._lock:
+        sup._register_session_locked(adopted, str(sample.resolve()))
+    supmod._discovery.register_instance(
+        "127.0.0.1",
+        31337,
+        pid,
+        "sample.bin",
+        str(sample.resolve()),
+        backend="worker",
+    )
+
+    sup.close_session("adopted", save=False)
+
+    assert [i["port"] for i in supmod._discovery.discover_instances()] == [31337]
 
 
 def test_idb_close_tool_returns_error_for_unknown_session():
