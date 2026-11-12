@@ -169,6 +169,15 @@ def test_analyze_function_crackme_check_pw():
     assert result["basic_blocks"]["count"] >= 1
 
 
+@test(binary="typed_fixture_arm64.macho")
+def test_analyze_function_arm64_callees_callers():
+    """analyze_function reports BL callees and callers on an AArch64 database."""
+    result = analyze_function("_use_wrapper")
+    assert result["error"] is None
+    assert result["callees"] == ["_sum_point"]
+    assert result["callers"] == ["_main"]
+
+
 # ============================================================================
 # analyze_component tests
 # ============================================================================

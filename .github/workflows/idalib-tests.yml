@@ -51,3 +51,4 @@ jobs:
         run: |
           uv run ida-mcp-test tests/crackme03.elf -q
           uv run ida-mcp-test tests/typed_fixture.elf -q
+          uv run ida-mcp-test tests/typed_fixture_arm64.macho -p "*arm64*" -q

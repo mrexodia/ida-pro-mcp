@@ -1250,7 +1250,7 @@ def get_callees(addr: str) -> list[dict]:
         while current_ea < func_end:
             insn = idaapi.insn_t()
             idaapi.decode_insn(insn, current_ea)
-            if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+            if idaapi.is_call_insn(insn):
                 target = idc.get_operand_value(current_ea, 0)
                 target_type = idc.get_operand_type(current_ea, 0)
                 if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
@@ -1292,11 +1292,7 @@ def get_callers(addr: str, limit: int = 50) -> list[Function]:
                 continue
             insn = idaapi.insn_t()
             idaapi.decode_insn(insn, caller_addr)
-            if insn.itype not in [
-                idaapi.NN_call,
-                idaapi.NN_callfi,
-                idaapi.NN_callni,
-            ]:
+            if not idaapi.is_call_insn(insn):
                 continue
             callers[func["addr"]] = func
 
