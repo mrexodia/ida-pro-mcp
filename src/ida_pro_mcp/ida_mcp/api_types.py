@@ -166,8 +166,8 @@ def declare_type(
 
     for decl in decls:
         try:
-            flags = ida_typeinf.PT_SIL | ida_typeinf.PT_EMPTY | ida_typeinf.PT_TYP
-            errors, messages = parse_decls_ctypes(decl, flags)
+            hti_flags = ida_typeinf.HTI_PAKDEF
+            errors, messages = parse_decls_ctypes(decl, hti_flags)
 
             pretty_messages = "\n".join(messages)
             if errors > 0:
