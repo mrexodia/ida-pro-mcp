@@ -92,6 +92,32 @@ def test_declare_type_invalid_declaration():
 
 
 @test()
+def test_declare_type_uses_default_struct_packing():
+    """declare_type does not force #pragma pack(2) onto parsed structs."""
+    import ida_typeinf
+
+    decl = "struct __DefaultPackTest__ { char a; int b; };"
+    expected = ida_typeinf.tinfo_t()
+    assert (
+        ida_typeinf.parse_decl(
+            expected, None, decl, ida_typeinf.PT_SIL | ida_typeinf.PT_TYP
+        )
+        is not None
+    )
+
+    result = declare_type(decl)
+    assert_is_list(result, min_length=1)
+    assert_ok(result[0])
+
+    actual = ida_typeinf.tinfo_t()
+    assert actual.get_named_type(None, "__DefaultPackTest__")
+    udt = ida_typeinf.udt_type_data_t()
+    assert actual.get_udt_details(udt)
+    assert udt.pack == 0
+    assert actual.get_size() == expected.get_size()
+
+
+@test()
 def test_read_struct_returns_named_members():
     """read_struct returns the declared member layout for the deterministic test struct."""
     if not create_test_struct(TEST_STRUCT_NAME):
