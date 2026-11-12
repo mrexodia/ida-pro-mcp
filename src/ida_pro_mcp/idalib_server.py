@@ -56,11 +56,16 @@ class IdalibListResult(TypedDict, total=False):
     error: str
 
 
+class IdalibDiscardResult(TypedDict):
+    success: bool
+
+
 logger = logging.getLogger(__name__)
 
 IDB_MANAGEMENT_TOOLS = {
     "idb_open",
     "idb_list",
+    "idb_discard",
 }
 
 
@@ -174,6 +179,14 @@ def idb_list() -> IdalibListResult:
         return {"sessions": sessions, "count": len(sessions)}
     except Exception as e:
         return {"error": f"Failed to list sessions: {e}"}
+
+
+@tool
+def idb_discard() -> IdalibDiscardResult:
+    """Close the database without saving when this worker shuts down."""
+
+    get_session_manager().discard_on_close()
+    return {"success": True}
 
 
 def _install_dispatch_hook() -> None:

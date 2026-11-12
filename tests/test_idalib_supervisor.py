@@ -1034,6 +1034,88 @@ def test_close_session_without_save_skips_idb_save(tmp_path):
     assert session.process.returncode == 0
 
 
+def test_close_session_without_save_arms_discard_before_terminate(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+    states: list[object] = []
+    call_worker_tool = sup.call_worker_tool
+
+    def recording_call(worker, name, arguments=None, *, timeout=None):
+        if name == "idb_discard":
+            states.append(worker.process.returncode)
+        return call_worker_tool(worker, name, arguments, timeout=timeout)
+
+    sup.call_worker_tool = recording_call
+
+    result = sup.close_session("sample", save=False)
+
+    assert ("idb_discard", None) in sup.tool_calls
+    assert states == [None]  # armed while the worker was still running
+    assert session.process.returncode == 0
+    assert "discard_error" not in result
+
+
+def test_close_session_with_save_does_not_arm_discard(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    sup.open_session(str(sample), session_id="sample")
+
+    sup.close_session("sample", save=True)
+
+    assert all(name != "idb_discard" for name, _ in sup.tool_calls)
+
+
+def test_close_session_reports_discard_error_and_still_terminates(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+    call_worker_tool = sup.call_worker_tool
+
+    def failing_call(worker, name, arguments=None, *, timeout=None):
+        if name == "idb_discard":
+            raise RuntimeError("Unknown tool: idb_discard")
+        return call_worker_tool(worker, name, arguments, timeout=timeout)
+
+    sup.call_worker_tool = failing_call
+
+    result = sup.close_session("sample", save=False)
+
+    assert result["success"] is True
+    assert result["discard_error"] == "Unknown tool: idb_discard"
+    assert "sample" not in sup.sessions
+    assert session.process.returncode == 0
+
+
+def test_close_session_arms_discard_for_busy_worker(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+    sup._session_is_reachable = lambda _session: False  # alive, but ping times out
+
+    sup.close_session("sample", save=False)
+
+    assert ("idb_discard", None) in sup.tool_calls
+    assert session.process.returncode == 0
+
+
+def test_close_session_does_not_arm_discard_for_dead_worker(tmp_path):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"x")
+    sup = _FakeSupervisor()
+    session = sup.open_session(str(sample), session_id="sample")
+    session.process = _DeadProcess()
+
+    result = sup.close_session("sample", save=False)
+
+    assert all(name != "idb_discard" for name, _ in sup.tool_calls)
+    assert "discard_error" not in result
+
+
 def test_close_session_unknown_session_raises():
     sup = _FakeSupervisor()
     try:
@@ -1071,6 +1153,7 @@ def test_close_session_detaches_adopted_worker_without_killing(tmp_path):
     result = sup.close_session("adopted", save=False)
 
     assert result["owned"] is False
+    assert all(name != "idb_discard" for name, _ in sup.tool_calls)
     assert "adopted" not in sup.sessions
     assert sup.path_to_session == {}
     assert adopted.process.returncode is None
@@ -1168,7 +1251,12 @@ def test_supervisor_uses_idb_prefixed_management_tools_only():
         "idalib_warmup",
         "idalib_health",
     }
-    assert supmod.IDB_MANAGEMENT_TOOLS == {"idb_open", "idb_list", "idb_close"}
+    assert supmod.IDB_MANAGEMENT_TOOLS == {
+        "idb_open",
+        "idb_list",
+        "idb_close",
+        "idb_discard",
+    }
     for name in legacy:
         assert not hasattr(supmod, name), f"{name} should have been deleted"
     for typename in ("IdalibWarmupResult", "IdalibHealthResult"):
