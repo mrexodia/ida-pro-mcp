@@ -296,6 +296,45 @@ def idasync(f):
     return wrapper
 
 
+# ============================================================================
+# Mutation serialization
+# ============================================================================
+#
+# @idasync already funnels every call through idaapi.execute_sync(MFF_WRITE),
+# which the IDA kernel serializes onto its single GUI thread. But a burst of
+# ~15 parallel JSON-RPC mutations still queues 15 execute_sync requests at
+# once, and under contention we've seen stray calls time out before IDA can
+# drain the queue (the server-side symptom users see is WinError 10061 /
+# "plugin needs restart"). _mutation_lock is a cheap second-level guard that
+# admits mutation requests to execute_sync one at a time, so the queue stays
+# short and no caller waits behind more than one in-flight write.
+# Reads bypass the lock entirely and remain fully parallel.
+
+_mutation_lock = threading.Lock()
+
+
+def mutation(f):
+    """Serialize this mutation RPC behind _mutation_lock.
+
+    Apply ABOVE @idasync (listed BEFORE it in the decorator stack) so the
+    lock is acquired on the requesting JSON-RPC thread, *before* we block
+    on execute_sync. Holding the lock inside the sync body would pin IDA's
+    GUI thread and defeat the purpose.
+
+        @tool
+        @mutation            # outer: serializes on request thread
+        @idasync             # inner: dispatches onto IDA main thread
+        def rename(...): ...
+    """
+
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        with _mutation_lock:
+            return f(*args, **kwargs)
+
+    return wrapper
+
+
 def tool_timeout(seconds: float):
     """Decorator to override per-tool timeout (seconds).
 

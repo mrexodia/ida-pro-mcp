@@ -14,7 +14,7 @@ import ida_ua
 
 from .compat import tinfo_get_udm
 from .rpc import tool
-from .sync import idasync, IDAError
+from .sync import idasync, mutation, IDAError
 from .utils import (
     parse_address,
     decompile_checked,
@@ -112,6 +112,7 @@ class BookmarkResult(TypedDict, total=False):
 
 
 @tool
+@mutation
 @idasync
 def add_bookmark(
     addr: Annotated[str, "Address to bookmark"],
@@ -160,6 +161,7 @@ def add_bookmark(
 
 
 @tool
+@mutation
 @idasync
 def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
     """Set comments at addresses (both disassembly and decompiler views)"""
@@ -240,6 +242,7 @@ def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
 
 
 @tool
+@mutation
 @idasync
 def append_comments(
     items: list[CommentAppendOp] | CommentAppendOp,
@@ -322,6 +325,7 @@ def _append_comment_text(current: str, new_text: str, *, dedupe: bool) -> tuple[
 
 
 @tool
+@mutation
 @idasync
 def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[PatchAsmResult]:
     """Patch assembly instructions at addresses"""
@@ -385,9 +389,16 @@ def rename_at_ea(
     if dry_run:
         return True, None
 
-    flags = idaapi.SN_CHECK
+    # SN_NOWARN suppresses IDA's modal "name already in use" dialog that would
+    # otherwise block the main thread when a collision slips past the pre-check
+    # above (e.g. races between concurrent renames, or placeholder names that
+    # resolve to the same symbol). Pair with SN_FORCE when the caller opted
+    # into overwrite so a surviving collision resolves non-interactively.
+    _SN_NOWARN = int(getattr(idaapi, "SN_NOWARN", 0))
+    _SN_FORCE = int(getattr(idaapi, "SN_FORCE", 0))
+    flags = idaapi.SN_CHECK | _SN_NOWARN
     if allow_overwrite:
-        flags = idaapi.SN_CHECK | int(getattr(idaapi, "SN_FORCE", 0))
+        flags |= _SN_FORCE
     ok = idaapi.set_name(ea, new_name, flags)
     if not ok:
         return (
@@ -399,6 +410,7 @@ def rename_at_ea(
 
 
 @tool
+@mutation
 @idasync
 def rename(
     batch: Annotated[
@@ -903,6 +915,7 @@ def rename(
 
 
 @tool
+@mutation
 @idasync
 def define_func(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
     """Define functions; IDA infers bounds unless end is provided."""
@@ -955,6 +968,7 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
 
 
 @tool
+@mutation
 @idasync
 def define_code(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
     """Convert bytes to code instruction(s) at address(es)."""
@@ -987,6 +1001,7 @@ def define_code(items: list[DefineOp] | DefineOp) -> list[DefineResult]:
 
 
 @tool
+@mutation
 @idasync
 def undefine(items: list[UndefineOp] | UndefineOp) -> list[DefineResult]:
     """Undefine item(s) at address(es), converting back to raw bytes."""
@@ -1052,6 +1067,7 @@ class ForceRecompileResult(TypedDict, total=False):
 
 
 @tool
+@mutation
 @idasync
 def force_recompile(
     items: Annotated[
@@ -1140,6 +1156,7 @@ _OP_FORMAT_FLAGS = {
 
 
 @tool
+@mutation
 @idasync
 def set_op_type(
     items: Annotated[
@@ -1239,6 +1256,7 @@ class MakeDataResult(TypedDict, total=False):
 
 
 @tool
+@mutation
 @idasync
 def make_data(
     items: Annotated[
@@ -1301,7 +1319,14 @@ def make_data(
                 idc.SetType(ea, decl)
 
             if name:
-                ida_name.set_name(ea, name, ida_name.SN_NOCHECK | ida_name.SN_FORCE)
+                # SN_NOWARN keeps a stale/duplicate name from popping a modal
+                # that would block IDA's main thread (and hang this RPC).
+                _nowarn = int(getattr(ida_name, "SN_NOWARN", 0))
+                ida_name.set_name(
+                    ea,
+                    name,
+                    ida_name.SN_NOCHECK | ida_name.SN_FORCE | _nowarn,
+                )
 
             # Mark all dependent decompiles dirty so subsequent decompile() gets fresh output.
             ida_hexrays.clear_cached_cfuncs()

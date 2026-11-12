@@ -222,6 +222,42 @@ def py_eval(
 @tool
 @idasync
 @unsafe
+def exec_idapython(
+    code: Annotated[str, "Python code to run inside IDA via execute_sync"],
+) -> str:
+    """Run arbitrary Python inside IDA's main thread and return captured stdout.
+
+    Thin convenience wrapper over py_eval that eliminates the SendKeys-based
+    "File > Script file" workflow: pass a code string, get its printed output
+    back as a plain string (stderr/traceback is appended on failure). Use
+    py_eval instead when you need Jupyter-style persistence of locals or the
+    structured result/stdout/stderr dict.
+    """
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+
+    try:
+        sys.stdout = stdout_capture
+        sys.stderr = stderr_capture
+        exec_globals = _make_exec_globals()
+        exec_globals["__name__"] = "__main__"
+        try:
+            exec(compile(code, "<exec_idapython>", "exec"), exec_globals)
+        except Exception:
+            import traceback
+
+            traceback.print_exc()
+        return stdout_capture.getvalue() + stderr_capture.getvalue()
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+
+
+@tool
+@idasync
+@unsafe
 def py_exec_file(
     file_path: Annotated[str, "Absolute path to a Python script to execute"],
 ) -> PythonExecResult:
