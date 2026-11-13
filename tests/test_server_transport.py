@@ -148,5 +148,33 @@ class DispatchProxyTransportTests(unittest.TestCase):
         self.assertEqual(_ConnectFailureConnection.instances[0].request_calls, 1)
 
 
+class DispatchProxyMalformedRequestTests(unittest.TestCase):
+    MALFORMED_REQUESTS = (
+        b'{"jsonrpc":"2.0","id":1}',
+        b'["a","b"]',
+        b"not json",
+        b'{"jsonrpc":"2.0","id":1,"method":5}',
+    )
+
+    def test_malformed_requests_return_json_rpc_errors_instead_of_raising(self):
+        for payload in self.MALFORMED_REQUESTS:
+            with self.subTest(payload=payload):
+                with patch("ida_pro_mcp.server._proxy_to_ida") as proxy:
+                    response = server.dispatch_proxy(payload)
+                proxy.assert_not_called()
+                self.assertIsNotNone(response)
+                self.assertIn("error", response)
+                self.assertIn(response["error"]["code"], (-32600, -32700))
+
+    def test_valid_request_still_reaches_ida(self):
+        sentinel = {"jsonrpc": "2.0", "result": {"ok": True}, "id": 1}
+        with patch("ida_pro_mcp.server._proxy_to_ida", return_value=sentinel) as proxy:
+            response = server.dispatch_proxy(
+                b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+            )
+        proxy.assert_called_once()
+        self.assertIs(response, sentinel)
+
+
 if __name__ == "__main__":
     unittest.main()
