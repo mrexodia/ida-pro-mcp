@@ -686,13 +686,12 @@ def normalize_dict_list(
         str → split by ',' → list[str] → map(string_parser) → list[dict]
         list[str] → map(string_parser) → list[dict]
         list[dict] → list[dict]
+        [] → [] (an empty batch is zero items, not one empty item)
         Any → [{}]
     """
     if isinstance(value, dict):
         return [value]
     elif isinstance(value, list):
-        if not value:
-            return [{}]
         # Check if list[str] or list[dict]
         if all(isinstance(item, dict) for item in value):
             return value

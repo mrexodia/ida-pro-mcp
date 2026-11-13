@@ -69,6 +69,14 @@ def test_utils_normalize_helpers():
 
 
 @test(binary="crackme03.elf")
+def test_utils_normalize_helpers_empty_batch():
+    """An empty batch normalizes to zero items, not one phantom empty item."""
+    assert normalize_list_input([]) == []
+    assert normalize_dict_list([]) == []
+    assert normalize_dict_list([], lambda s: {"v": s}) == []
+
+
+@test(binary="crackme03.elf")
 def test_utils_get_function_and_prototype():
     """get_function and get_prototype resolve structured function metadata."""
     import idaapi
