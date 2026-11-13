@@ -25,6 +25,9 @@ import ida_kernwin
 import ida_nalt
 import ida_typeinf
 import idaapi
+import ida_idp
+import ida_xref
+import ida_ua
 import idautils
 import idc
 
@@ -1237,44 +1240,43 @@ def get_all_comments(ea: int) -> dict:
     return comments
 
 
-def get_callees(addr: str) -> list[dict]:
-    """Get callees for a single function address"""
-    try:
-        func_start = parse_address(addr)
-        func = idaapi.get_func(func_start)
-        if not func:
-            return []
-        func_end = idc.find_func_end(func_start)
-        callees: list[dict[str, str]] = []
-        current_ea = func_start
-        while current_ea < func_end:
-            insn = idaapi.insn_t()
-            idaapi.decode_insn(insn, current_ea)
-            if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
-                target = idc.get_operand_value(current_ea, 0)
-                target_type = idc.get_operand_type(current_ea, 0)
-                if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
-                    func_type = (
-                        "internal"
-                        if idaapi.get_func(target) is not None
-                        else "external"
-                    )
-                    func_name = idc.get_name(target)
-                    if func_name is not None:
-                        callees.append(
-                            {
-                                "addr": hex(target),
-                                "name": func_name,
-                                "type": func_type,
-                            }
-                        )
-            current_ea = idc.next_head(current_ea, func_end)
+def resolved_call_targets(ea: int, insn) -> list[int]:
+    """Resolve call edges without using processor-specific instruction enums.
 
-        unique_callee_tuples = {tuple(callee.items()) for callee in callees}
-        unique_callees = [dict(callee) for callee in unique_callee_tuples]
-        return unique_callees
-    except Exception:
+    Plain jumps, fallthrough edges and unresolved register/memory operands do
+    not establish direct callees. A direct near/far operand is authoritative
+    when IDA has not emitted a call xref yet.
+    """
+    if not ida_idp.is_call_insn(insn):
         return []
+    targets = {
+        ref.to for ref in idautils.XrefsFrom(ea, 0)
+        if ref.iscode and ref.type in (ida_xref.fl_CN, ida_xref.fl_CF)
+    }
+    if not targets and insn.ops[0].type in (ida_ua.o_near, ida_ua.o_far):
+        targets.add(insn.ops[0].addr)
+    return sorted(targets)
+
+
+def get_callees(addr: str) -> list[dict]:
+    """Return resolved callees, retaining lookup/decode failures as errors."""
+    func = idaapi.get_func(parse_address(addr))
+    if not func:
+        raise IDAError(f"No function found at {addr}")
+    callees = {}
+    for ea in idautils.FuncItems(func.start_ea):
+        insn = idaapi.insn_t()
+        if idaapi.decode_insn(insn, ea) <= 0:
+            if ida_bytes.is_code(ida_bytes.get_full_flags(ea)):
+                raise IDAError(f"Unable to decode call-site candidate at {hex(ea)}")
+            continue
+        for target in resolved_call_targets(ea, insn):
+            callees[target] = {
+                "addr": hex(target),
+                "name": idc.get_name(target),
+                "type": "internal" if idaapi.get_func(target) else "external",
+            }
+    return [callees[target] for target in sorted(callees)]
 
 
 def get_callers(addr: str, limit: int = 50) -> list[Function]:
@@ -1292,17 +1294,13 @@ def get_callers(addr: str, limit: int = 50) -> list[Function]:
                 continue
             insn = idaapi.insn_t()
             idaapi.decode_insn(insn, caller_addr)
-            if insn.itype not in [
-                idaapi.NN_call,
-                idaapi.NN_callfi,
-                idaapi.NN_callni,
-            ]:
+            if not ida_idp.is_call_insn(insn):
                 continue
             callers[func["addr"]] = func
 
         return list(callers.values())
-    except Exception:
-        return []
+    except Exception as error:
+        raise IDAError(f"Caller collection failed for {addr}: {error}") from error
 
 
 def get_xrefs_from_internal(ea: int) -> list[Xref]:
