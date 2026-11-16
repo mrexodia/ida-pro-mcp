@@ -21,10 +21,36 @@ _ALT_PERSIST = 1  # altval index for the "save host/port" preference
 _SUP_HOST = 0  # supval index for the persisted host
 
 
+def is_idb_config_trusted() -> bool:
+    """Check if the user has opted in to trust security-sensitive configuration
+    stored inside IDB netnodes (e.g. autostart, unrestricted CORS policy).
+    Defaults to False to prevent untrusted .idb files from executing actions
+    or exposing local endpoints automatically on file open.
+    """
+    import os
+
+    return os.environ.get("IDA_MCP_TRUST_IDB_CONFIG", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def _get_autostart() -> bool:
-    """Read the autostart preference from the IDB. Defaults to True."""
+    """Read the autostart preference from the IDB. Defaults to True.
+
+    If autostart is explicitly enabled via the IDB netnode, requires
+    IDA_MCP_TRUST_IDB_CONFIG=1 to prevent untrusted IDBs from triggering
+    server startup automatically on file open.
+    """
     node = ida_netnode.netnode(NETNODE_AUTOSTART)
     val = node.altval(0)  # 0 = not set, 1 = off, 2 = on
+    if val == 2 and not is_idb_config_trusted():
+        print(
+            "[MCP] Autostart setting stored in IDB netnode ignored for security. "
+            "Set IDA_MCP_TRUST_IDB_CONFIG=1 to trust IDB configuration."
+        )
+        return False
     return val != 1
 
 

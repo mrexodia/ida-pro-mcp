@@ -77,9 +77,31 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
 DEFAULT_CORS_POLICY = "local"
 
 
+def is_idb_config_trusted() -> bool:
+    """Check if the user has opted in to trust security-sensitive configuration
+    stored inside IDB netnodes (e.g. autostart, unrestricted CORS policy).
+    Defaults to False to prevent untrusted .idb files from weakening CORS.
+    """
+    import os
+
+    return os.environ.get("IDA_MCP_TRUST_IDB_CONFIG", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def get_cors_policy(port: int) -> str:
     """Retrieve the current CORS policy from configuration."""
-    match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
+    policy = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
+    if policy == "unrestricted" and not is_idb_config_trusted():
+        logger.warning(
+            "CORS policy 'unrestricted' stored in IDB netnode ignored for security. "
+            "Falling back to %r. Set IDA_MCP_TRUST_IDB_CONFIG=1 to trust IDB configuration.",
+            DEFAULT_CORS_POLICY,
+        )
+        policy = DEFAULT_CORS_POLICY
+    match policy:
         case "unrestricted":
             return "*"
         case "local":
@@ -99,7 +121,15 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
         self.update_cors_policy()
 
     def update_cors_policy(self):
-        match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
+        policy = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
+        if policy == "unrestricted" and not is_idb_config_trusted():
+            logger.warning(
+                "CORS policy 'unrestricted' stored in IDB netnode ignored for security. "
+                "Falling back to %r. Set IDA_MCP_TRUST_IDB_CONFIG=1 to trust IDB configuration.",
+                DEFAULT_CORS_POLICY,
+            )
+            policy = DEFAULT_CORS_POLICY
+        match policy:
             case "unrestricted":
                 self.mcp_server.cors_allowed_origins = "*"
             case "local":
@@ -243,6 +273,8 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
     def _handle_config_get(self):
         """Sends the configuration page with checkboxes."""
         cors_policy = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
+        if cors_policy == "unrestricted" and not is_idb_config_trusted():
+            cors_policy = DEFAULT_CORS_POLICY
 
         body = """<html>
 <head>
