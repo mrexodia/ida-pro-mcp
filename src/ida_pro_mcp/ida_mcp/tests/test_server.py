@@ -233,6 +233,25 @@ def test_unsafe_tools_present_when_opted_in():
 
 
 @test()
+def test_unsafe_opt_in_is_fail_safe():
+    """Only an explicit truthy value opts in; "off", typos and unknown stay disabled."""
+    from .. import http as _http
+
+    prev = os.environ.get(_http.MCP_UNSAFE_ENV)
+    try:
+        for val in ("off", "maybe", "disable", "2", "truee"):
+            os.environ[_http.MCP_UNSAFE_ENV] = val
+            gated = _http.gate_unsafe_tools(dict(_http.ORIGINAL_TOOLS))
+            leaked = MCP_UNSAFE & set(gated)
+            assert not leaked, f"{val!r} must not enable unsafe tools, leaked: {leaked}"
+    finally:
+        if prev is None:
+            os.environ.pop(_http.MCP_UNSAFE_ENV, None)
+        else:
+            os.environ[_http.MCP_UNSAFE_ENV] = prev
+
+
+@test()
 def test_unsafe_tools_hidden_after_removal():
     """tools/list should exclude tools removed from the registry (idalib --unsafe behavior)."""
     with _saved_tools():

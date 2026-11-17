@@ -57,7 +57,9 @@ MCP_UNSAFE_ENV = "IDA_MCP_UNSAFE"
 
 
 def unsafe_tools_enabled() -> bool:
-    return os.environ.get(MCP_UNSAFE_ENV, "").strip().lower() not in ("", "0", "false", "no")
+    # fail-safe: only an explicit truthy opt-in enables the @unsafe tools; any
+    # other value (including "off", typos, or unknown strings) stays disabled.
+    return os.environ.get(MCP_UNSAFE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def gate_unsafe_tools(methods: dict) -> dict:
