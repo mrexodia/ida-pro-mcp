@@ -1,6 +1,7 @@
 import html
 import json
 import logging
+import os
 import re
 import ida_netnode
 from urllib.parse import urlparse, parse_qs
@@ -48,6 +49,39 @@ def config_json_set(key: str, value):
     node.setblob(json_blob, 0, "C")
 
 
+# Opt-in for the @unsafe (code-execution) tools in the IDA-plugin entry point,
+# mirroring idalib_server's --unsafe flag. Off by default: a connected agent
+# should not get py_eval / py_exec_file out of the box, because the content of
+# an analyzed (untrusted) sample can steer the agent into calling them.
+MCP_UNSAFE_ENV = "IDA_MCP_UNSAFE"
+
+
+def unsafe_tools_enabled() -> bool:
+    # fail-safe: only an explicit truthy opt-in enables the @unsafe tools; any
+    # other value (including "off", typos, or unknown strings) stays disabled.
+    return os.environ.get(MCP_UNSAFE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def gate_unsafe_tools(methods: dict) -> dict:
+    """Drop @unsafe tools from a registry mapping unless the opt-in is set.
+
+    This is the plugin-side equivalent of the gate idalib_server already applies,
+    so both entry points agree on an off-by-default for code-execution tools.
+    """
+    if unsafe_tools_enabled():
+        return methods
+    removed = [name for name in methods if name in MCP_UNSAFE]
+    for name in removed:
+        methods.pop(name, None)
+    if removed:
+        logger.info(
+            "Unsafe tools disabled (set %s=1 to enable): %s",
+            MCP_UNSAFE_ENV,
+            ", ".join(sorted(removed)),
+        )
+    return methods
+
+
 def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
     """Changed to registry to enable configured tools, returns original tools."""
     original_tools = registry.methods.copy()
@@ -68,9 +102,9 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
     if enabled_tools != original_enabled_tools:
         config_json_set(config_key, enabled_tools)
 
-    registry.methods = {
+    registry.methods = gate_unsafe_tools({
         name: func for name, func in original_tools.items() if enabled_tools.get(name)
-    }
+    })
     return original_tools
 
 
@@ -439,11 +473,11 @@ input[type="submit"]:hover {
             enabled_tools = {name: name in whitelist for name in ORIGINAL_TOOLS.keys()}
         else:
             enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS.keys()}
-        self.mcp_server.tools.methods = {
+        self.mcp_server.tools.methods = gate_unsafe_tools({
             name: func
             for name, func in ORIGINAL_TOOLS.items()
             if enabled_tools.get(name)
-        }
+        })
         config_json_set("enabled_tools", enabled_tools)
 
         # Redirect back to the config page. No body follows, but under
