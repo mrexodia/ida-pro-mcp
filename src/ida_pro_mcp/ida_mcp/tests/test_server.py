@@ -203,11 +203,33 @@ def test_unsafe_tools_registered():
 
 
 @test()
-def test_unsafe_tools_present_by_default():
-    """Unsafe tools should be in the registry by default (plugin behavior)."""
+def test_unsafe_tools_absent_by_default():
+    """Unsafe tools must NOT be in the registry by default in the plugin entry point.
+
+    They are opt-in via IDA_MCP_UNSAFE, mirroring idalib_server's --unsafe gate, so
+    content from an analyzed (untrusted) sample cannot reach py_eval out of the box.
+    """
     tool_names = set(MCP_SERVER.tools.methods)
     for name in ("py_eval", "py_exec_file"):
-        assert name in tool_names, f"{name} should be present by default"
+        assert name not in tool_names, f"{name} must be off by default"
+
+
+@test()
+def test_unsafe_tools_present_when_opted_in():
+    """With IDA_MCP_UNSAFE set, the gate keeps the @unsafe tools."""
+    from .. import http as _http
+
+    prev = os.environ.get(_http.MCP_UNSAFE_ENV)
+    os.environ[_http.MCP_UNSAFE_ENV] = "1"
+    try:
+        gated = _http.gate_unsafe_tools(dict(_http.ORIGINAL_TOOLS))
+        for name in ("py_eval", "py_exec_file"):
+            assert name in gated, f"{name} should be present when opted in"
+    finally:
+        if prev is None:
+            os.environ.pop(_http.MCP_UNSAFE_ENV, None)
+        else:
+            os.environ[_http.MCP_UNSAFE_ENV] = prev
 
 
 @test()
