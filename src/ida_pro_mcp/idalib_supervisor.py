@@ -1300,7 +1300,7 @@ def idb_open(
     init_hexrays: Annotated[bool, "Initialize Hex-Rays decompiler after open"] = True,
     idle_ttl_sec: Annotated[
         int,
-        "Minimum idle TTL in seconds before the headless worker self-exits.",
+        "Minimum idle TTL in seconds before the headless worker self-exits (0 disables the timeout).",
     ] = 600,
     preferred_session_id: Annotated[
         str, "Preferred session ID (auto-generated if empty). Ignored if the file is already open in a GUI or worker session."
@@ -1492,8 +1492,18 @@ def main() -> None:
         default=_env_int("IDA_MCP_MAX_WORKERS", 4),
         help="Maximum simultaneous idalib worker databases (0 = unlimited, default: 4).",
     )
+    parser.add_argument(
+        "--idle-timeout",
+        type=int,
+        default=os.environ.get("IDA_MCP_IDLE_TIMEOUT", "600"),
+        metavar="SECONDS",
+        help="Idle timeout for a new worker opened from the initial input path (0 = disabled, default: 600).",
+    )
     parser.add_argument("input_path", type=Path, nargs="?", help="Optional binary to open on startup.")
     args = parser.parse_args()
+
+    if args.idle_timeout < 0:
+        parser.error("--idle-timeout must be 0 or greater")
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
 
@@ -1515,7 +1525,7 @@ def main() -> None:
 
     if args.input_path is not None:
         try:
-            supervisor.open_session(str(args.input_path))
+            supervisor.open_session(str(args.input_path), idle_ttl_sec=args.idle_timeout)
         except Exception as e:
             raise SystemExit(f"Failed to open initial binary: {e}")
 
