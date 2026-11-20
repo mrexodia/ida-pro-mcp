@@ -241,15 +241,11 @@ def main():
 
     session_manager = get_session_manager()
 
+    initial_target: Path | None = None
     if args.input_path is not None:
         if not args.input_path.exists():
             raise FileNotFoundError(f"Input file not found: {args.input_path}")
-
-        logger.info("opening initial database: %s", args.input_path)
-        resolved = args.input_path.resolve()
-        session_id = session_manager.open_binary(resolved, run_auto_analysis=True)
-        logger.info("Initial session created: %s", session_id)
-        _register_in_discovery(args.host, args.port, resolved)
+        initial_target = args.input_path.resolve()
     else:
         logger.info(
             "No initial binary specified. Use idb_open() to load binaries dynamically."
@@ -332,6 +328,37 @@ def main():
             threaded=True,
             request_handler=IdaMcpHttpRequestHandler,
         )
+        logger.info("MCP server listening on http://%s:%d", args.host, args.port)
+
+        # If the user passed a positional input_path, load it on the IDA thread
+        # *after* the port is bound, so initial auto-analysis does not block
+        # clients from connecting (#566). The dedicated thread waits for the
+        # pump to activate, then submits the open as a regular IDA-thread task.
+        if initial_target is not None:
+            def _schedule_initial_load(target: Path) -> None:
+                while not _PUMP.active:
+                    time.sleep(0.01)
+
+                def _load() -> None:
+                    logger.info("opening initial database: %s", target)
+                    try:
+                        session_id = session_manager.open_binary(
+                            target, run_auto_analysis=True
+                        )
+                        logger.info("Initial session created: %s", session_id)
+                        _register_in_discovery(args.host, args.port, target)
+                    except Exception:
+                        logger.exception("Failed to open initial database")
+
+                _PUMP.submit(_load, label="initial_load")
+
+            threading.Thread(
+                target=_schedule_initial_load,
+                args=(initial_target,),
+                daemon=True,
+                name="initial-loader",
+            ).start()
+
         _PUMP.run()
     finally:
         # Reached once the pump stops: signal handler, watchdog, or an error.
