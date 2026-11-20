@@ -1317,3 +1317,121 @@ def make_data(
             results.append({"addr": addr_str, "ok": False, "error": str(e)})
 
     return results
+
+
+# ============================================================================
+# Ignore Micro (Skippable Instructions)
+# ============================================================================
+
+
+class IgnoreMicroOp(TypedDict):
+    addr: str
+    im_type: str
+
+
+class IgnoreMicroResult(TypedDict, total=False):
+    addr: str
+    previous: str
+    current: str
+    restore_to: str
+    warning: str
+    error: str
+
+
+@tool
+@idasync
+def set_ignore_micro(
+    ops: Annotated[
+        list[IgnoreMicroOp],
+        "List of {addr, im_type} to set. "
+        "im_type: 'none' to clear, 'prolog', 'epilog', or 'switch' to mark.",
+    ],
+) -> list[IgnoreMicroResult]:
+    """Set or clear the ignore_micro (skippable instruction) flag for one or more addresses.
+
+    Instructions marked as 'prolog', 'epilog', or 'switch' are skipped by the
+    decompiler and shown with a colored background in disassembly view.
+    Use 'none' to clear an incorrect mark so the decompiler processes the
+    instruction normally.
+
+    When a mark is changed for the first time, the original value is saved as a
+    comment (e.g. '[ida-mcp: restore ignore_micro to prolog]'). To undo the
+    change, set im_type to the value shown after 'to' in that comment. The
+    backup comment is removed automatically upon successful restoration.
+
+    IMPORTANT: To restore instructions to their original state, you MUST first
+    call disasm() to read the comments and find the '[ida-mcp: restore
+    ignore_micro to <type>]' tag. The <type> after 'to' is the correct value
+    to restore. Do NOT assume the default is 'none'.
+
+    After modifying, re-decompile (F5) to see updated pseudocode.
+    """
+    from .utils import (
+        IM_FROM_STR, IM_NAMES,
+        im_get_node,
+        im_backup_comment,
+        im_remove_backup_comment,
+        im_get_backup_type,
+    )
+
+    node = im_get_node()
+    results: list[IgnoreMicroResult] = []
+
+    for op in ops:
+        addr_str = op.get("addr", "?")
+        try:
+            ea = parse_address(addr_str)
+            im_type_str = op["im_type"].strip().lower()
+            im_val = IM_FROM_STR.get(im_type_str)
+            if im_val is None:
+                results.append({
+                    "addr": f"{ea:x}",
+                    "previous": "",
+                    "current": "",
+                    "error": f"Invalid im_type '{op['im_type']}'. "
+                             f"Valid values: {', '.join(IM_FROM_STR.keys())}",
+                })
+                continue
+
+            prev = node.charval_ea(ea, 0)
+            prev_str = IM_NAMES.get(prev, "none")
+
+            existing_backup = im_get_backup_type(ea)
+            if existing_backup is None:
+                # First time modified: save the original initial state
+                if im_type_str != prev_str:
+                    im_backup_comment(ea, prev_str)
+            else:
+                # Remove backup only if restored to the original initial state
+                if im_type_str == existing_backup:
+                    im_remove_backup_comment(ea)
+
+            if im_val == 0:
+                node.chardel_ea(ea, 0)
+            else:
+                node.charset_ea(ea, im_val, 0)
+
+            result_entry: IgnoreMicroResult = {
+                "addr": f"{ea:x}",
+                "previous": prev_str,
+                "current": im_type_str,
+            }
+            remaining_backup = im_get_backup_type(ea)
+            if remaining_backup:
+                result_entry["restore_to"] = remaining_backup
+                if im_type_str != remaining_backup:
+                    result_entry["warning"] = (
+                        f"This instruction's original value was '{remaining_backup}'. "
+                        f"To restore, use set_ignore_micro with "
+                        f"im_type='{remaining_backup}', not '{im_type_str}'."
+                    )
+            results.append(result_entry)
+        except Exception as e:
+            results.append({
+                "addr": addr_str,
+                "previous": "",
+                "current": "",
+                "error": str(e),
+            })
+
+    return results
