@@ -28,6 +28,7 @@ from .utils import (
     TypeQuery,
     TypeApplyBatch,
     EnumUpsert,
+    StructMemberUpsert,
 )
 from . import compat
 from .compat import tinfo_get_udm
@@ -147,6 +148,32 @@ class InferTypeResult(TypedDict, total=False):
     inferred_type: str | None
     method: str | None
     confidence: str
+    error: str
+
+
+class StructFieldUpsertResult(TypedDict, total=False):
+    offset: str
+    name: str
+    old: str
+    ty: str
+    created: bool
+    replaced: bool
+    skipped: bool
+    error: str
+
+
+class StructMemberUpsertSummaryResult(TypedDict):
+    created: int
+    replaced: int
+    skipped: int
+    conflicts: int
+
+
+class StructMemberUpsertResult(TypedDict, total=False):
+    struct: str
+    dry_run: bool
+    members: list[StructFieldUpsertResult]
+    summary: StructMemberUpsertSummaryResult
     error: str
 
 
@@ -504,6 +531,280 @@ def search_structs(
                             "ordinal": ordinal,
                         }
                     )
+
+    return results
+
+
+_SIZE_TO_BTF = {
+    1: ida_typeinf.BTF_UINT8,
+    2: ida_typeinf.BTF_UINT16,
+    4: ida_typeinf.BTF_UINT32,
+    8: ida_typeinf.BTF_UINT64,
+}
+
+
+def _parse_offset(value) -> int:
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text:
+        raise ValueError("Offset is required")
+    return int(text, 0)
+
+
+def _build_member_tinfo(field: dict) -> ida_typeinf.tinfo_t:
+    """Build the new member type from `size` (int) or `type` (name/decl)."""
+    type_text = str(field.get("type") or "").strip()
+    raw_size = field.get("size")
+    has_size = raw_size not in (None, "", 0)
+
+    if type_text and has_size:
+        raise ValueError("Provide either `size` or `type`, not both")
+    if type_text:
+        return _parse_type_tinfo(type_text)
+    if not has_size:
+        raise ValueError("Provide `size` or `type` for the new member")
+
+    size = int(raw_size)
+    if size not in _SIZE_TO_BTF:
+        raise ValueError(f"`size` must be one of 1/2/4/8 (got {size})")
+    return ida_typeinf.tinfo_t(_SIZE_TO_BTF[size])
+
+
+def _find_member_overlap(tif: ida_typeinf.tinfo_t, bit_off: int, bit_end: int):
+    """Return the first real (non-gap) member overlapping [bit_off, bit_end), else None."""
+    udt = ida_typeinf.udt_type_data_t()
+    if not tif.get_udt_details(udt):
+        return None
+    for member in udt:
+        if member.is_gap():
+            continue
+        if member.offset < bit_end and member.offset + member.size > bit_off:
+            return member
+    return None
+
+
+def _upsert_struct_member(
+    tif: ida_typeinf.tinfo_t, field: dict, dry_run: bool
+) -> StructFieldUpsertResult:
+    """Replace/insert a single struct member covering `offset` (or a bare hole)."""
+    result: StructFieldUpsertResult = {}
+
+    off_bytes = _parse_offset(field.get("offset"))
+    result["offset"] = hex(off_bytes)
+
+    name = str(field.get("name", "") or "").strip()
+    if not name:
+        return {**result, "error": "Member `name` is required"}
+    result["name"] = name
+
+    new_tif = _build_member_tinfo(field)
+    new_size = new_tif.get_size()
+    if new_size in (0, ida_typeinf.BADSIZE):
+        return {**result, "error": "Could not determine size of the new member type"}
+    result["ty"] = new_tif._print()
+
+    bit_off = off_bytes * 8
+    bit_end = bit_off + new_size * 8
+    old_type = str(field.get("old_type", "") or "").strip()
+
+    idx, udm = tif.get_udm_by_offset(bit_off)
+
+    # Case 1: bare hole. Real fixed-struct gaps usually have no covering member
+    # at all (explicit `gapNN` members only appear after UI struct-editor edits),
+    # so get_udm_by_offset returns nothing. Insert straight into the hole.
+    if idx < 0 or udm is None:
+        result["old"] = f"hole at {hex(off_bytes)}"
+        overlap = _find_member_overlap(tif, bit_off, bit_end)
+        if overlap is not None:
+            return {
+                **result,
+                "error": (
+                    f"New member [{hex(off_bytes)}, {hex(off_bytes + new_size)}) overlaps "
+                    f"existing member {overlap.name!r} at {hex(overlap.offset // 8)}"
+                ),
+            }
+        if old_type and not old_type.lower().startswith("gap"):
+            return {
+                **result,
+                "error": (
+                    f"`old_type` {old_type!r} provided but offset {hex(off_bytes)} is an "
+                    "empty hole (no covering member)"
+                ),
+            }
+        if dry_run:
+            return {**result, "created": True}
+        code = tif.add_udm(name, new_tif, bit_off)
+        if code != ida_typeinf.TERR_OK:
+            return {**result, "error": f"add_udm failed (code {code})"}
+        return {**result, "created": True}
+
+    # Case 2/3: a member covers `offset`.
+    m_begin = udm.offset
+    m_end = m_begin + udm.size
+    real_is_gap = udm.is_gap()
+    cur_name = udm.name
+    cur_type_str = udm.type._print()
+    # `gapNN` placeholders (from the UI struct editor) are fillable like gaps.
+    gap_like = real_is_gap or cur_name.startswith("gap")
+    result["old"] = (
+        f"gap {cur_name or '(anon)'} ({udm.size // 8} bytes) at {hex(m_begin // 8)}"
+        if gap_like
+        else f"{cur_type_str} {cur_name} at {hex(m_begin // 8)}"
+    )
+
+    # The new member must fit entirely inside the covering member so we never
+    # spill into (and clobber) an adjacent field.
+    if bit_off < m_begin or bit_end > m_end:
+        return {
+            **result,
+            "error": (
+                f"New member [{hex(off_bytes)}, {hex(off_bytes + new_size)}) does not fit "
+                f"within covering member [{hex(m_begin // 8)}, {hex(m_end // 8)})"
+            ),
+        }
+
+    if not gap_like:
+        if not old_type:
+            return {
+                **result,
+                "error": (
+                    f"`old_type` is required to replace named member {cur_name!r} "
+                    f"(type {cur_type_str!r})"
+                ),
+            }
+        if old_type not in (cur_name, cur_type_str, str(udm.type)):
+            return {
+                **result,
+                "error": (
+                    f"`old_type` {old_type!r} does not match member {cur_name!r} of "
+                    f"type {cur_type_str!r} at {hex(off_bytes)}"
+                ),
+            }
+    elif old_type and old_type not in (cur_name, cur_type_str, str(udm.type)) and not old_type.lower().startswith("gap"):
+        return {
+            **result,
+            "error": f"`old_type` {old_type!r} provided but offset {hex(off_bytes)} is a gap",
+        }
+
+    # Idempotent: identical named member already present.
+    if (
+        not gap_like
+        and cur_name == name
+        and bit_off == m_begin
+        and udm.size == new_size * 8
+        and cur_type_str == result["ty"]
+    ):
+        return {**result, "skipped": True}
+
+    outcome_key = "created" if gap_like else "replaced"
+    if dry_run:
+        return {**result, outcome_key: True}
+
+    # In-place retype+rename when a named member exactly matches the span.
+    if not gap_like and bit_off == m_begin and udm.size == new_size * 8:
+        code = tif.set_udm_type(idx, new_tif)
+        if code != ida_typeinf.TERR_OK:
+            return {**result, "error": f"set_udm_type failed (code {code})"}
+        code = tif.rename_udm(idx, name)
+        if code != ida_typeinf.TERR_OK:
+            return {**result, "error": f"rename_udm failed (code {code})"}
+        return {**result, outcome_key: True}
+
+    # Otherwise carve the covering member to a hole (struct members are
+    # offset-addressed, so deleting one never shifts the others) and add. A real
+    # `gapNN` member must be deleted first; a synthetic gap is already empty.
+    if not real_is_gap:
+        code = tif.del_udm(idx)
+        if code != ida_typeinf.TERR_OK:
+            return {**result, "error": f"del_udm failed (code {code})"}
+    code = tif.add_udm(name, new_tif, bit_off)
+    if code != ida_typeinf.TERR_OK:
+        return {**result, "error": f"add_udm failed (code {code})"}
+    return {**result, outcome_key: True}
+
+
+@tool
+@idasync
+def struct_member_upsert(
+    queries: Annotated[
+        list[StructMemberUpsert] | StructMemberUpsert,
+        "Replace gap/placeholder or named struct members by offset without shifting layout",
+    ],
+) -> list[StructMemberUpsertResult]:
+    """Upsert struct members by offset (gap-fill, retype, rename) idempotently."""
+    queries = normalize_dict_list(queries)
+    results: list[StructMemberUpsertResult] = []
+
+    for query in queries:
+        struct_name = str(query.get("struct", "") or query.get("name", "") or "").strip()
+        members = normalize_dict_list(query.get("members"))
+        dry_run = bool(query.get("dry_run", False))
+
+        if not struct_name:
+            results.append({"struct": struct_name, "error": "Struct name is required"})
+            continue
+        if not members or members == [{}]:
+            results.append(
+                {"struct": struct_name, "error": "At least one member is required"}
+            )
+            continue
+
+        try:
+            tif = ida_typeinf.tinfo_t()
+            if not tif.get_named_type(None, struct_name) or not tif.is_udt():
+                results.append(
+                    {"struct": struct_name, "error": f"Struct not found: {struct_name}"}
+                )
+                continue
+
+            udt = ida_typeinf.udt_type_data_t()
+            if tif.get_udt_details(udt) and udt.is_union:
+                results.append(
+                    {
+                        "struct": struct_name,
+                        "error": "Unions are not supported (member offsets overlap)",
+                    }
+                )
+                continue
+
+            member_results: list[StructFieldUpsertResult] = []
+            created = replaced = skipped = conflicts = 0
+            for field in members:
+                try:
+                    res = _upsert_struct_member(tif, field, dry_run)
+                except Exception as exc:
+                    res = {
+                        "offset": str(field.get("offset", "")),
+                        "name": str(field.get("name", "")),
+                        "error": str(exc),
+                    }
+                if res.get("error"):
+                    conflicts += 1
+                elif res.get("skipped"):
+                    skipped += 1
+                elif res.get("created"):
+                    created += 1
+                elif res.get("replaced"):
+                    replaced += 1
+                member_results.append(res)
+
+            result_dict: StructMemberUpsertResult = {
+                "struct": struct_name,
+                "dry_run": dry_run,
+                "members": member_results,
+                "summary": {
+                    "created": created,
+                    "replaced": replaced,
+                    "skipped": skipped,
+                    "conflicts": conflicts,
+                },
+            }
+            if conflicts > 0:
+                result_dict["error"] = f"{conflicts} member conflict(s)"
+            results.append(result_dict)
+        except Exception as exc:
+            results.append({"struct": struct_name, "error": str(exc)})
 
     return results
 
