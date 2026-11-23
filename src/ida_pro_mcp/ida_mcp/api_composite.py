@@ -163,18 +163,33 @@ def _basic_block_info(ea: int) -> BasicBlockSummary:
     return {"count": nodes, "cyclomatic_complexity": edges - nodes + 2}
 
 
+def _parse_const_int(c: dict) -> int | None:
+    dec = c.get("decimal")
+    if isinstance(dec, int) and not isinstance(dec, bool):
+        return dec
+    val = c.get("value")
+    if isinstance(val, int) and not isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        try:
+            return int(val, 0)
+        except ValueError:
+            return None
+    return None
+
+
 def _filter_constants(raw: list[dict], limit: int = _TOP_CONSTANTS) -> list[dict]:
     """Drop boring constants, return top N by absolute value."""
-    out = []
+    scored: list[tuple[int, dict]] = []
     for c in raw:
-        val = c.get("value", 0)
-        if not isinstance(val, int):
+        val = _parse_const_int(c)
+        if val is None:
             continue
         if abs(val) < 0x100 or val in _BORING_CONSTANTS:
             continue
-        out.append(c)
-    out.sort(key=lambda c: abs(c.get("value", 0)) if isinstance(c.get("value"), int) else 0, reverse=True)
-    return out[:limit]
+        scored.append((abs(val), c))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in scored[:limit]]
 
 
 def _cap_decompile(code: str | None) -> tuple[str | None, int | None]:
@@ -318,34 +333,31 @@ def analyze_component(
 
     ea_set = set(ea_map.keys())
 
-    # --- Per-function COMPACT summary (no decompile, no disasm) ---
+    # --- Single-pass per-function summary + graph/string/global aggregation ---
     functions: list[dict] = []
+    nodes = [hex(ea) for ea in ea_set]
+    edges: list[dict] = []
+    global_refcount: dict[int, list[str]] = defaultdict(list)
+    string_funcs: dict[str, set[str]] = defaultdict(set)
+
     for ea in ea_set:
         func = idaapi.get_func(ea)
+        name = idaapi.get_func_name(ea) or ""
+        fname = name or hex(ea)
         if func is None:
             functions.append({"addr": hex(ea), "error": "No function"})
             continue
-        name = idaapi.get_func_name(ea) or ""
-        strings_raw = extract_function_strings(ea)
-        top_strings = _compact_strings(strings_raw, limit=5)
-        callee_list = _compact_callees(get_callees(hex(ea)))
-        bb = _basic_block_info(ea)
-        functions.append({
-            "addr": hex(ea),
-            "name": name,
-            "prototype": get_prototype(func),
-            "size": func.end_ea - func.start_ea,
-            "callees": callee_list,
-            "strings": top_strings,
-            "basic_blocks": bb["count"],
-            "complexity": bb["cyclomatic_complexity"],
-        })
 
-    # --- Internal call graph ---
-    nodes = [hex(ea) for ea in ea_set]
-    edges: list[dict] = []
-    for ea in ea_set:
-        for callee in (get_callees(hex(ea)) or []):
+        strings_raw = extract_function_strings(ea) or []
+        top_strings = _compact_strings(strings_raw, limit=5)
+        for s in strings_raw:
+            sval = s.get("value") or s.get("string", "")
+            if sval:
+                string_funcs[sval].add(fname)
+
+        callees_raw = get_callees(hex(ea)) or []
+        callee_list = _compact_callees(callees_raw)
+        for callee in callees_raw:
             callee_ea = callee.get("addr")
             if isinstance(callee_ea, str):
                 try:
@@ -359,14 +371,7 @@ def analyze_component(
                     "name": callee.get("name", ""),
                 })
 
-    # --- Shared globals ---
-    func_globals: dict[int, set[int]] = {}
-    for ea in ea_set:
         globals_accessed: set[int] = set()
-        func = idaapi.get_func(ea)
-        if func is None:
-            func_globals[ea] = globals_accessed
-            continue
         for head in idautils.Heads(func.start_ea, func.end_ea):
             for xref in idautils.XrefsFrom(head, 0):
                 if xref.iscode:
@@ -374,13 +379,20 @@ def analyze_component(
                 ref_func = idaapi.get_func(xref.to)
                 if ref_func is None and idaapi.is_loaded(xref.to):
                     globals_accessed.add(xref.to)
-        func_globals[ea] = globals_accessed
-
-    global_refcount: dict[int, list[str]] = defaultdict(list)
-    for ea, gset in func_globals.items():
-        fname = idaapi.get_func_name(ea) or hex(ea)
-        for g in gset:
+        for g in globals_accessed:
             global_refcount[g].append(fname)
+
+        bb = _basic_block_info(ea)
+        functions.append({
+            "addr": hex(ea),
+            "name": name,
+            "prototype": get_prototype(func),
+            "size": func.end_ea - func.start_ea,
+            "callees": callee_list,
+            "strings": top_strings,
+            "basic_blocks": bb["count"],
+            "complexity": bb["cyclomatic_complexity"],
+        })
 
     shared_globals = []
     for g_ea, accessors in sorted(global_refcount.items()):
@@ -412,15 +424,6 @@ def analyze_component(
             interface_functions.append(hex(ea))
         else:
             internal_only.append(hex(ea))
-
-    # --- String usage across functions ---
-    string_funcs: dict[str, set[str]] = defaultdict(set)
-    for ea in ea_set:
-        fname = idaapi.get_func_name(ea) or hex(ea)
-        for s in (extract_function_strings(ea) or []):
-            sval = s.get("value") or s.get("string", "")
-            if sval:
-                string_funcs[sval].add(fname)
 
     string_usage = {
         s: sorted(fnames)

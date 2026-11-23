@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from typing import Annotated, Any, NotRequired, TypedDict
 
 import idaapi
@@ -39,6 +40,7 @@ BOOKMARK_PREFIX = "idaMCP: "
 class CommentResult(TypedDict):
     addr: str
     error: NotRequired[str]
+    refresh_error: NotRequired[str]
 
 
 class AppendCommentResult(TypedDict):
@@ -62,6 +64,7 @@ class RenameItemResult(TypedDict, total=False):
     name: str
     dir: str
     dir_error: str
+    refresh_error: str
     dry_run: bool
     error: str
 
@@ -159,6 +162,9 @@ def add_bookmark(
     }
 
 
+_COMMENT_CFUNC_CACHE_MAX = 8
+
+
 @tool
 @idasync
 def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
@@ -166,7 +172,27 @@ def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
     if isinstance(items, dict):
         items = [items]
 
-    results = []
+    results: list[CommentResult] = []
+    hexrays_available: bool | None = None
+    cfunc_cache: OrderedDict[int, Any] = OrderedDict()
+    eamap_cache: OrderedDict[int, Any] = OrderedDict()
+    func_entry_map: dict[int, int] = {}
+    pending_refresh: dict[int, tuple[Any, list[int]]] = {}
+
+    def _flush_pending_refresh(entry_ea: int) -> None:
+        pending = pending_refresh.pop(entry_ea, None)
+        if pending is None:
+            return
+        cf, item_indices = pending
+        try:
+            cf.refresh_func_ctext()
+        except Exception as exc:
+            refresh_err = (
+                f"Failed to refresh decompiler view for {hex(cf.entry_ea)}: {exc}"
+            )
+            for idx in item_indices:
+                results[idx]["refresh_error"] = refresh_err
+
     for item in items:
         addr_str = item.get("addr", "")
         comment = item.get("comment", "")
@@ -183,23 +209,55 @@ def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
                 )
                 continue
 
-            if not ida_hexrays.init_hexrays_plugin():
+            if hexrays_available is None:
+                hexrays_available = bool(ida_hexrays.init_hexrays_plugin())
+            if not hexrays_available:
                 results.append({"addr": addr_str})
                 continue
 
-            try:
-                cfunc = decompile_checked(ea)
-            except IDAError:
-                results.append({"addr": addr_str})
-                continue
+            func = idaapi.get_func(ea)
+            cache_key = func.start_ea if func else None
+            mapped_entry = (
+                func_entry_map.get(cache_key) if cache_key is not None else None
+            )
+            cfunc = cfunc_cache.get(mapped_entry) if mapped_entry is not None else None
+            if cfunc is not None and mapped_entry is not None:
+                cfunc_cache.move_to_end(mapped_entry)
+            if cfunc is None:
+                try:
+                    cfunc = decompile_checked(ea)
+                except IDAError:
+                    results.append({"addr": addr_str})
+                    continue
+                entry_ea = cfunc.entry_ea
+                cfunc_cache[entry_ea] = cfunc
+                cfunc_cache.move_to_end(entry_ea)
+                if cache_key is not None:
+                    func_entry_map[cache_key] = entry_ea
+                while len(cfunc_cache) > _COMMENT_CFUNC_CACHE_MAX:
+                    evicted_entry, _ = cfunc_cache.popitem(last=False)
+                    eamap_cache.pop(evicted_entry, None)
+                    _flush_pending_refresh(evicted_entry)
 
             if ea == cfunc.entry_ea:
                 idc.set_func_cmt(ea, comment, True)
-                cfunc.refresh_func_ctext()
+                idx = len(results)
                 results.append({"addr": addr_str})
+                entry = pending_refresh.get(cfunc.entry_ea)
+                if entry is None:
+                    pending_refresh[cfunc.entry_ea] = (cfunc, [idx])
+                else:
+                    entry[1].append(idx)
                 continue
 
-            eamap = cfunc.get_eamap()
+            eamap = eamap_cache.get(cfunc.entry_ea)
+            if eamap is None:
+                eamap = cfunc.get_eamap()
+                eamap_cache[cfunc.entry_ea] = eamap
+                while len(eamap_cache) > _COMMENT_CFUNC_CACHE_MAX:
+                    eamap_cache.popitem(last=False)
+            else:
+                eamap_cache.move_to_end(cfunc.entry_ea)
             if ea not in eamap:
                 results.append(
                     {
@@ -221,6 +279,7 @@ def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
                 cfunc.set_user_cmt(tl, comment)
                 cfunc.save_user_cmts()
                 cfunc.refresh_func_ctext()
+                pending_refresh.pop(cfunc.entry_ea, None)
                 if not cfunc.has_orphan_cmts():
                     results.append({"addr": addr_str})
                     break
@@ -235,6 +294,9 @@ def set_comments(items: list[CommentOp] | CommentOp) -> list[CommentResult]:
                 )
         except Exception as e:
             results.append({"addr": addr_str, "error": str(e)})
+
+    for entry_ea in list(pending_refresh.keys()):
+        _flush_pending_refresh(entry_ea)
 
     return results
 
@@ -444,40 +506,63 @@ def rename(
             dry_run=dry_run,
         )
 
-    def _place_func_in_vibe_dir(ea: int) -> tuple[bool, str | None]:
-        if dry_run:
-            return True, None
+    pending_refresh: dict[int, list[dict]] = {}
 
-        tree = ida_dirtree.get_std_dirtree(ida_dirtree.DIRTREE_FUNCS)
-        if tree is None:
-            return False, "Function dirtree not available"
-        if not tree.load():
-            return False, "Failed to load function dirtree"
+    def _place_funcs_in_vibe_dir(targets: list[tuple[int, dict]]) -> None:
+        if dry_run or not targets:
+            return
 
-        vibe_path = "/vibe/"
-        if not tree.isdir(vibe_path):
-            err = tree.mkdir(vibe_path)
-            if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):
-                return False, f"mkdir failed: {err}"
-
-        old_cwd = tree.getcwd()
         try:
-            if tree.chdir(vibe_path) != ida_dirtree.DTE_OK:
-                return False, "Failed to chdir to vibe"
-            err = tree.link(ea)
-            if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):
-                return False, f"link failed: {err}"
-            if not tree.save():
-                return False, "Failed to save function dirtree"
-        finally:
-            if old_cwd:
-                tree.chdir(old_cwd)
+            tree = ida_dirtree.get_std_dirtree(ida_dirtree.DIRTREE_FUNCS)
+            if tree is None:
+                for _, res in targets:
+                    res["dir_error"] = "Function dirtree not available"
+                return
+            if not tree.load():
+                for _, res in targets:
+                    res["dir_error"] = "Failed to load function dirtree"
+                return
 
-        return True, None
+            vibe_path = "/vibe/"
+            if not tree.isdir(vibe_path):
+                err = tree.mkdir(vibe_path)
+                if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):
+                    for _, res in targets:
+                        res["dir_error"] = f"mkdir failed: {err}"
+                    return
+
+            old_cwd = tree.getcwd()
+            linked_results: list[dict] = []
+            try:
+                if tree.chdir(vibe_path) != ida_dirtree.DTE_OK:
+                    for _, res in targets:
+                        res["dir_error"] = "Failed to chdir to vibe"
+                    return
+                for ea, res in targets:
+                    err = tree.link(ea)
+                    if err not in (ida_dirtree.DTE_OK, ida_dirtree.DTE_ALREADY_EXISTS):
+                        res["dir_error"] = f"link failed: {err}"
+                    else:
+                        linked_results.append(res)
+                if linked_results:
+                    if not tree.save():
+                        for res in linked_results:
+                            res["dir_error"] = "Failed to save function dirtree"
+                    else:
+                        for res in linked_results:
+                            res["dir"] = "vibe"
+            finally:
+                if old_cwd:
+                    tree.chdir(old_cwd)
+        except Exception as exc:
+            for _, res in targets:
+                if "dir" not in res and "dir_error" not in res:
+                    res["dir_error"] = str(exc)
 
     def _rename_funcs(items: list[FunctionRename]) -> tuple[list[dict], bool]:
         results: list[dict] = []
         halted = False
+        vibe_targets: list[tuple[int, dict]] = []
         for item in items:
             try:
                 addr_text = item.get("addr") or item.get("func_addr") or item.get("func")
@@ -512,12 +597,6 @@ def rename(
                 had_user_name = _has_user_name(func.start_ea)
                 success, error = _set_name_checked(func.start_ea, str(new_name))
 
-                placed, place_error = None, None
-                if success and not had_user_name:
-                    placed, place_error = _place_func_in_vibe_dir(func.start_ea)
-                if success and not dry_run:
-                    refresh_decompiler_ctext(func.start_ea)
-
                 result = {
                     "addr": addr_text,
                     "old": old_name,
@@ -525,10 +604,13 @@ def rename(
                 }
                 if error:
                     result["error"] = error
-                if success and placed:
-                    result["dir"] = "vibe"
-                if place_error and success:
-                    result["dir_error"] = place_error
+                if success and not had_user_name:
+                    if dry_run:
+                        result["dir"] = "vibe"
+                    else:
+                        vibe_targets.append((func.start_ea, result))
+                if success and not dry_run:
+                    pending_refresh.setdefault(func.start_ea, []).append(result)
                 if dry_run:
                     result["dry_run"] = True
                 results.append(result)
@@ -540,6 +622,7 @@ def rename(
                 if stop_on_error:
                     halted = True
                     break
+        _place_funcs_in_vibe_dir(vibe_targets)
         return results, halted
 
     def _rename_globals(items: list[GlobalRename]) -> tuple[list[dict], bool]:
@@ -614,6 +697,7 @@ def rename(
     def _rename_locals(items: list[LocalRename]) -> tuple[list[dict], bool]:
         results: list[dict] = []
         halted = False
+        hexrays_available: bool | None = None
         for item in items:
             try:
                 func_addr = item.get("func_addr") or item.get("func")
@@ -649,7 +733,9 @@ def rename(
                 success = True
                 error = None
                 if not dry_run:
-                    if not ida_hexrays.init_hexrays_plugin():
+                    if hexrays_available is None:
+                        hexrays_available = bool(ida_hexrays.init_hexrays_plugin())
+                    if not hexrays_available:
                         success = False
                         error = (
                             "Hex-Rays decompiler is not available "
@@ -659,14 +745,14 @@ def rename(
                         success = ida_hexrays.rename_lvar(
                             func.start_ea, old_name, new_name
                         )
-                        if success:
-                            refresh_decompiler_ctext(func.start_ea)
-                        elif not hexrays_local_var_exists(func.start_ea, old_name):
+                        if not success and not hexrays_local_var_exists(
+                            func.start_ea, old_name
+                        ):
                             error = (
                                 f"Local variable {old_name!r} not found in function at "
                                 f"{hex(func.start_ea)}"
                             )
-                        else:
+                        elif not success:
                             error = (
                                 f"Rename failed: could not rename local {old_name!r} "
                                 f"to {new_name!r}"
@@ -683,6 +769,8 @@ def rename(
                 }
                 if error:
                     result["error"] = error
+                if success and not dry_run:
+                    pending_refresh.setdefault(func.start_ea, []).append(result)
                 if dry_run:
                     result["dry_run"] = True
                 results.append(result)
@@ -872,6 +960,16 @@ def rename(
         if halted:
             stopped = True
             stopped_at = "stack"
+
+    for func_ea, item_results in pending_refresh.items():
+        try:
+            refresh_decompiler_ctext(func_ea)
+        except Exception as e:
+            refresh_err = (
+                f"Failed to refresh decompiler view for {hex(func_ea)}: {e}"
+            )
+            for item_result in item_results:
+                item_result["refresh_error"] = refresh_err
 
     total = 0
     ok = 0

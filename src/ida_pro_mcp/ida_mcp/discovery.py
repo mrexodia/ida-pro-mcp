@@ -95,17 +95,28 @@ def unregister_instance(port: int) -> bool:
 
 def is_pid_alive(pid: int) -> bool:
     """Check if a process is still running."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
     if sys.platform == "win32":
         import ctypes
+        from ctypes import wintypes
 
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
         handle = ctypes.windll.kernel32.OpenProcess(
             PROCESS_QUERY_LIMITED_INFORMATION, False, pid
         )
-        if handle:
+        if not handle:
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            if ctypes.windll.kernel32.GetExitCodeProcess(
+                handle, ctypes.byref(exit_code)
+            ):
+                return exit_code.value == STILL_ACTIVE
+            return False
+        finally:
             ctypes.windll.kernel32.CloseHandle(handle)
-            return True
-        return False
     else:
         try:
             os.kill(pid, 0)

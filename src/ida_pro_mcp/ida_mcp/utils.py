@@ -927,7 +927,8 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
         return data
 
     regex = None
-    use_glob = False
+    glob_regex = None
+    pattern_lower = ""
 
     # Regex pattern: /pattern/flags
     if pattern.startswith("/") and pattern.count("/") >= 2:
@@ -950,7 +951,12 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
             regex = None
     # Glob pattern: contains * or ?
     elif "*" in pattern or "?" in pattern:
-        use_glob = True
+        glob_regex = re.compile(fnmatch.translate(os.path.normcase(pattern.lower())))
+    else:
+        pattern_lower = pattern.lower()
+
+    if regex is None and glob_regex is None and not pattern_lower:
+        pattern_lower = pattern.lower()
 
     def get_value(item) -> str:
         try:
@@ -963,9 +969,9 @@ def pattern_filter(data: list[T], pattern: str, key: str) -> list[T]:
         text = get_value(item)
         if regex is not None:
             return bool(regex.search(text))
-        if use_glob:
-            return fnmatch.fnmatch(text.lower(), pattern.lower())
-        return pattern.lower() in text.lower()
+        if glob_regex is not None:
+            return bool(glob_regex.match(os.path.normcase(text.lower())))
+        return pattern_lower in text.lower()
 
     return [item for item in data if matches(item)]
 
@@ -1149,13 +1155,17 @@ def decompile_function_safe(
         cfunc = decompile_checked(ea)
         sv = cfunc.get_pseudocode()
         lines = []
+        head_item = item = tail_item = None
+        if include_addresses:
+            head_item = ida_hexrays.ctree_item_t()
+            item = ida_hexrays.ctree_item_t()
+            tail_item = ida_hexrays.ctree_item_t()
         for sl in sv:
             sl: ida_kernwin.simpleline_t
-            _head = ida_hexrays.ctree_item_t()
-            item = ida_hexrays.ctree_item_t()
-            _tail = ida_hexrays.ctree_item_t()
             line_ea = None
-            if include_addresses and cfunc.get_line_item(sl.line, 0, False, _head, item, _tail):
+            if include_addresses and cfunc.get_line_item(
+                sl.line, 0, False, head_item, item, tail_item
+            ):
                 dstr: str | None = item.dstr()
                 if dstr:
                     ds = dstr.split(": ")
@@ -1189,7 +1199,7 @@ def get_assembly_lines(ea: int) -> str:
     segment_name = idaapi.get_segm_name(first_seg) if first_seg else "UNKNOWN"
 
     # Build compact string format
-    lines_str = f"{func_name} ({segment_name} @ {hex(func.start_ea)}):"
+    lines = [f"{func_name} ({segment_name} @ {hex(func.start_ea)}):"]
 
     for item_ea in idautils.FuncItems(func.start_ea):
         mnem = idc.print_insn_mnem(item_ea) or ""
@@ -1199,9 +1209,9 @@ def get_assembly_lines(ea: int) -> str:
                 break
             ops.append(idc.print_operand(item_ea, n) or "")
         instruction = f"{mnem} {', '.join(ops)}".rstrip()
-        lines_str += f"\n{item_ea:x}  {instruction}"
+        lines.append(f"{item_ea:x}  {instruction}")
 
-    return lines_str
+    return "\n".join(lines)
 
 
 def get_all_xrefs(ea: int) -> dict:
@@ -1247,10 +1257,12 @@ def get_callees(addr: str) -> list[dict]:
         func_end = idc.find_func_end(func_start)
         callees: list[dict[str, str]] = []
         current_ea = func_start
+        insn = idaapi.insn_t()
         while current_ea < func_end:
-            insn = idaapi.insn_t()
-            idaapi.decode_insn(insn, current_ea)
-            if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+            if (
+                idaapi.decode_insn(insn, current_ea) > 0
+                and insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]
+            ):
                 target = idc.get_operand_value(current_ea, 0)
                 target_type = idc.get_operand_type(current_ea, 0)
                 if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
@@ -1283,6 +1295,7 @@ def get_callers(addr: str, limit: int = 50) -> list[Function]:
         callers = {}
         iterations = 0
         max_iterations = limit * 100
+        insn = idaapi.insn_t()
         for caller_addr in idautils.CodeRefsTo(parse_address(addr), 0):
             iterations += 1
             if len(callers) >= limit or iterations >= max_iterations:
@@ -1290,13 +1303,14 @@ def get_callers(addr: str, limit: int = 50) -> list[Function]:
             func = get_function(caller_addr, raise_error=False)
             if not func:
                 continue
-            insn = idaapi.insn_t()
-            idaapi.decode_insn(insn, caller_addr)
-            if insn.itype not in [
-                idaapi.NN_call,
-                idaapi.NN_callfi,
-                idaapi.NN_callni,
-            ]:
+            if (
+                idaapi.decode_insn(insn, caller_addr) <= 0
+                or insn.itype not in [
+                    idaapi.NN_call,
+                    idaapi.NN_callfi,
+                    idaapi.NN_callni,
+                ]
+            ):
                 continue
             callers[func["addr"]] = func
 
@@ -1326,25 +1340,36 @@ def extract_function_strings(ea: int) -> list[String]:
         return []
 
     strings = []
+    seen_targets: dict[int, String | None] = {}
     for item_ea in idautils.FuncItems(func.start_ea):
         for xref in idautils.XrefsFrom(item_ea, 0):
-            if not xref.iscode:
-                # Check if target is a string
-                str_type = ida_nalt.get_str_type(xref.to)
-                if str_type != ida_nalt.STRTYPE_C:
-                    continue
-                try:
-                    str_content = idc.get_strlit_contents(xref.to)
-                    if str_content:
-                        strings.append(
-                            String(
-                                addr=hex(xref.to),
-                                length=len(str_content),
-                                string=str_content.decode("utf-8", errors="replace"),
-                            )
-                        )
-                except Exception:
-                    pass
+            if xref.iscode:
+                continue
+            target_ea = xref.to
+            if target_ea in seen_targets:
+                cached = seen_targets[target_ea]
+                if cached is not None:
+                    strings.append(cached.copy())
+                continue
+            # Check if target is a string
+            str_type = ida_nalt.get_str_type(target_ea)
+            if str_type != ida_nalt.STRTYPE_C:
+                seen_targets[target_ea] = None
+                continue
+            entry: String | None = None
+            try:
+                str_content = idc.get_strlit_contents(target_ea)
+                if str_content:
+                    entry = String(
+                        addr=hex(target_ea),
+                        length=len(str_content),
+                        string=str_content.decode("utf-8", errors="replace"),
+                    )
+            except Exception:
+                entry = None
+            seen_targets[target_ea] = entry
+            if entry is not None:
+                strings.append(entry.copy())
     return strings
 
 
@@ -1355,8 +1380,8 @@ def extract_function_constants(ea: int) -> list[dict]:
         return []
 
     constants = []
+    insn = idaapi.insn_t()
     for item_ea in idautils.FuncItems(func.start_ea):
-        insn = idaapi.insn_t()
         if idaapi.decode_insn(insn, item_ea) > 0:
             for op in insn.ops:
                 if op.type == idaapi.o_imm:

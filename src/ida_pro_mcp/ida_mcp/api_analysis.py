@@ -1458,9 +1458,8 @@ def xref_query(
                         "from": hex(xr.frm),
                         "to": hex(target),
                         "type": kind,
+                        "_fn_ea": xr.frm,
                     }
-                    if include_fn:
-                        row["fn"] = get_function(xr.frm, raise_error=False)
                     rows.append(row)
 
             if direction in {"from", "both"}:
@@ -1474,9 +1473,8 @@ def xref_query(
                         "from": hex(target),
                         "to": hex(xr.to),
                         "type": kind,
+                        "_fn_ea": xr.to,
                     }
-                    if include_fn:
-                        row["fn"] = get_function(xr.to, raise_error=False)
                     rows.append(row)
 
             if dedup:
@@ -1499,12 +1497,21 @@ def xref_query(
                 rows.sort(key=lambda r: int(str(r["addr"]), 16), reverse=descending)
 
             page = paginate(rows, offset, count)
+            fn_cache: dict[int, Function | None] = {}
+            page_data: list[dict] = []
+            for row in page["data"]:
+                fn_ea = row.pop("_fn_ea")
+                if include_fn:
+                    if fn_ea not in fn_cache:
+                        fn_cache[fn_ea] = get_function(fn_ea, raise_error=False)
+                    row["fn"] = fn_cache[fn_ea]
+                page_data.append(row)
             page_result: XrefQueryResult = {
                 "target": q,
                 "resolved_addr": hex(target),
                 "direction": direction,
                 "xref_type": xref_type,
-                "data": page["data"],
+                "data": page_data,
                 "next_offset": page["next_offset"],
                 "total": len(rows),
                 "error": None,
@@ -1841,24 +1848,20 @@ def basic_blocks(
                 )
                 continue
 
-            flowchart = idaapi.FlowChart(func)
-            all_blocks = []
-
-            for block in flowchart:
-                all_blocks.append(
-                    BasicBlock(
-                        start=hex(block.start_ea),
-                        end=hex(block.end_ea),
-                        size=block.end_ea - block.start_ea,
-                        type=block.type,
-                        successors=[hex(succ.start_ea) for succ in block.succs()],
-                        predecessors=[hex(pred.start_ea) for pred in block.preds()],
-                    )
+            flowchart = list(idaapi.FlowChart(func))
+            total_blocks = len(flowchart)
+            page_blocks = flowchart[offset : offset + max_blocks]
+            blocks = [
+                BasicBlock(
+                    start=hex(block.start_ea),
+                    end=hex(block.end_ea),
+                    size=block.end_ea - block.start_ea,
+                    type=block.type,
+                    successors=[hex(succ.start_ea) for succ in block.succs()],
+                    predecessors=[hex(pred.start_ea) for pred in block.preds()],
                 )
-
-            # Apply pagination
-            total_blocks = len(all_blocks)
-            blocks = all_blocks[offset : offset + max_blocks]
+                for block in page_blocks
+            ]
             more = offset + max_blocks < total_blocks
 
             results.append(
@@ -2423,9 +2426,11 @@ def export_funcs(
                 "addr": addr,
                 "name": ida_funcs.get_func_name(func.start_ea),
                 "prototype": get_prototype(func),
-                "size": hex(func.end_ea - func.start_ea),
-                "comments": get_all_comments(ea),
             }
+
+            if format not in ("c_header", "prototypes"):
+                func_data["size"] = hex(func.end_ea - func.start_ea)
+                func_data["comments"] = get_all_comments(ea)
 
             if format == "json":
                 func_data["asm"] = get_assembly_lines(ea)

@@ -135,10 +135,14 @@ def _build_metadata() -> dict:
 
     input_path = ida_nalt.get_input_file_path()
     try:
+        md5_hash = hashlib.md5()
+        sha256_hash = hashlib.sha256()
         with open(input_path, "rb") as f:
-            data = f.read()
-        md5 = hashlib.md5(data).hexdigest()
-        sha256 = hashlib.sha256(data).hexdigest()
+            while chunk := f.read(1024 * 1024):
+                md5_hash.update(chunk)
+                sha256_hash.update(chunk)
+        md5 = md5_hash.hexdigest()
+        sha256 = sha256_hash.hexdigest()
     except Exception:
         md5 = sha256 = "unavailable"
 
@@ -287,7 +291,7 @@ def _build_interesting_functions(func_eas: list[int], truncated: bool) -> list[d
         if _is_library_func(ea, name, flags):
             continue
 
-        xref_count = len(list(idautils.XrefsTo(ea, 0)))
+        xref_count = sum(1 for _ in idautils.XrefsTo(ea, 0))
         size = func.size()
         candidates.append((xref_count, ea, name, size, flags))
 

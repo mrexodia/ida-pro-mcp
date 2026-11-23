@@ -2,6 +2,7 @@
 
 import logging
 import re
+import sys
 import time
 from typing import Annotated, Any, NotRequired, TypedDict
 
@@ -169,6 +170,9 @@ def invalidate_strings_cache():
     """Clear the strings cache (call after IDB changes)."""
     global _strings_cache
     _strings_cache = None
+    http_mod = sys.modules.get(f"{__package__}.http")
+    if http_mod is not None and hasattr(http_mod, "invalidate_cors_policy_cache"):
+        http_mod.invalidate_cors_policy_cache()
 
 
 def init_caches():
@@ -177,6 +181,9 @@ def init_caches():
     strings = _get_strings_cache()
     t1 = time.perf_counter()
     logger.info("[MCP] Cached %d strings in %.0fms", len(strings), (t1 - t0) * 1000)
+    http_mod = sys.modules.get(f"{__package__}.http")
+    if http_mod is not None and hasattr(http_mod, "refresh_cors_policy_on_main_thread"):
+        http_mod.refresh_cors_policy_on_main_thread()
 
 
 # ============================================================================
@@ -580,7 +587,25 @@ def list_funcs(
 ) -> list[Page[Function]]:
     """List functions with optional filtering and offset/count pagination."""
     queries = normalize_dict_list(queries)
-    all_functions = [get_function(addr) for addr in idautils.Functions()]
+    remaining_unfiltered = sum(
+        1 for q in queries if q.get("filter", "") in ("", "*")
+    )
+    remaining_filtered = len(queries) - remaining_unfiltered
+    reuse_across_queries = len(queries) > 1
+    func_eas: list[int] | None = None
+    func_cache: dict[int, Function] | None = (
+        {} if reuse_across_queries and remaining_unfiltered > 0 else None
+    )
+    all_functions: list[Function] | None = None
+
+    def get_func_entry(addr: int) -> Function:
+        if func_cache is not None and remaining_filtered == 0:
+            fn = func_cache.get(addr)
+            if fn is None:
+                fn = get_function(addr)
+                func_cache[addr] = fn
+            return fn
+        return get_function(addr)
 
     results = []
     for query in queries:
@@ -590,9 +615,47 @@ def list_funcs(
 
         # Treat empty/"*" filter as "all"
         if filter_pattern in ("", "*"):
-            filter_pattern = ""
+            remaining_unfiltered -= 1
+            eas = func_eas if func_eas is not None else list(idautils.Functions())
+            if reuse_across_queries and (remaining_unfiltered > 0 or remaining_filtered > 0):
+                func_eas = eas
+            else:
+                func_eas = None
+            total = len(eas)
+            eff_count = total if count == 0 else count
+            next_offset = offset + eff_count
+            if next_offset >= total:
+                next_offset = None
+            results.append(
+                {
+                    "data": [
+                        get_func_entry(addr)
+                        for addr in eas[offset : offset + eff_count]
+                    ],
+                    "next_offset": next_offset,
+                }
+            )
+            if remaining_unfiltered == 0 and func_cache is not None:
+                func_cache.clear()
+            continue
 
-        filtered = pattern_filter(all_functions, filter_pattern, "name")
+        remaining_filtered -= 1
+        if all_functions is None:
+            eas_iter = func_eas if func_eas is not None else idautils.Functions()
+            if remaining_filtered > 0:
+                all_functions = [get_function(addr) for addr in eas_iter]
+                rows_source = all_functions
+            else:
+                rows_source = [get_function(addr) for addr in eas_iter]
+        else:
+            rows_source = all_functions
+            if remaining_filtered == 0:
+                all_functions = None
+
+        if remaining_unfiltered == 0 and remaining_filtered == 0:
+            func_eas = None
+
+        filtered = pattern_filter(rows_source, filter_pattern, "name")
         results.append(paginate(filtered, offset, count))
 
     return results
@@ -609,32 +672,35 @@ def func_query(
     """Query functions with richer filtering than list_funcs."""
     queries = normalize_dict_list(queries)
 
-    all_functions: list[dict] = []
-    for addr in idautils.Functions():
-        fn = idaapi.get_func(addr)
-        if not fn:
-            continue
-        size_int = fn.end_ea - fn.start_ea
-        fn_name = ida_funcs.get_func_name(fn.start_ea) or "<unnamed>"
-        has_type = ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), fn.start_ea)
-        all_functions.append(
-            {
-                "addr": hex(fn.start_ea),
-                "name": fn_name,
-                "size": hex(size_int),
-                "size_int": size_int,
-                "has_type": has_type,
-            }
-        )
+    raw_funcs: list[tuple[int, int]] | None = None
+    name_cache: dict[int, str] = {}
+    tinfo_cache: dict[int, bool] = {}
 
-    def apply_name_regex(items: list[dict], expr: str) -> list[dict]:
-        if not expr:
-            return items
-        try:
-            compiled = re.compile(expr)
-        except re.error:
-            return []
-        return [item for item in items if compiled.search(item["name"])]
+    def get_raw_funcs() -> list[tuple[int, int]]:
+        nonlocal raw_funcs
+        if raw_funcs is None:
+            collected: list[tuple[int, int]] = []
+            for addr in idautils.Functions():
+                fn = idaapi.get_func(addr)
+                if not fn:
+                    continue
+                collected.append((fn.start_ea, fn.end_ea - fn.start_ea))
+            raw_funcs = collected
+        return raw_funcs
+
+    def get_name(ea: int) -> str:
+        name = name_cache.get(ea)
+        if name is None:
+            name = ida_funcs.get_func_name(ea) or "<unnamed>"
+            name_cache[ea] = name
+        return name
+
+    def get_has_type(ea: int) -> bool:
+        has_type = tinfo_cache.get(ea)
+        if has_type is None:
+            has_type = bool(ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), ea))
+            tinfo_cache[ea] = has_type
+        return has_type
 
     results = []
     for query in queries:
@@ -645,36 +711,70 @@ def func_query(
         if sort_by not in ("addr", "name", "size"):
             sort_by = "addr"
 
-        filtered = all_functions
-        name_filter = query.get("filter", "")
-        if name_filter:
-            filtered = pattern_filter(filtered, name_filter, "name")
-
         name_regex = query.get("name_regex", "")
+        compiled_regex = None
         if name_regex:
-            filtered = apply_name_regex(filtered, name_regex)
+            try:
+                compiled_regex = re.compile(name_regex)
+            except re.error:
+                results.append(paginate([], offset, count))
+                continue
+
+        candidates = get_raw_funcs()
 
         min_size = query.get("min_size")
         if min_size is not None:
-            filtered = [f for f in filtered if f["size_int"] >= int(min_size)]
+            min_size_int = int(min_size)
+            candidates = [(ea, sz) for ea, sz in candidates if sz >= min_size_int]
 
         max_size = query.get("max_size")
         if max_size is not None:
-            filtered = [f for f in filtered if f["size_int"] <= int(max_size)]
+            max_size_int = int(max_size)
+            candidates = [(ea, sz) for ea, sz in candidates if sz <= max_size_int]
+
+        name_filter = query.get("filter", "")
+        if name_filter:
+            named_items = [
+                {"ea": ea, "size_int": sz, "name": get_name(ea)}
+                for ea, sz in candidates
+            ]
+            filtered_dicts = pattern_filter(named_items, name_filter, "name")
+            candidates = [(d["ea"], d["size_int"]) for d in filtered_dicts]
+
+        if compiled_regex is not None:
+            candidates = [
+                (ea, sz) for ea, sz in candidates if compiled_regex.search(get_name(ea))
+            ]
 
         if "has_type" in query:
             require_type = bool(query.get("has_type"))
-            filtered = [f for f in filtered if bool(f["has_type"]) is require_type]
+            candidates = [
+                (ea, sz) for ea, sz in candidates if get_has_type(ea) is require_type
+            ]
 
         if sort_by == "name":
-            filtered.sort(key=lambda f: f["name"].lower(), reverse=descending)
+            candidates = sorted(
+                candidates, key=lambda item: get_name(item[0]).lower(), reverse=descending
+            )
         elif sort_by == "size":
-            filtered.sort(key=lambda f: f["size_int"], reverse=descending)
+            candidates = sorted(
+                candidates, key=lambda item: item[1], reverse=descending
+            )
         else:
-            filtered.sort(key=lambda f: int(f["addr"], 16), reverse=descending)
+            candidates = sorted(
+                candidates, key=lambda item: item[0], reverse=descending
+            )
 
-        page = paginate(filtered, offset, count)
-        page["data"] = [{k: v for k, v in item.items() if k != "size_int"} for item in page["data"]]
+        page = paginate(candidates, offset, count)
+        page["data"] = [
+            {
+                "addr": hex(ea),
+                "name": get_name(ea),
+                "size": hex(sz),
+                "has_type": get_has_type(ea),
+            }
+            for ea, sz in page["data"]
+        ]
         results.append(page)
 
     return results
@@ -690,10 +790,18 @@ def list_globals(
 ) -> list[Page[Global]]:
     """List globals with optional filtering and offset/count pagination."""
     queries = normalize_dict_list(queries)
-    all_globals: list[Global] = []
-    for addr, name in idautils.Names():
-        if not idaapi.get_func(addr) and name is not None:
-            all_globals.append(Global(addr=hex(addr), name=name))
+    raw_globals: list[tuple[int, str]] | None = None
+    all_globals: list[Global] | None = None
+
+    def get_raw_globals() -> list[tuple[int, str]]:
+        nonlocal raw_globals
+        if raw_globals is None:
+            raw_globals = [
+                (addr, name)
+                for addr, name in idautils.Names()
+                if not idaapi.get_func(addr) and name is not None
+            ]
+        return raw_globals
 
     results = []
     for query in queries:
@@ -703,8 +811,27 @@ def list_globals(
 
         # Treat empty/"*" filter as "all"
         if filter_pattern in ("", "*"):
-            filter_pattern = ""
+            items = get_raw_globals()
+            total = len(items)
+            eff_count = total if count == 0 else count
+            next_offset = offset + eff_count
+            if next_offset >= total:
+                next_offset = None
+            results.append(
+                {
+                    "data": [
+                        Global(addr=hex(addr), name=name)
+                        for addr, name in items[offset : offset + eff_count]
+                    ],
+                    "next_offset": next_offset,
+                }
+            )
+            continue
 
+        if all_globals is None:
+            all_globals = [
+                Global(addr=hex(addr), name=name) for addr, name in get_raw_globals()
+            ]
         filtered = pattern_filter(all_globals, filter_pattern, "name")
         results.append(paginate(filtered, offset, count))
 
@@ -722,6 +849,32 @@ def entity_query(
     """Query IDB entities with typed filters, projection, and pagination."""
     queries = normalize_dict_list(queries)
     results: list[dict] = []
+    entity_cache: dict[str, list[dict]] = {}
+    func_rows_base: list[dict] | None = None
+    kind_remaining: dict[str, int] = {}
+    for q in queries:
+        k = str(q.get("kind", "functions") or "functions").lower()
+        if k in {"functions", "globals", "imports", "strings", "names"}:
+            kind_remaining[k] = kind_remaining.get(k, 0) + 1
+
+    def _collect_func_rows_base() -> list[dict]:
+        collected: list[dict] = []
+        for ea in idautils.Functions():
+            fn = idaapi.get_func(ea)
+            if not fn:
+                continue
+            size_int = fn.end_ea - fn.start_ea
+            collected.append(
+                {
+                    "kind": "function",
+                    "_ea": fn.start_ea,
+                    "addr": hex(fn.start_ea),
+                    "name": ida_funcs.get_func_name(fn.start_ea) or "<unnamed>",
+                    "size": hex(size_int),
+                    "size_int": size_int,
+                }
+            )
+        return collected
 
     for query in queries:
         kind = str(query.get("kind", "functions") or "functions").lower()
@@ -737,7 +890,57 @@ def entity_query(
             )
             continue
 
-        rows = _collect_entities(kind)
+        kind_remaining[kind] -= 1
+        keep_cached = kind_remaining[kind] > 0
+
+        segment_filter = str(query.get("segment", "") or "")
+        sort_by = str(query.get("sort_by", "addr") or "addr")
+        fields_raw = query.get("fields")
+        fields = None
+        if fields_raw is not None:
+            if isinstance(fields_raw, str):
+                fields = normalize_list_input(fields_raw)
+            elif isinstance(fields_raw, list):
+                fields = [str(f) for f in fields_raw]
+            else:
+                fields = [str(fields_raw)]
+
+        if kind == "functions":
+            if keep_cached:
+                if func_rows_base is None:
+                    func_rows_base = _collect_func_rows_base()
+                rows = list(func_rows_base)
+            elif func_rows_base is not None:
+                rows = func_rows_base
+                func_rows_base = None
+            else:
+                rows = _collect_func_rows_base()
+            need_seg_early = bool(segment_filter) or sort_by == "segment"
+            need_type_early = sort_by == "has_type"
+            if need_seg_early or need_type_early:
+                enriched_rows: list[dict] = []
+                for row in rows:
+                    if need_seg_early and "segment" not in row:
+                        row["segment"] = _segment_name_for_ea(row["_ea"])
+                    if need_type_early and "has_type" not in row:
+                        row["has_type"] = bool(
+                            ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), row["_ea"])
+                        )
+                    enriched_rows.append(row)
+                rows = enriched_rows
+        else:
+            if keep_cached:
+                if kind not in entity_cache:
+                    entity_cache[kind] = _collect_entities(kind)
+                rows = list(entity_cache[kind])
+            else:
+                cached_rows = entity_cache.pop(kind, None)
+                rows = (
+                    cached_rows
+                    if cached_rows is not None
+                    else _collect_entities(kind)
+                )
+
         primary_key = _primary_text_key(kind)
         filter_pattern = str(query.get("filter", "") or "")
         if filter_pattern:
@@ -751,7 +954,6 @@ def entity_query(
             except re.error:
                 rows = []
 
-        segment_filter = str(query.get("segment", "") or "")
         if segment_filter and kind in {"functions", "globals", "strings", "names"}:
             rows = pattern_filter(rows, segment_filter, "segment")
 
@@ -759,11 +961,17 @@ def entity_query(
         if module_filter and kind == "imports":
             rows = pattern_filter(rows, module_filter, "module")
 
+        def _row_ea(row: dict) -> int:
+            ea = row.get("_ea")
+            if ea is not None:
+                return ea
+            return int(str(row.get("addr", "0x0")), 16)
+
         min_addr = query.get("min_addr")
         if min_addr not in (None, ""):
             try:
                 min_ea = parse_address(min_addr)
-                rows = [row for row in rows if int(str(row["addr"]), 16) >= min_ea]
+                rows = [row for row in rows if _row_ea(row) >= min_ea]
             except Exception:
                 rows = []
 
@@ -771,17 +979,20 @@ def entity_query(
         if max_addr not in (None, ""):
             try:
                 max_ea = parse_address(max_addr)
-                rows = [row for row in rows if int(str(row["addr"]), 16) <= max_ea]
+                rows = [row for row in rows if _row_ea(row) <= max_ea]
             except Exception:
                 rows = []
 
-        sort_by = str(query.get("sort_by", "addr") or "addr")
         descending = bool(query.get("descending", False))
         if sort_by == "addr":
-            rows.sort(key=lambda row: int(str(row.get("addr", "0x0")), 16), reverse=descending)
+            rows.sort(key=_row_ea, reverse=descending)
         elif sort_by in {"size", "length"}:
             rows.sort(
-                key=lambda row: row.get("size_int", _coerce_sort_number(row.get(sort_by, 0))),
+                key=lambda row: (
+                    row["size_int"]
+                    if "size_int" in row
+                    else _coerce_sort_number(row.get(sort_by, 0))
+                ),
                 reverse=descending,
             )
         else:
@@ -790,17 +1001,25 @@ def entity_query(
         offset = int(query.get("offset", 0) or 0)
         count = int(query["count"]) if query.get("count") is not None else 100
         page = paginate(rows, offset, count)
-        data = [{k: v for k, v in item.items() if k != "size_int"} for item in page["data"]]
 
-        fields_raw = query.get("fields")
-        fields = None
-        if fields_raw is not None:
-            if isinstance(fields_raw, str):
-                fields = normalize_list_input(fields_raw)
-            elif isinstance(fields_raw, list):
-                fields = [str(f) for f in fields_raw]
-            else:
-                fields = [str(fields_raw)]
+        keep_fields: set[str] | None = None
+        if fields is not None:
+            normalized_fields = {str(f).strip() for f in fields if str(f).strip()}
+            if normalized_fields:
+                keep_fields = normalized_fields
+        data: list[dict] = []
+        for item in page["data"]:
+            ea_val = item.get("_ea")
+            out = {k: v for k, v in item.items() if k not in ("size_int", "_ea")}
+            if kind == "functions" and ea_val is not None:
+                if (keep_fields is None or "segment" in keep_fields) and "segment" not in out:
+                    out["segment"] = _segment_name_for_ea(ea_val)
+                if (keep_fields is None or "has_type" in keep_fields) and "has_type" not in out:
+                    out["has_type"] = bool(
+                        ida_nalt.get_tinfo(ida_typeinf.tinfo_t(), ea_val)
+                    )
+            data.append(out)
+
         data = _apply_projection(data, fields)
 
         results.append(
@@ -904,7 +1123,15 @@ def find_regex(
         limit = 500
 
     matches = []
-    regex = re.compile(pattern, re.IGNORECASE)
+    try:
+        regex = re.compile(pattern, re.IGNORECASE)
+    except re.error as e:
+        return {
+            "n": 0,
+            "matches": [],
+            "cursor": {"done": True},
+            "error": f"Invalid regex: {e}",
+        }
     strings = _get_strings_cache()
 
     skipped = 0

@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+from collections import OrderedDict
 from typing import Any, Optional
 from .zeromcp import (
     McpRpcRegistry,
@@ -19,7 +21,8 @@ MCP_SERVER = McpServer("ida-pro-mcp", extensions=MCP_EXTENSIONS)
 
 OUTPUT_LIMIT_MAX_CHARS = 50000
 OUTPUT_CACHE_MAX_SIZE = 100
-_output_cache: dict[str, Any] = {}
+_output_cache: OrderedDict[str, Any] = OrderedDict()
+_output_cache_lock = threading.Lock()
 _DOWNLOAD_BASE_URL_DEFAULT = "http://127.0.0.1:13337"
 
 
@@ -125,14 +128,20 @@ def _build_download_meta(output_id: str, total_chars: int) -> dict:
 
 
 def get_cached_output(output_id: str) -> Optional[Any]:
-    return _output_cache.get(output_id)
+    with _output_cache_lock:
+        if output_id in _output_cache:
+            _output_cache.move_to_end(output_id)
+            return _output_cache[output_id]
+        return None
 
 
 def _cache_output(output_id: str, data: Any) -> None:
-    if len(_output_cache) >= OUTPUT_CACHE_MAX_SIZE:
-        oldest_key = next(iter(_output_cache))
-        del _output_cache[oldest_key]
-    _output_cache[output_id] = data
+    with _output_cache_lock:
+        if output_id in _output_cache:
+            _output_cache.move_to_end(output_id)
+        elif len(_output_cache) >= OUTPUT_CACHE_MAX_SIZE:
+            _output_cache.popitem(last=False)
+        _output_cache[output_id] = data
 
 
 def _limit_output_response(response: dict) -> dict:

@@ -2,6 +2,7 @@ import html
 import json
 import logging
 import re
+import threading
 import ida_netnode
 from urllib.parse import urlparse, parse_qs
 from typing import TypeVar, cast
@@ -42,10 +43,11 @@ def config_json_get(key: str, default: T) -> T:
 
 
 @idasync
-def config_json_set(key: str, value):
+def config_json_set(key: str, value) -> bool:
     node = ida_netnode.netnode(f"$ ida_mcp.{key}", 0, True)
     json_blob = json.dumps(value).encode("utf-8")
-    node.setblob(json_blob, 0, "C")
+    res = node.setblob(json_blob, 0, "C")
+    return True if res is None else bool(res)
 
 
 def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
@@ -92,20 +94,145 @@ def get_cors_policy(port: int) -> str:
 
 ORIGINAL_TOOLS = handle_enabled_tools(MCP_SERVER.tools, "enabled_tools")
 
+_cors_policy_lock = threading.Lock()
+_cached_cors_policy: str | None = None
+_cors_policy_generation: int = 0
+_cors_idb_hook = None
+_cors_idp_hook = None
+
+
+def invalidate_cors_policy_cache() -> None:
+    """Drop cached CORS policy (call whenever the active IDB changes or closes)."""
+    global _cached_cors_policy, _cors_policy_generation
+    with _cors_policy_lock:
+        _cors_policy_generation += 1
+        _cached_cors_policy = None
+        MCP_SERVER.cors_allowed_origins = MCP_SERVER.cors_localhost
+        MCP_SERVER._cors_policy_gen = None
+
+
+def refresh_cors_policy_on_main_thread() -> None:
+    """Refresh and publish active IDB's CORS policy while already on IDA main thread."""
+    read_fn = getattr(config_json_get, "__wrapped__", config_json_get)
+    policy = read_fn("cors_policy", DEFAULT_CORS_POLICY)
+    _publish_cors_policy(MCP_SERVER, policy)
+
+
+def _install_cors_idb_hook() -> None:
+    """Install IDB/IDP lifecycle hooks so open/close/switch updates CORS cache."""
+    global _cors_idb_hook, _cors_idp_hook
+    try:
+        import ida_idp
+    except Exception:
+        return
+
+    if _cors_idb_hook is None and hasattr(ida_idp, "IDB_Hooks"):
+        class _CorsIdbHook(ida_idp.IDB_Hooks):
+            def closebase(self, *args):
+                invalidate_cors_policy_cache()
+                return 0
+
+        idb_hook = _CorsIdbHook()
+        if idb_hook.hook():
+            _cors_idb_hook = idb_hook
+
+    if _cors_idp_hook is None and hasattr(ida_idp, "IDP_Hooks"):
+        class _CorsIdpHook(ida_idp.IDP_Hooks):
+            def ev_newfile(self, *args):
+                refresh_cors_policy_on_main_thread()
+                return 0
+
+            def ev_oldfile(self, *args):
+                refresh_cors_policy_on_main_thread()
+                return 0
+
+        idp_hook = _CorsIdpHook()
+        if idp_hook.hook():
+            _cors_idp_hook = idp_hook
+
+
+_install_cors_idb_hook()
+
+
+def _apply_cors_policy_to_server(mcp_server, policy: str) -> None:
+    match policy:
+        case "unrestricted":
+            mcp_server.cors_allowed_origins = "*"
+        case "local":
+            mcp_server.cors_allowed_origins = mcp_server.cors_localhost
+        case "direct":
+            mcp_server.cors_allowed_origins = None
+
+
+def _publish_cors_policy(mcp_server, cors_policy: str) -> None:
+    """Atomically cache and publish a newly configured CORS policy."""
+    global _cached_cors_policy, _cors_policy_generation
+    with _cors_policy_lock:
+        _cors_policy_generation += 1
+        _cached_cors_policy = cors_policy
+        _apply_cors_policy_to_server(mcp_server, cors_policy)
+        mcp_server._cors_policy_gen = _cors_policy_generation
+
+
+@idasync
+def _save_and_publish_cors_policy(mcp_server, cors_policy: str) -> bool:
+    """Persist CORS policy to active IDB and publish on success on IDA main thread."""
+    save_fn = getattr(config_json_set, "__wrapped__", config_json_set)
+    if save_fn("cors_policy", cors_policy) is False:
+        return False
+    _publish_cors_policy(mcp_server, cors_policy)
+    return True
+
+
+def _sync_cors_policy(mcp_server, refresh: bool = False) -> None:
+    """Ensure mcp_server reflects the active IDB's CORS policy without racing updates."""
+    global _cached_cors_policy, _cors_policy_generation
+    for _ in range(8):
+        with _cors_policy_lock:
+            if not refresh and _cached_cors_policy is not None:
+                if (
+                    getattr(mcp_server, "_cors_policy_gen", None)
+                    != _cors_policy_generation
+                ):
+                    _apply_cors_policy_to_server(mcp_server, _cached_cors_policy)
+                    mcp_server._cors_policy_gen = _cors_policy_generation
+                return
+            gen = _cors_policy_generation
+
+        fetched = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
+        with _cors_policy_lock:
+            if _cors_policy_generation == gen:
+                _cached_cors_policy = fetched
+                _cors_policy_generation += 1
+                _apply_cors_policy_to_server(mcp_server, fetched)
+                mcp_server._cors_policy_gen = _cors_policy_generation
+                return
+            if _cached_cors_policy is not None:
+                _apply_cors_policy_to_server(mcp_server, _cached_cors_policy)
+                mcp_server._cors_policy_gen = _cors_policy_generation
+                return
+            # Another IDB transition invalidated the cache mid-read; retry with current gen.
+
+    raise RuntimeError("Failed to load current CORS policy across concurrent IDB switches")
+
 
 class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
-    def __init__(self, request, client_address, server):
-        super().__init__(request, client_address, server)
-        self.update_cors_policy()
+    def _check_api_request(self) -> bool:
+        if self.headers.get("Origin") and (
+            _cached_cors_policy is None
+            or getattr(self.mcp_server, "_cors_policy_gen", None)
+            != _cors_policy_generation
+        ):
+            from .mainthread import get_pump
 
-    def update_cors_policy(self):
-        match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
-            case "unrestricted":
-                self.mcp_server.cors_allowed_origins = "*"
-            case "local":
-                self.mcp_server.cors_allowed_origins = self.mcp_server.cors_localhost
-            case "direct":
-                self.mcp_server.cors_allowed_origins = None
+            if _cached_cors_policy is None and get_pump().busy_status() is not None:
+                self.send_error(503, "Database busy; retry once IDB open completes")
+                return False
+            self.update_cors_policy()
+        return super()._check_api_request()
+
+    def update_cors_policy(self, refresh: bool = False):
+        _sync_cors_policy(self.mcp_server, refresh=refresh)
 
     def do_POST(self):
         """Handles POST requests."""
@@ -428,10 +555,11 @@ input[type="submit"]:hover {
             self.send_error(400, "Invalid form encoding")
             return
 
-        # Update CORS policy
+        # Update CORS policy (save + publish together on the IDA main thread)
         cors_policy = postvars.get("cors_policy", [DEFAULT_CORS_POLICY])[0]
-        config_json_set("cors_policy", cors_policy)
-        self.update_cors_policy()
+        if not _save_and_publish_cors_policy(self.mcp_server, cors_policy):
+            self.send_error(500, "Failed to save CORS policy")
+            return
 
         # Update the server's tools
         if "apply_profile" in postvars:

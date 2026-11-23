@@ -44,14 +44,22 @@ def idb_metadata_resource() -> Metadata:
 
     input_path = ida_nalt.get_input_file_path()
     try:
-        with open(input_path, "rb") as f:
-            data = f.read()
-        md5 = hashlib.md5(data).hexdigest()
-        sha256 = hashlib.sha256(data).hexdigest()
         import zlib
 
-        crc32 = hex(zlib.crc32(data) & 0xFFFFFFFF)
-        filesize = hex(len(data))
+        md5_hash = hashlib.md5()
+        sha256_hash = hashlib.sha256()
+        crc = 0
+        total_size = 0
+        with open(input_path, "rb") as f:
+            while chunk := f.read(1024 * 1024):
+                md5_hash.update(chunk)
+                sha256_hash.update(chunk)
+                crc = zlib.crc32(chunk, crc)
+                total_size += len(chunk)
+        md5 = md5_hash.hexdigest()
+        sha256 = sha256_hash.hexdigest()
+        crc32 = hex(crc & 0xFFFFFFFF)
+        filesize = hex(total_size)
     except Exception:
         md5 = sha256 = crc32 = filesize = "unavailable"
 

@@ -93,7 +93,7 @@ IDA_GE_84 = IDA_VERSION >= (8, 4, 0)
 # Version-gated imports
 # ============================================================================
 
-if IDA_GE_90:
+if IDA_GE_85:
     import ida_ida
 
 if IDA_GE_84:

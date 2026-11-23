@@ -30,70 +30,89 @@ from .utils import parse_address, get_function
 # ============================================================================
 
 
+_LAZY_EXEC_MODULES = (
+    "idautils",
+    "ida_allins",
+    "ida_auto",
+    "ida_bitrange",
+    "ida_dirtree",
+    "ida_diskio",
+    "ida_expr",
+    "ida_fixup",
+    "ida_fpro",
+    "ida_gdl",
+    "ida_graph",
+    "ida_idd",
+    "ida_idp",
+    "ida_ieee",
+    "ida_libfuncs",
+    "ida_loader",
+    "ida_merge",
+    "ida_mergemod",
+    "ida_moves",
+    "ida_netnode",
+    "ida_offset",
+    "ida_pro",
+    "ida_problems",
+    "ida_range",
+    "ida_regfinder",
+    "ida_registry",
+    "ida_search",
+    "ida_segregs",
+    "ida_srclang",
+    "ida_strlist",
+    "ida_struct",
+    "ida_tryblks",
+    "ida_ua",
+    "ida_undo",
+    "ida_enum",
+)
+_CACHED_LAZY_MODULES: dict[str, object] = {}
+_PENDING_LAZY_MODULES: list[str] = list(_LAZY_EXEC_MODULES)
+
+
+def _get_lazy_exec_modules() -> dict[str, object]:
+    if _PENDING_LAZY_MODULES:
+        still_missing: list[str] = []
+        for module_name in _PENDING_LAZY_MODULES:
+            try:
+                _CACHED_LAZY_MODULES[module_name] = __import__(module_name)
+            except Exception:
+                still_missing.append(module_name)
+        _PENDING_LAZY_MODULES[:] = still_missing
+    if _PENDING_LAZY_MODULES:
+        resolved = dict(_CACHED_LAZY_MODULES)
+        for module_name in _PENDING_LAZY_MODULES:
+            resolved[module_name] = None
+        return resolved
+    return _CACHED_LAZY_MODULES
+
+
 def _make_exec_globals() -> dict:
     """Build an execution context with all IDA modules available."""
-    def lazy_import(module_name):
-        try:
-            return __import__(module_name)
-        except Exception:
-            return None
-
-    return {
+    globals_dict = {
         "__builtins__": __builtins__,
         "idaapi": idaapi,
         "idc": idc,
-        "idautils": lazy_import("idautils"),
-        "ida_allins": lazy_import("ida_allins"),
-        "ida_auto": lazy_import("ida_auto"),
-        "ida_bitrange": lazy_import("ida_bitrange"),
         "ida_bytes": ida_bytes,
         "ida_dbg": ida_dbg,
-        "ida_dirtree": lazy_import("ida_dirtree"),
-        "ida_diskio": lazy_import("ida_diskio"),
         "ida_entry": ida_entry,
-        "ida_expr": lazy_import("ida_expr"),
-        "ida_fixup": lazy_import("ida_fixup"),
-        "ida_fpro": lazy_import("ida_fpro"),
         "ida_frame": ida_frame,
         "ida_funcs": ida_funcs,
-        "ida_gdl": lazy_import("ida_gdl"),
-        "ida_graph": lazy_import("ida_graph"),
         "ida_hexrays": ida_hexrays,
         "ida_ida": ida_ida,
-        "ida_idd": lazy_import("ida_idd"),
-        "ida_idp": lazy_import("ida_idp"),
-        "ida_ieee": lazy_import("ida_ieee"),
         "ida_kernwin": ida_kernwin,
-        "ida_libfuncs": lazy_import("ida_libfuncs"),
         "ida_lines": ida_lines,
-        "ida_loader": lazy_import("ida_loader"),
-        "ida_merge": lazy_import("ida_merge"),
-        "ida_mergemod": lazy_import("ida_mergemod"),
-        "ida_moves": lazy_import("ida_moves"),
         "ida_nalt": ida_nalt,
         "ida_name": ida_name,
-        "ida_netnode": lazy_import("ida_netnode"),
-        "ida_offset": lazy_import("ida_offset"),
-        "ida_pro": lazy_import("ida_pro"),
-        "ida_problems": lazy_import("ida_problems"),
-        "ida_range": lazy_import("ida_range"),
-        "ida_regfinder": lazy_import("ida_regfinder"),
-        "ida_registry": lazy_import("ida_registry"),
-        "ida_search": lazy_import("ida_search"),
         "ida_segment": ida_segment,
-        "ida_segregs": lazy_import("ida_segregs"),
-        "ida_srclang": lazy_import("ida_srclang"),
-        "ida_strlist": lazy_import("ida_strlist"),
-        "ida_struct": lazy_import("ida_struct"),
-        "ida_tryblks": lazy_import("ida_tryblks"),
         "ida_typeinf": ida_typeinf,
-        "ida_ua": lazy_import("ida_ua"),
-        "ida_undo": lazy_import("ida_undo"),
         "ida_xref": ida_xref,
-        "ida_enum": lazy_import("ida_enum"),
         "parse_address": parse_address,
         "get_function": get_function,
     }
+    globals_dict.update(_get_lazy_exec_modules())
+    return globals_dict
 
 
 class PythonExecResult(TypedDict):
@@ -197,8 +216,8 @@ def py_eval(
                     result_value = str(exec_locals[last_key])
 
         # Collect output
-        stdout_text = stdout_capture.getvalue()
-        stderr_text = stderr_capture.getvalue()
+        stdout_text = "" if stdout_capture.closed else stdout_capture.getvalue()
+        stderr_text = "" if stderr_capture.closed else stderr_capture.getvalue()
 
         return {
             "result": result_value or "",
@@ -211,7 +230,7 @@ def py_eval(
 
         return {
             "result": "",
-            "stdout": "",
+            "stdout": "" if stdout_capture.closed else stdout_capture.getvalue(),
             "stderr": traceback.format_exc(),
         }
     finally:
